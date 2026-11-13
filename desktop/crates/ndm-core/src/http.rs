@@ -818,40 +818,53 @@ pub(crate) async fn publish_no_overwrite(
             format!("{stem} ({index})")
         };
         let target = destination.join(name);
-        match fs::hard_link(source, &target).await {
+        match publish_file(source, &target).await {
             Ok(()) => return Ok(target),
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(_) => {
-                let mut input = fs::File::open(source).await?;
-                match fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&target)
-                    .await
-                {
-                    Ok(mut output) => {
-                        let copied = async {
-                            tokio::io::copy(&mut input, &mut output).await?;
-                            output.flush().await?;
-                            output.sync_all().await
-                        }
-                        .await;
-                        drop(output);
-                        match copied {
-                            Ok(()) => return Ok(target),
-                            Err(error) => {
-                                let _ = fs::remove_file(&target).await;
-                                return Err(error.into());
-                            }
-                        }
-                    }
-                    Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                    Err(err) => return Err(err.into()),
-                }
-            }
+            Err(err) => return Err(err.into()),
         }
     }
     Err(std::io::Error::other("no available download filename").into())
+}
+
+#[cfg(windows)]
+async fn publish_file(source: &Path, target: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
+
+    let wide_path = |path: &Path| -> std::io::Result<Vec<u16>> {
+        let mut path: Vec<u16> = path.as_os_str().encode_wide().collect();
+        if path.contains(&0) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "path contains NUL",
+            ));
+        }
+        path.push(0);
+        Ok(path)
+    };
+    let source = wide_path(source)?;
+    let target = wide_path(target)?;
+    tokio::task::spawn_blocking(move || {
+        // With no flags, MoveFileExW neither replaces an existing target nor
+        // copies across volumes.
+        // All callers prepare the complete file inside the destination folder.
+        // SAFETY: both paths are valid, owned, NUL-terminated UTF-16 buffers.
+        if unsafe { MoveFileExW(source.as_ptr(), target.as_ptr(), 0) } == 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    })
+    .await
+    .map_err(std::io::Error::other)?
+}
+
+#[cfg(not(windows))]
+async fn publish_file(source: &Path, target: &Path) -> std::io::Result<()> {
+    // Non-Windows builds are used for development only. A hard link publishes
+    // the already complete file without ever replacing an existing target.
+    fs::hard_link(source, target).await
 }
 
 async fn clear_parts(work_dir: &Path) -> Result<()> {
@@ -886,5 +899,45 @@ mod publication_tests {
         .await;
         assert!(result.is_err());
         assert!(!directory.path().join("finished.bin").exists());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn publication_moves_a_complete_file_without_overwriting_existing_data() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("finished.part");
+        let existing = directory.path().join("finished.bin");
+        std::fs::write(&source, b"complete transfer").unwrap();
+        std::fs::write(&existing, b"existing file").unwrap();
+
+        let published = publish_no_overwrite(&source, directory.path(), "finished.bin")
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(existing).unwrap(), b"existing file");
+        assert_eq!(std::fs::read(&published).unwrap(), b"complete transfer");
+        assert_eq!(published.file_name().unwrap(), "finished (1).bin");
+        assert!(
+            !source.exists(),
+            "publication should move the complete file"
+        );
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn cross_volume_publication_never_creates_a_partial_target() {
+        let Some(other_volume) = std::env::var_os("NDM_TEST_OTHER_VOLUME") else {
+            return;
+        };
+        let source_dir = tempfile::tempdir().unwrap();
+        let target_dir = tempfile::tempdir_in(other_volume).unwrap();
+        let source = source_dir.path().join("finished.part");
+        std::fs::write(&source, b"complete transfer").unwrap();
+        let result = publish_no_overwrite(&source, target_dir.path(), "finished.bin").await;
+        assert!(
+            result.is_err(),
+            "cross-volume publication must not copy directly to the target"
+        );
+        assert!(!target_dir.path().join("finished.bin").exists());
+        assert_eq!(std::fs::read(source).unwrap(), b"complete transfer");
     }
 }
