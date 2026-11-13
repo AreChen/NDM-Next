@@ -467,15 +467,20 @@ async fn execute_one(inner: &Arc<Inner>, task: &Task, active: &Active) -> Result
         )
         .await
         .map(|_| ()),
-        TaskOptions::Sftp(options) => execute_sftp(
-            &inner.store,
-            task.id,
-            &options,
-            active.cancel.clone(),
-            active.progress.clone(),
-        )
-        .await
-        .map(|_| ()),
+        TaskOptions::Sftp(mut options) => {
+            if let Some(fingerprint) = inner.store.sftp_known_fingerprint(&task.request.url)? {
+                options.trusted_fingerprint = Some(fingerprint);
+            }
+            execute_sftp(
+                &inner.store,
+                task.id,
+                &options,
+                active.cancel.clone(),
+                active.progress.clone(),
+            )
+            .await
+            .map(|_| ())
+        }
         TaskOptions::Hls(options) => {
             // hls-engine uses non-Send futures, so its bounded worker owns a
             // current-thread runtime instead of moving those futures between threads.

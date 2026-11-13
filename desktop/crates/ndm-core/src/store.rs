@@ -5,10 +5,32 @@ use std::{
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
-use crate::{Error, HlsOptions, NewTask, Result, Task, TaskId, TaskOptions, TaskState, secrets};
+use crate::{
+    Error, HlsOptions, NewTask, Result, SftpOptions, Task, TaskId, TaskOptions, TaskState, secrets,
+};
 
 pub struct Store {
     path: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingSftpHost {
+    pub id: TaskId,
+    pub observed: String,
+    pub expected: Option<String>,
+}
+
+fn sftp_endpoint(url: &str) -> Result<(String, u16)> {
+    let url = reqwest::Url::parse(url).map_err(|_| Error::InvalidSftpAddress)?;
+    let host = url
+        .host_str()
+        .filter(|host| !host.is_empty())
+        .ok_or(Error::InvalidSftpAddress)?;
+    let port = url.port().unwrap_or(22);
+    if url.scheme() != "sftp" || port == 0 {
+        return Err(Error::InvalidSftpAddress);
+    }
+    Ok((host.to_ascii_lowercase(), port))
 }
 
 impl Store {
@@ -38,7 +60,14 @@ impl Store {
                 size_verified INTEGER,
                 created_at INTEGER NOT NULL DEFAULT (unixepoch())
             );
-            CREATE TABLE IF NOT EXISTS discard_requests (id TEXT PRIMARY KEY NOT NULL);",
+            CREATE TABLE IF NOT EXISTS discard_requests (id TEXT PRIMARY KEY NOT NULL);
+            CREATE TABLE IF NOT EXISTS sftp_known_hosts (
+                host TEXT NOT NULL, port INTEGER NOT NULL, fingerprint TEXT NOT NULL,
+                PRIMARY KEY (host, port)
+            );
+            CREATE TABLE IF NOT EXISTS sftp_pending_hosts (
+                id TEXT PRIMARY KEY NOT NULL, observed TEXT NOT NULL, expected TEXT
+            );",
         )?;
         let columns: Vec<String> = {
             let mut statement = tx.prepare("PRAGMA table_info(tasks)")?;
@@ -243,11 +272,18 @@ impl Store {
     }
 
     pub fn resume(&self, id: TaskId) -> Result<()> {
-        let changed = self.connection()?.execute(
+        let mut conn = self.connection()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = tx.execute(
             "UPDATE tasks SET state = 'queued', error = NULL WHERE id = ?1 AND state IN ('paused','failed')",
             [id.to_string()],
         )?;
         if changed == 1 {
+            tx.execute(
+                "DELETE FROM sftp_pending_hosts WHERE id = ?1",
+                [id.to_string()],
+            )?;
+            tx.commit()?;
             Ok(())
         } else {
             Err(Error::InvalidState)
@@ -304,11 +340,18 @@ impl Store {
 
     /// Deletes only the database record; downloaded and temporary files are preserved.
     pub fn delete(&self, id: TaskId) -> Result<()> {
-        let changed = self.connection()?.execute(
+        let mut conn = self.connection()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = tx.execute(
             "DELETE FROM tasks WHERE id = ?1 AND state IN ('queued','paused','completed','failed')",
             [id.to_string()],
         )?;
         if changed == 1 {
+            tx.execute(
+                "DELETE FROM sftp_pending_hosts WHERE id = ?1",
+                [id.to_string()],
+            )?;
+            tx.commit()?;
             Ok(())
         } else {
             Err(Error::InvalidState)
@@ -326,6 +369,119 @@ impl Store {
         } else {
             Err(Error::InvalidState)
         }
+    }
+
+    pub fn sftp_known_fingerprint(&self, url: &str) -> Result<Option<String>> {
+        let (host, port) = sftp_endpoint(url)?;
+        Ok(self
+            .connection()?
+            .query_row(
+                "SELECT fingerprint FROM sftp_known_hosts WHERE host = ?1 AND port = ?2",
+                params![host, port],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn pending_sftp_hosts(&self) -> Result<Vec<PendingSftpHost>> {
+        let conn = self.connection()?;
+        let mut stmt = conn.prepare("SELECT p.id, p.observed, p.expected FROM sftp_pending_hosts p JOIN tasks t ON t.id = p.id WHERE t.state = 'failed' ORDER BY t.rowid")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get(1)?, row.get(2)?))
+        })?;
+        rows.map(|row| {
+            let (id, observed, expected) = row?;
+            Ok(PendingSftpHost {
+                id: TaskId::parse_str(&id).map_err(|_| Error::InvalidStoredState)?,
+                observed,
+                expected,
+            })
+        })
+        .collect()
+    }
+
+    pub(crate) fn fail_sftp_host(
+        &self,
+        id: TaskId,
+        observed: &str,
+        expected: Option<&str>,
+    ) -> Result<()> {
+        let mut conn = self.connection()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let reason = if expected.is_some() {
+            "SFTP host key changed"
+        } else {
+            "SFTP host key needs confirmation"
+        };
+        if tx.execute(
+            "UPDATE tasks SET state = 'failed', error = ?1 WHERE id = ?2 AND state = 'running'",
+            params![reason, id.to_string()],
+        )? != 1
+        {
+            return Err(Error::InvalidState);
+        }
+        tx.execute("INSERT OR REPLACE INTO sftp_pending_hosts (id, observed, expected) VALUES (?1, ?2, ?3)", params![id.to_string(), observed, expected])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Only a fingerprint observed for this failed task may be confirmed.
+    pub fn trust_sftp_host(&self, id: TaskId, observed: &str) -> Result<()> {
+        let mut conn = self.connection()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let task = read_task(&tx, id)?.ok_or(Error::NotFound)?;
+        if task.state != TaskState::Failed {
+            return Err(Error::InvalidState);
+        }
+        let pending: Option<(String, Option<String>)> = tx
+            .query_row(
+                "SELECT observed, expected FROM sftp_pending_hosts WHERE id = ?1",
+                [id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let (pending_observed, expected) = pending.ok_or(Error::InvalidState)?;
+        if pending_observed != observed {
+            return Err(Error::InvalidState);
+        }
+        let (host, port) = sftp_endpoint(&task.request.url)?;
+        let mut options = match task.options {
+            TaskOptions::Auto => SftpOptions::default(),
+            TaskOptions::Sftp(options) => options,
+            _ => return Err(Error::InvalidState),
+        };
+        let known: Option<String> = tx
+            .query_row(
+                "SELECT fingerprint FROM sftp_known_hosts WHERE host = ?1 AND port = ?2",
+                params![host, port],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let current = known.or_else(|| options.trusted_fingerprint.clone());
+        if current != expected && current.as_deref() != Some(observed) {
+            tx.execute(
+                "UPDATE sftp_pending_hosts SET expected = ?1 WHERE id = ?2",
+                params![current, id.to_string()],
+            )?;
+            tx.commit()?;
+            return Err(Error::InvalidState);
+        }
+        options.trusted_fingerprint = Some(observed.to_owned());
+        let encrypted = secrets::protect(&serde_json::to_vec(&TaskOptions::Sftp(options))?)?;
+        tx.execute(
+            "INSERT OR REPLACE INTO sftp_known_hosts (host, port, fingerprint) VALUES (?1, ?2, ?3)",
+            params![host, port, observed],
+        )?;
+        tx.execute(
+            "UPDATE tasks SET options = ?1 WHERE id = ?2",
+            params![encrypted, id.to_string()],
+        )?;
+        tx.execute(
+            "DELETE FROM sftp_pending_hosts WHERE id = ?1",
+            [id.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub(crate) fn complete(&self, id: TaskId, path: &Path, size_verified: bool) -> Result<()> {

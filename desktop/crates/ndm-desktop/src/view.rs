@@ -13,8 +13,8 @@ use gpui_kit::{
     *,
 };
 use ndm_core::{
-    FtpSecurity, HlsCatalog, HlsOptions, NewTask, ProxyOptions, Scheduler, SchedulerEvent,
-    SftpOptions, Store, Task, TaskId, TaskOptions, TaskState, inspect_hls_with_options,
+    FtpSecurity, HlsCatalog, HlsOptions, NewTask, ProxyOptions, Scheduler, SchedulerEvent, Store,
+    Task, TaskId, TaskOptions, TaskState, inspect_hls_with_options,
 };
 use std::{
     collections::{BTreeMap, HashMap},
@@ -202,8 +202,22 @@ impl Desktop {
             })
             .detach();
         }
-        let tasks = store.list().unwrap_or_default();
         let mut events = scheduler.subscribe();
+        let tasks = store.list().unwrap_or_default();
+        let pending_host_keys = store
+            .pending_sftp_hosts()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|key| {
+                (
+                    key.id,
+                    PendingHostKey {
+                        observed: key.observed,
+                        expected: key.expected,
+                    },
+                )
+            })
+            .collect();
         cx.spawn(async move |view, cx| {
             loop {
                 match events.recv().await {
@@ -212,12 +226,10 @@ impl Desktop {
                             this.reload();
                             match event {
                                 SchedulerEvent::Started(_) => this.track_progress(cx),
-                                SchedulerEvent::SftpHostKeyRequired { id, fingerprint } => {
-                                    this.pending_host_keys.insert(id, PendingHostKey { observed: fingerprint, expected: None });
+                                SchedulerEvent::SftpHostKeyRequired { .. } => {
                                     this.notice = Some(this.text("SFTP 服务器密钥需要核对。", "Check the SFTP server key before trusting it.").into());
                                 },
-                                SchedulerEvent::SftpHostKeyChanged { id, expected, observed } => {
-                                    this.pending_host_keys.insert(id, PendingHostKey { observed, expected: Some(expected) });
+                                SchedulerEvent::SftpHostKeyChanged { .. } => {
                                     this.notice = Some(this.text("SFTP 服务器密钥已改变，请谨慎核对。", "The SFTP server key has changed; verify it carefully.").into());
                                 },
                                 SchedulerEvent::Finished(_) => {}
@@ -252,7 +264,7 @@ impl Desktop {
             auth_expanded: false,
             ftp_security: FtpSecurity::Auto,
             pending_auto_resume,
-            pending_host_keys: HashMap::new(),
+            pending_host_keys,
             confirming_host_key: None,
             editing_url: None,
             deleting_task: None,
@@ -302,6 +314,20 @@ impl Desktop {
     fn reload(&mut self) {
         if let Ok(tasks) = self.store.list() {
             self.tasks = tasks;
+        }
+        if let Ok(pending) = self.store.pending_sftp_hosts() {
+            self.pending_host_keys = pending
+                .into_iter()
+                .map(|key| {
+                    (
+                        key.id,
+                        PendingHostKey {
+                            observed: key.observed,
+                            expected: key.expected,
+                        },
+                    )
+                })
+                .collect();
         }
     }
     fn check_for_update(&mut self, cx: &mut Context<Self>) {
@@ -693,16 +719,7 @@ impl Desktop {
         let Some(key) = self.pending_host_keys.get(&id).cloned() else {
             return;
         };
-        let Ok(Some(task)) = self.store.get(id) else {
-            return;
-        };
-        let mut options = match task.options {
-            TaskOptions::Auto => SftpOptions::default(),
-            TaskOptions::Sftp(options) => options,
-            _ => return,
-        };
-        options.trusted_fingerprint = Some(key.observed);
-        match self.store.set_options(id, &TaskOptions::Sftp(options)) {
+        match self.store.trust_sftp_host(id, &key.observed) {
             Ok(()) => {
                 self.pending_host_keys.remove(&id);
                 self.confirming_host_key = None;
@@ -716,9 +733,14 @@ impl Desktop {
                 );
             }
             Err(_) => {
+                self.reload();
+                self.confirming_host_key = None;
                 self.notice = Some(
-                    self.text("无法保存服务器密钥。", "Could not save the server key.")
-                        .into(),
+                    self.text(
+                        "无法保存服务器密钥，请重新核对。",
+                        "Could not save the server key; review it again.",
+                    )
+                    .into(),
                 )
             }
         }

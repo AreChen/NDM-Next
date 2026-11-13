@@ -96,9 +96,18 @@ pub async fn execute_sftp(
             Err(Error::Cancelled)
         }
         Err(error) => {
+            match &error {
+                Error::SftpUnknownHost { fingerprint } => {
+                    store.fail_sftp_host(id, fingerprint, None)?;
+                    return Err(error);
+                }
+                Error::SftpHostKeyChanged { expected, observed } => {
+                    store.fail_sftp_host(id, observed, Some(expected))?;
+                    return Err(error);
+                }
+                _ => {}
+            }
             let reason = match &error {
-                Error::SftpUnknownHost { .. } => "SFTP host key needs confirmation",
-                Error::SftpHostKeyChanged { .. } => "SFTP host key changed",
                 Error::SftpAuthentication => "SFTP authentication failed",
                 Error::InvalidSftpResponse => "SFTP server returned an inconsistent file",
                 Error::Io(_) => "file or operating system error",

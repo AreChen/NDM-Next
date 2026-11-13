@@ -1,6 +1,17 @@
-use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
-use ndm_core::{NewTask, SftpAuth, SftpOptions, TaskId, download_sftp};
+use ndm_core::{
+    NewTask, Scheduler, SchedulerOptions, SftpAuth, SftpOptions, Store, TaskId, TaskState,
+    download_sftp,
+};
 use russh::{
     Channel, ChannelId,
     keys::{Algorithm, HashAlg, PrivateKey, PublicKey},
@@ -184,6 +195,132 @@ async fn server(
         }
     });
     (format!("sftp://user:correct@{addr}/file.bin"), fingerprint)
+}
+
+#[tokio::test]
+async fn sftp_trust_is_persistent_per_host_and_port_and_key_changes_require_confirmation() {
+    let keys = [
+        PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap(),
+        PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap(),
+    ];
+    let fingerprints: Vec<_> = keys
+        .iter()
+        .map(|key| key.public_key().fingerprint(HashAlg::Sha256).to_string())
+        .collect();
+    let configs: Vec<_> = keys
+        .into_iter()
+        .map(|key| {
+            Arc::new(russh::server::Config {
+                keys: vec![key],
+                auth_rejection_time: Duration::ZERO,
+                auth_rejection_time_initial: Some(Duration::ZERO),
+                ..Default::default()
+            })
+        })
+        .collect();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let switched = Arc::new(AtomicBool::new(false));
+    let selected = switched.clone();
+    let server = tokio::spawn(async move {
+        loop {
+            let (socket, _) = listener.accept().await.unwrap();
+            let config = configs[usize::from(selected.load(Ordering::SeqCst))].clone();
+            tokio::spawn(async move {
+                let fixture = SshFixture {
+                    channel: None,
+                    data: Arc::new(vec![42; 1024]),
+                    accepted_key: None,
+                    slow: false,
+                    truncate: false,
+                };
+                if let Ok(session) = russh::server::run_stream(config, socket, fixture).await {
+                    let _ = session.await;
+                }
+            });
+        }
+    });
+    let dir = TempDir::new().unwrap();
+    let db = dir.path().join("tasks.db");
+    let store = Arc::new(Store::open(&db).unwrap());
+    let scheduler = Scheduler::start(store.clone(), SchedulerOptions::default()).unwrap();
+    let url = format!("sftp://user:correct@{address}/file.bin");
+    async fn wait_for(store: &Store, id: TaskId, state: TaskState) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if store
+                    .get(id)
+                    .unwrap()
+                    .is_some_and(|task| task.state == state)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    let first = TaskId::new_v4();
+    store
+        .prepare(first, &request(dir.path(), url.clone()))
+        .unwrap();
+    store.commit(first).unwrap();
+    scheduler.notify();
+    wait_for(&store, first, TaskState::Failed).await;
+    let pending = store.pending_sftp_hosts().unwrap();
+    assert_eq!(pending[0].observed, fingerprints[0]);
+    assert_eq!(pending[0].expected, None);
+    assert_eq!(
+        Store::open(&db).unwrap().pending_sftp_hosts().unwrap(),
+        pending
+    );
+    assert!(store.trust_sftp_host(first, &fingerprints[1]).is_err());
+    store.trust_sftp_host(first, &fingerprints[0]).unwrap();
+    scheduler.resume(first).await.unwrap();
+    wait_for(&store, first, TaskState::Completed).await;
+    let second = TaskId::new_v4();
+    let mut second_request = request(dir.path(), url.clone());
+    second_request.suggested_filename = Some("second.bin".into());
+    store.prepare(second, &second_request).unwrap();
+    store.commit(second).unwrap();
+    scheduler.notify();
+    wait_for(&store, second, TaskState::Completed).await;
+    assert!(store.pending_sftp_hosts().unwrap().is_empty());
+    assert_eq!(
+        store.sftp_known_fingerprint(&url).unwrap(),
+        Some(fingerprints[0].clone())
+    );
+    assert_eq!(
+        store
+            .sftp_known_fingerprint("sftp://127.0.0.1:1/other")
+            .unwrap(),
+        None
+    );
+    switched.store(true, Ordering::SeqCst);
+    let third = TaskId::new_v4();
+    store
+        .prepare(third, &request(dir.path(), url.clone()))
+        .unwrap();
+    store.commit(third).unwrap();
+    scheduler.notify();
+    wait_for(&store, third, TaskState::Failed).await;
+    let pending = store.pending_sftp_hosts().unwrap();
+    assert_eq!(pending[0].expected.as_ref(), Some(&fingerprints[0]));
+    assert_eq!(pending[0].observed, fingerprints[1]);
+    store.trust_sftp_host(third, &fingerprints[1]).unwrap();
+    scheduler.resume(third).await.unwrap();
+    wait_for(&store, third, TaskState::Completed).await;
+    scheduler.delete(second, false).unwrap();
+    assert_eq!(
+        Store::open(&db)
+            .unwrap()
+            .sftp_known_fingerprint(&url)
+            .unwrap(),
+        Some(fingerprints[1].clone())
+    );
+    scheduler.shutdown().await;
+    server.abort();
 }
 
 fn request(dir: &Path, url: String) -> NewTask {

@@ -24,7 +24,7 @@ pub use instance::{wait_for_desktop_ready, wake_desktop};
 pub use model::{NewTask, Task, TaskId, TaskOptions, TaskState};
 pub use scheduler::{Scheduler, SchedulerEvent, SchedulerOptions};
 pub use sftp::{SftpAuth, SftpOptions, download_sftp, execute_sftp};
-pub use store::Store;
+pub use store::{PendingSftpHost, Store};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
