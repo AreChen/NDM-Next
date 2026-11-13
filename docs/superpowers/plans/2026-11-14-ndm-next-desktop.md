@@ -45,10 +45,10 @@
 
 **文件：** 创建 `desktop/Cargo.toml`、`desktop/rust-toolchain.toml` 和 `desktop/crates/ndm-core/`；修改 `.gitignore`。
 
-- [ ] 建立任务状态及 SQLite 事务存储；为重复 `prepare`、重启恢复、手动暂停及目标文件名冲突编写失败测试。
-- [ ] 用 Windows 用户级保护封装敏感字段，验证保存内容不含明文凭据；按平台隔离系统调用。
-- [ ] 用本地 HTTP 服务测试有效 Range、拒绝 Range、错误 `Content-Range`、未知长度、资源标识改变及暂停续传；实现有界并发、速率限制和安全回退。
-- [ ] 验证 `rtk proxy cargo +1.100.0 test --manifest-path desktop/Cargo.toml -p ndm-core` 全部通过。
+- [x] 建立任务状态及 SQLite 事务存储；为重复 `prepare`、重启恢复、手动暂停及目标文件名冲突编写失败测试。
+- [x] 用 Windows 用户级保护封装敏感字段，验证保存内容不含明文凭据；按平台隔离系统调用。
+- [x] 用本地 HTTP 服务测试有效 Range、拒绝 Range、错误 `Content-Range`、未知长度、资源标识改变及暂停续传；实现有界并发、速率限制和安全回退。
+- [x] 验证 `rtk proxy cargo +1.100.0 test --manifest-path desktop/Cargo.toml -p ndm-core` 全部通过。
 
 ### Task 2：FTP、FTPS、SFTP 与 HLS
 
