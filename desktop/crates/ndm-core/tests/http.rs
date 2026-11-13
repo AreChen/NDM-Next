@@ -331,12 +331,11 @@ async fn oversized_chunked_full_response_respects_known_expected_size() {
     let app = Router::new().route(
         "/file",
         get(|| async move {
-            let stream =
-                futures_util::stream::iter([Ok::<_, std::io::Error>(Bytes::from(vec![
+            let stream = futures_util::stream::iter([Ok::<_, std::io::Error>(Bytes::from(vec![
                     b'x';
                     4096
                 ]))])
-                .chain(futures_util::stream::pending());
+            .chain(futures_util::stream::pending());
             Response::builder()
                 .status(StatusCode::OK)
                 .body(Body::from_stream(stream))

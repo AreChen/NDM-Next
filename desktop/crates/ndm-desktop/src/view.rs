@@ -415,18 +415,6 @@ impl Desktop {
             cx.notify();
             return;
         }
-        let filename = parsed
-            .path_segments()
-            .and_then(|mut segments| segments.rfind(|name| !name.is_empty()))
-            .map(str::to_owned);
-        let request = NewTask {
-            url: parsed.to_string(),
-            destination: PathBuf::from(destination),
-            suggested_filename: filename,
-            source_url: None,
-            expected_size: None,
-            headers: BTreeMap::new(),
-        };
         let id = TaskId::new_v4();
         let options = if matches!(protocol_options, TaskOptions::Auto)
             && self
@@ -441,6 +429,14 @@ impl Desktop {
             })
         } else {
             protocol_options
+        };
+        let request = NewTask {
+            url: parsed.to_string(),
+            destination: PathBuf::from(destination),
+            suggested_filename: crate::filenames::manual_suggestion(&parsed, &options),
+            source_url: None,
+            expected_size: None,
+            headers: BTreeMap::new(),
         };
         match self
             .store
@@ -960,16 +956,17 @@ impl Desktop {
             .child(label)
     }
     fn task_row(&self, task: &Task, dark: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        let name = task
-            .request
-            .suggested_filename
-            .clone()
+        let name = crate::filenames::display_name(task)
             .unwrap_or_else(|| self.text("未命名下载", "Untitled download").into());
         let status = match task.state {
             TaskState::Prepared => self.text("等待确认", "Awaiting confirmation"),
             TaskState::Queued => self.text("等待中", "Queued"),
             TaskState::Running => self.text("下载中", "Downloading"),
             TaskState::Paused => self.text("已暂停", "Paused"),
+            TaskState::Completed if task.size_verified == Some(false) => self.text(
+                "已完成 · 文件长度未校验",
+                "Completed · file length unverified",
+            ),
             TaskState::Completed => self.text("已完成", "Completed"),
             TaskState::Failed => self.text("失败", "Failed"),
         };
@@ -1642,7 +1639,7 @@ impl Render for Desktop {
                     .tasks
                     .iter()
                     .find(|task| task.id == id)
-                    .and_then(|task| task.request.suggested_filename.clone())
+                    .and_then(crate::filenames::display_name)
                     .unwrap_or_else(|| self.text("未命名下载", "Untitled download").into());
                 content = content.child(
                     div()

@@ -1,5 +1,6 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+mod filenames;
 mod instance;
 mod preferences;
 mod protocol_auth;
@@ -97,6 +98,7 @@ fn main() {
         instance.on_show(move || {
             let _ = sender.send(tray::Command::Show);
         });
+        instance.mark_ready().expect("signal desktop readiness");
     }
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);

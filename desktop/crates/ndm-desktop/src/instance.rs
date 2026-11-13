@@ -19,6 +19,7 @@ mod platform {
         mutex: HANDLE,
         event: HANDLE,
         show_event: HANDLE,
+        ready_event: HANDLE,
         stopping: Arc<AtomicBool>,
         worker: Option<JoinHandle<()>>,
         show_worker: Option<JoinHandle<()>>,
@@ -53,6 +54,15 @@ mod platform {
                     CloseHandle(mutex);
                     return Err(error);
                 }
+                let ready_event =
+                    CreateEventW(ptr::null(), 1, 0, wide(&format!("{name}-ready")).as_ptr());
+                if ready_event.is_null() {
+                    let error = io::Error::last_os_error();
+                    CloseHandle(show_event);
+                    CloseHandle(event);
+                    CloseHandle(mutex);
+                    return Err(error);
+                }
                 if exists {
                     let result = SetEvent(event);
                     let error = if result == 0 || (show && SetEvent(show_event) == 0) {
@@ -60,6 +70,7 @@ mod platform {
                     } else {
                         None
                     };
+                    CloseHandle(ready_event);
                     CloseHandle(show_event);
                     CloseHandle(event);
                     CloseHandle(mutex);
@@ -72,10 +83,20 @@ mod platform {
                     mutex,
                     event,
                     show_event,
+                    ready_event,
                     stopping: Arc::new(AtomicBool::new(false)),
                     worker: None,
                     show_worker: None,
                 }))
+            }
+        }
+
+        pub fn mark_ready(&self) -> io::Result<()> {
+            // SAFETY: The instance owns the event until its Drop implementation.
+            if unsafe { SetEvent(self.ready_event) } == 0 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
             }
         }
 
@@ -128,6 +149,7 @@ mod platform {
                 let _ = worker.join();
             }
             unsafe {
+                CloseHandle(self.ready_event);
                 CloseHandle(self.show_event);
                 CloseHandle(self.event);
                 CloseHandle(self.mutex);
@@ -174,6 +196,17 @@ mod platform {
             show_receive.recv_timeout(Duration::from_secs(2)).unwrap();
             drop(first);
             assert!(Instance::acquire(dir.path(), true).unwrap().is_some());
+        }
+
+        #[test]
+        fn ready_is_signaled_only_after_recovery_finishes() {
+            let dir = tempfile::tempdir().unwrap();
+            let first = Instance::acquire(dir.path(), false).unwrap().unwrap();
+            assert!(
+                !ndm_core::wait_for_desktop_ready(dir.path(), Duration::from_millis(25)).unwrap()
+            );
+            first.mark_ready().unwrap();
+            assert!(ndm_core::wait_for_desktop_ready(dir.path(), Duration::from_secs(1)).unwrap());
         }
     }
 }

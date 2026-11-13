@@ -4711,6 +4711,7 @@ dependencies = [
  "gpui-kit",
  "image",
  "ndm-core",
+ "percent-encoding",
  "raw-window-handle",
  "reqwest",
  "semver",

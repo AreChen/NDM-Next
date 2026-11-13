@@ -19,6 +19,8 @@ pub use http::{
 pub use instance::desktop_instance_namespace;
 #[cfg(windows)]
 pub use instance::desktop_is_running;
+#[cfg(windows)]
+pub use instance::{wait_for_desktop_ready, wake_desktop};
 pub use model::{NewTask, Task, TaskId, TaskOptions, TaskState};
 pub use scheduler::{Scheduler, SchedulerEvent, SchedulerOptions};
 pub use sftp::{SftpAuth, SftpOptions, download_sftp, execute_sftp};
