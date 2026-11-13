@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/ndm-core", "crates/ndm-desktop"]
+members = ["crates/ndm-core", "crates/ndm-desktop", "crates/ndm-host"]
 resolver = "3"
 
 [workspace.package]
@@ -26,6 +26,8 @@ tokio-util = "0.7"
 uuid = { version = "1", features = ["v4", "serde"] }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_Security",
     "Win32_Security_Cryptography",
     "Win32_System_Memory",
+    "Win32_System_Threading",
 ] }

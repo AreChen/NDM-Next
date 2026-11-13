@@ -203,6 +203,8 @@ impl Desktop {
         {
             Ok(_) => {
                 self.scheduler.notify();
+                self.preferences.download_dir = request.destination.clone();
+                self.save_preferences();
                 self.notice = Some(self.text("下载已添加。", "Download added.").into());
                 self.section = Section::All;
                 self.reload();

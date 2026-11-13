@@ -1,3 +1,6 @@
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
+mod instance;
 mod preferences;
 mod view;
 
@@ -34,6 +37,11 @@ fn main() {
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
         .join("NDM Next");
+    #[cfg(windows)]
+    let mut instance = match instance::Instance::acquire(&data_dir).expect("create instance lock") {
+        Some(instance) => instance,
+        None => return,
+    };
     let preferences_path = data_dir.join("preferences.json");
     let preferences = Preferences::load(&preferences_path).unwrap_or_default();
     let store = Arc::new(Store::open(&data_dir.join("tasks.db")).expect("open task database"));
@@ -58,6 +66,11 @@ fn main() {
         )
         .expect("start scheduler")
     };
+    #[cfg(windows)]
+    {
+        let scheduler = scheduler.clone();
+        instance.on_wake(move || scheduler.notify());
+    }
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
         apply_theme(preferences.theme, cx);

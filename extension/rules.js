@@ -1,4 +1,4 @@
-const DEFAULTS = { enabled: true, minBytes: 1048576, excludedExtensions: ['data','woff','woff2','ttf','otf','eot'], blockedDomains: [], language: 'auto', media: true };
+const DEFAULTS = { enabled: true, minBytes: 1048576, excludedExtensions: ['data','woff','woff2','ttf','otf','eot'], blockedDomains: [], language: 'auto', media: true, backend:'neatdm', captureMode:'automatic' };
 function normalizeDomain(value) { try { return new URL(value.includes('://') ? value : `https://${value}`).hostname.toLowerCase().replace(/\.$/, ''); } catch { return ''; } }
 function domainMatches(host, blocked) { host = normalizeDomain(host); blocked = normalizeDomain(blocked); return !!host && !!blocked && (host === blocked || host.endsWith('.' + blocked)); }
 function shouldSkip(item, settings = DEFAULTS) {

@@ -4660,6 +4660,18 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ndm-host"
+version = "0.1.0"
+dependencies = [
+ "ndm-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

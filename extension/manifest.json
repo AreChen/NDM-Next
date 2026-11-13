@@ -1,14 +1,17 @@
 {
   "manifest_version": 3,
   "name": "NDM Next",
-  "version": "1.0.0",
-  "description": "A thoughtful browser companion for Neat Download Manager.",
+  "version": "1.1.0",
+  "description": "A thoughtful browser companion for NDM Next and Neat Download Manager.",
   "permissions": [
     "downloads",
     "storage",
     "tabs",
     "webRequest",
-    "cookies"
+    "cookies",
+    "nativeMessaging",
+    "notifications",
+    "alarms"
   ],
   "host_permissions": [
     "http://*/*",
