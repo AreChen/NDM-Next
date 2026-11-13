@@ -8,6 +8,16 @@ The build verifies the media files and configuration, checks dependency licenses
 
 The installer is unsigned until a release signing process is configured. This script does not create an MSIX or submit an app to the Microsoft Store.
 
+## Try the unreleased browser integration
+
+The current store extension does not yet contain the new desktop backend. To test locally, load the repository's `extension/` directory as an unpacked extension in developer mode, then allow its displayed extension ID in the installed host:
+
+```powershell
+pwsh -File desktop/packaging/windows/enable-dev-extension.ps1 -ExtensionId <extension-id>
+```
+
+The command adds that one local extension to the native messaging manifest. Reload the extension and select **NDM Next** as its backend. Re-run the command after reinstalling the desktop app, since installation resets the list to the official store IDs.
+
 ## Microsoft Store
 
 MSIX browser integration remains unresolved. Edge and Chrome discover a native host through a registry entry, while MSIX normally isolates registry writes from other applications. A packaged execution alias was verified to support Native Messaging, but it does not make that registry entry visible. Microsoft's [unvirtualized resources](https://learn.microsoft.com/en-us/windows/msix/desktop/flexible-virtualization) capability requires restricted-capability approval and leaves those writes behind after uninstall, so it is not included as a finished Store solution. An [unpackaged Store submission](https://learn.microsoft.com/en-us/windows/apps/distribute-through-store/how-to-distribute-your-win32-app-through-microsoft-store) is a different distribution option and requires publisher signing.

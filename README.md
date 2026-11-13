@@ -1,25 +1,20 @@
 <div align="center">
   <img src="extension/icons/icon-128.png" width="112" alt="NDM Next icon">
   <h1>NDM Next</h1>
-  <p>A cleaner, smarter browser companion for Neat Download Manager.</p>
+  <p>A modern Windows download manager and browser companion.</p>
   <p><a href="README.zh-CN.md">简体中文</a> · English</p>
 </div>
 
-NDM Next sends browser downloads to Neat Download Manager while keeping unwanted files out of your download list.
+NDM Next combines a Rust desktop downloader with a browser extension that keeps unwanted files out of your download list.
 
-This repository also includes a Rust Windows downloader and browser integration; see the [desktop build instructions](desktop/packaging/windows/README.md).
-
-- Filter downloads by file type, size, and domain.
-- Block the current site in one click.
-- Detect audio and video and send them to NDM.
-- Switch between English and Chinese.
+- Download over HTTP(S), FTP(S), SFTP, and HLS; use multi-connection and resume for HTTP(S).
+- Filter browser downloads by file type, size, and domain; block a site in one click.
+- Use light or dark themes and switch between English and Chinese.
+- Connect the extension to NDM Next or Neat Download Manager.
 
 ## Install
 
-1. Install and run [Neat Download Manager](https://www.neatdownloadmanager.com/).
-2. Download and extract `NDM-Next-1.0.0.zip` from [Releases](https://github.com/AreChen/NDM-Next/releases/latest).
-3. Open `brave://extensions` or `chrome://extensions`, enable developer mode, and select **Load unpacked**. Choose the extracted folder.
-4. Disable the original NDM extension to avoid duplicate downloads.
+See the [Windows build and local extension instructions](desktop/packaging/windows/README.md) for the desktop downloader and its browser integration. The existing [extension release](https://github.com/AreChen/NDM-Next/releases/latest) connects to Neat Download Manager.
 
 NDM Next is an independent project and is not affiliated with Neat Download Manager.
 
