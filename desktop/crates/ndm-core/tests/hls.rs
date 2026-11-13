@@ -336,6 +336,115 @@ async fn missing_hls_segment_does_not_publish_a_completed_file() {
 }
 
 #[tokio::test]
+async fn interrupted_vod_recovers_checked_partial_media() {
+    for playlist in ["ts", "aes"] {
+        let missing = Arc::new(AtomicBool::new(true));
+        let changed_key = Arc::new(AtomicBool::new(false));
+        let fixture = Arc::new(Fixture {
+            root: Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hls"),
+            missing: false,
+        });
+        let handler = {
+            let missing = missing.clone();
+            let changed_key = changed_key.clone();
+            move |AxumPath(path): AxumPath<String>| {
+                let fixture = fixture.clone();
+                let missing = missing.clone();
+                let changed_key = changed_key.clone();
+                async move {
+                    if path.ends_with("seg002.ts") && missing.load(Ordering::SeqCst) {
+                        return Response::builder()
+                            .status(StatusCode::NOT_FOUND)
+                            .body(Body::empty())
+                            .unwrap();
+                    }
+                    if path.ends_with("key.bin") && changed_key.load(Ordering::SeqCst) {
+                        return Response::new(Body::from(vec![42u8; 16]));
+                    }
+                    serve(State(fixture), AxumPath(path)).await
+                }
+            }
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, Router::new().route("/{*path}", get(handler)))
+                .await
+                .unwrap();
+        });
+        let dir = TempDir::new().unwrap();
+        let id = TaskId::new_v4();
+        let task = request(
+            dir.path(),
+            format!("http://{address}/{playlist}/index.m3u8"),
+        );
+        let options = HlsOptions::default();
+        let run = || {
+            download_hls(
+                &task,
+                id,
+                &options,
+                CancellationToken::new(),
+                CancellationToken::new(),
+            )
+        };
+        assert!(run().await.is_err());
+        assert!(!dir.path().join("video.mp4").exists());
+        let work = dir.path().join(format!(".ndm-next-{id}"));
+        let checkpoint = work.join("hls-checkpoint.sqlite");
+        let partial = work.join("hls-output.mp4.hls-partial");
+        assert!(
+            checkpoint.exists(),
+            "{playlist}: checkpoint must survive failure"
+        );
+        assert!(
+            partial.exists(),
+            "{playlist}: partial output must survive failure"
+        );
+        let database = rusqlite::Connection::open(&checkpoint).unwrap();
+        let bytes: Vec<u8> = database
+            .query_row("SELECT data FROM checkpoint WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let checkpoint = hls_engine::EngineCheckpoint::from_bytes(&bytes).unwrap();
+        assert!(
+            checkpoint.bytes_written() > 0,
+            "{playlist}: expected committed data"
+        );
+        drop(database);
+        missing.store(false, Ordering::SeqCst);
+        let original = std::fs::read(&partial).unwrap();
+        let mut damaged = original.clone();
+        damaged[12] ^= 1;
+        std::fs::write(&partial, &damaged).unwrap();
+        assert!(
+            matches!(run().await, Err(ndm_core::Error::HlsRecovery)),
+            "{playlist}: corrupted partial must be rejected as a recovery conflict"
+        );
+        assert_eq!(std::fs::read(&partial).unwrap(), damaged);
+        std::fs::write(&partial, &original).unwrap();
+        if playlist == "aes" {
+            changed_key.store(true, Ordering::SeqCst);
+            assert!(
+                matches!(run().await, Err(ndm_core::Error::HlsRecovery)),
+                "changed encryption keys must be rejected as a recovery conflict"
+            );
+            assert_eq!(std::fs::read(&partial).unwrap(), original);
+            changed_key.store(false, Ordering::SeqCst);
+        }
+        let output = run().await.unwrap();
+        save_for_external_verification(&output.path, &format!("{playlist}-recovered.mp4"));
+        let bytes = std::fs::read(output.path).unwrap();
+        assert_eq!(&bytes[4..8], b"ftyp");
+        assert!(
+            !work.exists(),
+            "{playlist}: completed temporary files should be cleaned"
+        );
+    }
+}
+
+#[tokio::test]
 async fn live_stream_can_stop_and_save_recorded_media() {
     let segments_seen = Arc::new(AtomicUsize::new(0));
     let fixture = Arc::new(Fixture {
@@ -403,6 +512,95 @@ async fn live_stream_can_stop_and_save_recorded_media() {
     assert!(result.stopped);
     save_for_external_verification(&result.path, "live-stopped.mp4");
     assert!(std::fs::metadata(result.path).unwrap().len() > 1000);
+}
+
+#[tokio::test]
+async fn interrupted_live_stream_resumes_if_its_media_window_is_still_available() {
+    let ended = Arc::new(AtomicBool::new(false));
+    let fixture = Arc::new(Fixture {
+        root: Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hls"),
+        missing: false,
+    });
+    let handler = {
+        let ended = ended.clone();
+        move |AxumPath(path): AxumPath<String>| {
+            let fixture = fixture.clone();
+            let ended = ended.clone();
+            async move {
+                if path == "ts/index.m3u8" {
+                    let content = tokio::fs::read_to_string(fixture.root.join(&path))
+                        .await
+                        .unwrap();
+                    return Response::new(Body::from(if ended.load(Ordering::SeqCst) {
+                        content
+                    } else {
+                        content.replace("#EXT-X-ENDLIST", "")
+                    }));
+                }
+                serve(State(fixture), AxumPath(path)).await
+            }
+        }
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, Router::new().route("/{*path}", get(handler)))
+            .await
+            .unwrap();
+    });
+    let dir = TempDir::new().unwrap();
+    let id = TaskId::new_v4();
+    let task = request(dir.path(), format!("http://{address}/ts/index.m3u8"));
+    let cancel = CancellationToken::new();
+    let work = dir.path().join(format!(".ndm-next-{id}"));
+    let options = HlsOptions::default();
+    let worker = download_hls(
+        &task,
+        id,
+        &options,
+        cancel.clone(),
+        CancellationToken::new(),
+    );
+    let stop_after_checkpoint = async {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let ready = rusqlite::Connection::open_with_flags(
+                    work.join("hls-checkpoint.sqlite"),
+                    rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+                )
+                .ok()
+                .and_then(|db| {
+                    db.query_row("SELECT data FROM checkpoint WHERE id = 1", [], |row| {
+                        row.get::<_, Vec<u8>>(0)
+                    })
+                    .ok()
+                })
+                .and_then(|bytes| hls_engine::EngineCheckpoint::from_bytes(&bytes).ok())
+                .is_some_and(|checkpoint| checkpoint.bytes_written() > 0);
+                if ready {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .unwrap();
+        cancel.cancel();
+    };
+    let (result, ()) = tokio::join!(worker, stop_after_checkpoint);
+    assert!(result.is_err());
+    ended.store(true, Ordering::SeqCst);
+    let output = download_hls(
+        &task,
+        id,
+        &HlsOptions::default(),
+        CancellationToken::new(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert!(std::fs::metadata(output.path).unwrap().len() > 1000);
+    assert!(!work.exists());
 }
 
 #[tokio::test]

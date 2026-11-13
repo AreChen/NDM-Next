@@ -350,7 +350,7 @@ pub(super) async fn remux(
             &format!("{stem}.{extension}"),
         )
         .await?;
-        let _ = fs::remove_file(work_dir.join("hls-output.mp4")).await;
+        super::recovery::remove_files(work_dir).await;
         drop(staged);
         let _ = fs::remove_dir(work_dir).await;
         return Ok(HlsOutcome {

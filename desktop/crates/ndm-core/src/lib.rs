@@ -80,6 +80,8 @@ pub enum Error {
     Hls,
     #[error("HLS media codec is unsupported")]
     HlsCodecUnsupported,
+    #[error("HLS recovery data or media no longer matches")]
+    HlsRecovery,
     #[error("download was paused or cancelled")]
     Cancelled,
 }

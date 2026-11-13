@@ -988,7 +988,18 @@ impl Desktop {
                     format_bytes(self.speed.get(&task.id).copied().unwrap_or(0))
                 )
             }
-            None => task.error.clone().unwrap_or_else(|| status.into()),
+            None => match task.error.as_deref() {
+                Some("hls_recovery_conflict") => self.text(
+                    "无法安全续传：媒体或临时文件已改变，已保留临时数据。",
+                    "Cannot resume safely: media or temporary data changed. The temporary data was kept.",
+                ).into(),
+                Some("hls_failed") => self.text(
+                    "无法下载或合并媒体，请检查链接和网络。",
+                    "Could not download or merge the media. Check the URL and network.",
+                ).into(),
+                Some(error) => error.to_owned(),
+                None => status.into(),
+            },
         };
         let id = task.id;
         let state = task.state;

@@ -172,6 +172,12 @@ async fn removing_a_paused_task_can_keep_or_remove_only_its_temporary_files() {
         let work_dir = dir.path().join(format!(".ndm-next-{id}"));
         std::fs::create_dir(&work_dir).unwrap();
         std::fs::write(work_dir.join("segment-0.part"), b"partial").unwrap();
+        std::fs::write(
+            work_dir.join("hls-output.mp4.hls-partial"),
+            b"partial media",
+        )
+        .unwrap();
+        std::fs::write(work_dir.join("hls-checkpoint.sqlite"), b"checkpoint").unwrap();
         let completed_file = dir.path().join(format!("completed-{id}.bin"));
         std::fs::write(&completed_file, b"keep me").unwrap();
         tasks.push((id, remove_partial, work_dir, completed_file));

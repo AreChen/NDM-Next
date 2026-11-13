@@ -232,7 +232,14 @@ fn remove_owned_partial_files(destination: &Path, id: TaskId) -> Result<()> {
         let name = name.to_string_lossy();
         let known = matches!(
             name.as_ref(),
-            "resume.bin" | "assembled.part" | "ftp.part" | "sftp.part" | "hls-output.mp4"
+            "resume.bin"
+                | "assembled.part"
+                | "ftp.part"
+                | "sftp.part"
+                | "hls-output.mp4"
+                | "hls-output.mp4.hls-partial"
+                | "hls-checkpoint.sqlite"
+                | "hls-checkpoint.sqlite-journal"
         ) || name
             .strip_prefix("segment-")
             .and_then(|name| name.strip_suffix(".part"))

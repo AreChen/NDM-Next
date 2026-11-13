@@ -4,14 +4,14 @@ use std::{
     path::{Path, PathBuf},
     pin::Pin,
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use futures_util::{StreamExt, future::try_join_all};
 use hls_engine::{
-    ByteRange, EmbeddedAudio, EngineCause, EngineEndReason, EngineError, EngineInput, EngineInputs,
-    EngineMode, EngineOptions, EngineSession, EngineWait, FileOutputOptions, OutputFormat, Source,
-    SourceLocation, TextResource, TrackMetadata,
+    ByteRange, CheckpointDurability, EmbeddedAudio, EngineCause, EngineEndReason, EngineError,
+    EngineErrorKind, EngineInput, EngineInputs, EngineMode, EngineOptions, EngineSession,
+    EngineWait, RecoveryOptions, Source, SourceLocation, TextResource, TrackMetadata,
     crypto::key::{
         AvailableKey, KeyClock, KeyFuture, KeyProvider, KeyRequest, KeyResolution, KeySession,
         KeySessionOptions, SecretKey,
@@ -24,6 +24,7 @@ use reqwest::{
     header::{self, HeaderMap},
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tokio::{fs, io::AsyncReadExt};
 use tokio_util::sync::CancellationToken;
 
@@ -39,6 +40,7 @@ const MAX_PLAYLIST_BYTES: usize = 2 * 1024 * 1024;
 const MAX_RESOURCE_BYTES: usize = 32 * 1024 * 1024;
 
 mod fallback;
+mod recovery;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HlsOptions {
@@ -220,12 +222,17 @@ impl KeyProvider for Keys {
                 _ = request.cancellation().cancelled() => return KeyResolution::Unavailable,
                 result = source.fetch(&location, None, 16) => result,
             };
-            match result
-                .ok()
-                .and_then(|(bytes, _)| SecretKey::new(bytes).ok())
-            {
-                Some(key) => KeyResolution::Available(AvailableKey::aes128(key)),
-                None => KeyResolution::Unavailable,
+            let Ok((bytes, _)) = result else {
+                return KeyResolution::Unavailable;
+            };
+            // Recovery compares this version before reusing encrypted media. Never
+            // persist the key itself in the checkpoint.
+            let version = format!("{:x}", Sha256::digest(&bytes));
+            match SecretKey::new(bytes) {
+                Ok(key) => {
+                    KeyResolution::Available(AvailableKey::aes128(key).with_version(version))
+                }
+                Err(_) => KeyResolution::Unavailable,
             }
         })
     }
@@ -360,7 +367,14 @@ pub async fn execute_hls(
             Err(Error::Cancelled)
         }
         Err(error) => {
-            store.fail(id, "HLS media or playlist failed")?;
+            store.fail(
+                id,
+                if matches!(error, Error::HlsRecovery) {
+                    "hls_recovery_conflict"
+                } else {
+                    "hls_failed"
+                },
+            )?;
             Err(error)
         }
     }
@@ -410,6 +424,17 @@ pub async fn download_hls_with_media_tool(
 fn engine_failure(error: &EngineError, cancel: &CancellationToken) -> Error {
     if cancel.is_cancelled() {
         return Error::Cancelled;
+    }
+    if matches!(
+        error.kind(),
+        EngineErrorKind::ResumeConflict
+            | EngineErrorKind::ResumeCorruption
+            | EngineErrorKind::ReplayRequired
+            | EngineErrorKind::InputRewrite
+            | EngineErrorKind::RevisionRollback
+            | EngineErrorKind::GenerationMismatch
+    ) {
+        return Error::HlsRecovery;
     }
     let unsupported = match error.cause() {
         Some(EngineCause::Sample(cause)) => {
@@ -545,28 +570,49 @@ async fn download_hls_with_progress(
         KeySessionOptions::default(),
     )
     .map_err(|_| Error::Hls)?;
-    let engine = EngineSession::new(
-        inputs,
-        keys,
-        EngineOptions::default()
-            .with_mode(EngineMode::Open)
-            .with_download_concurrency(4)
-            .with_waiter(Arc::new(Wait), Duration::from_secs(30)),
-    )
-    .map_err(|_| Error::Hls)?;
-    let handle = engine.handle();
     fs::create_dir_all(&request.destination).await?;
     let work_dir = request.destination.join(format!(".ndm-next-{id}"));
     fs::create_dir_all(&work_dir).await?;
     let temporary = work_dir.join("hls-output.mp4");
+    let checkpoint_path = work_dir.join("hls-checkpoint.sqlite");
+    let checkpoint = recovery::load(&checkpoint_path)?;
+    let restoring = checkpoint.is_some();
+    let terminal = checkpoint
+        .as_ref()
+        .is_some_and(|value| value.is_finalizing() || value.is_completed());
+    let engine_options = EngineOptions::default()
+        .with_mode(EngineMode::Open)
+        .with_download_concurrency(4)
+        .with_waiter(Arc::new(Wait), Duration::from_secs(30));
+    let engine = match checkpoint {
+        Some(checkpoint) => EngineSession::restore(inputs, keys, engine_options, checkpoint),
+        None => EngineSession::new(inputs, keys, engine_options),
+    }
+    .map_err(|error| engine_failure(&error, &cancel))?;
+    let handle = engine.handle();
+    let writer_options = RecoveryOptions::new(Arc::new(move |checkpoint| {
+        recovery::save(&checkpoint_path, &checkpoint).map_err(|error| {
+            EngineError::output(hls_engine::Error::Io(std::io::Error::other(error)))
+        })
+    }))
+    .with_durability(CheckpointDurability::SyncAll);
+    let (ready_senders, ready_receivers): (Vec<_>, Vec<_>) = selected
+        .iter()
+        .map(|_| tokio::sync::oneshot::channel::<()>())
+        .unzip();
     let producer = async {
-        let jobs = selected.clone().into_iter().map(|(input_id, location)| {
+        if terminal {
+            return Ok(());
+        }
+        let jobs = selected.clone().into_iter().zip(ready_senders).map(|((input_id, location), ready)| {
             let handle = handle.clone();
             let source = source.clone();
             let cancel = cancel.clone();
             let stop = stop.clone();
             async move {
-                let mut revision = 0u64;
+                let mut ready = Some(ready);
+                let mut revision = SystemTime::now().duration_since(UNIX_EPOCH)
+                    .map_err(|_| Error::Hls)?.as_nanos().try_into().map_err(|_| Error::Hls)?;
                 loop {
                     let text = tokio::select! {
                         biased;
@@ -584,6 +630,7 @@ async fn download_hls_with_progress(
                         _ = stop.cancelled() => { handle.stop(); return Ok(()); }
                         accepted = handle.accept_when_ready(&input_id, &snapshot) => accepted.map_err(|error| engine_failure(&error, &cancel))?,
                     };
+                    if let Some(ready) = ready.take() { let _ = ready.send(()); }
                     if end { return Ok(()); }
                     revision = revision.checked_add(1).ok_or(Error::Hls)?;
                     tokio::select! {
@@ -598,11 +645,13 @@ async fn download_hls_with_progress(
         try_join_all(jobs).await.map(|_| ())
     };
     let consumer = async {
+        if restoring && !terminal {
+            for ready in ready_receivers {
+                ready.await.map_err(|_| Error::Hls)?;
+            }
+        }
         engine
-            .write_to_file(
-                &temporary,
-                FileOutputOptions::default().with_format(OutputFormat::FragmentedMp4),
-            )
+            .write_recoverable_to_file(&temporary, writer_options)
             .await
             .map_err(|error| engine_failure(&error, &cancel))
     };
@@ -656,7 +705,7 @@ async fn download_hls_with_progress(
         format!("{stem}.mp4")
     };
     let target = publish_no_overwrite(&temporary, &request.destination, &name).await?;
-    let _ = fs::remove_file(&temporary).await;
+    recovery::remove_files(&work_dir).await;
     let _ = fs::remove_dir(&work_dir).await;
     Ok(HlsOutcome {
         path: target,
