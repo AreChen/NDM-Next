@@ -1,4 +1,4 @@
-const DEFAULTS = { enabled: true, minBytes: 1048576, excludedExtensions: ['data','woff','woff2','ttf','otf','eot'], blockedDomains: [], language: 'auto', media: true, backend:'neatdm', captureMode:'automatic' };
+const DEFAULTS = { enabled: true, minBytes: 1048576, excludedExtensions: ['data','woff','woff2','ttf','otf','eot'], blockedDomains: [], language: 'auto', media: true, backend:'neatdm', captureMode:'automatic', transferPolicy:'safe' };
 function isHls(item) {
   const type = String(item.type || '').split(';')[0].trim().toLowerCase();
   if (['application/vnd.apple.mpegurl','application/x-mpegurl','audio/mpegurl','audio/x-mpegurl'].includes(type)) return true;

@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 
 function setup({capture=true,method='GET',referrer='https://page.test/',config={},prepareOk=true,backendAbsent=false}={}) {
-  const listeners={}, calls=[], saved={backend:'next',...config};
+  const listeners={}, calls=[], saved={backend:'next',transferPolicy:'immediate',...config};
   if (backendAbsent) delete saved.backend;
   let state='in_progress', error;
   const storage={

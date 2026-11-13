@@ -41,7 +41,7 @@ fn run() -> io::Result<()> {
     while let Some(message) = read_frame(&mut input)? {
         let request: Value = serde_json::from_slice(&message).unwrap_or(Value::Null);
         let kind = request.get("type").and_then(Value::as_str);
-        let can_commit = if kind == Some("commit") {
+        let can_commit = if matches!(kind, Some("commit" | "discard")) {
             let launched = Command::new(&executable)
                 .arg("--handoff")
                 .stdin(Stdio::null())
@@ -71,7 +71,9 @@ fn run() -> io::Result<()> {
         } else {
             host.handle(request.clone())
         };
-        if kind == Some("commit") && result.get("ok") == Some(&Value::Bool(true)) {
+        if matches!(kind, Some("commit" | "discard"))
+            && result.get("ok") == Some(&Value::Bool(true))
+        {
             // Commit only after startup recovery finishes, then wake the scheduler.
             // A retry is safe if the desktop exits between these two operations.
             #[cfg(windows)]

@@ -200,6 +200,30 @@ impl Scheduler {
             }
         }
     }
+
+    async fn discard_copy(&self, id: TaskId) -> Result<()> {
+        if self.0.active.lock().unwrap().contains_key(&id) {
+            // If completion races with cancellation, keep the completed file.
+            let _ = self.pause(id).await;
+        }
+        match self.0.store.get(id)? {
+            None
+            | Some(Task {
+                state: TaskState::Completed,
+                ..
+            }) => {}
+            Some(Task {
+                state: TaskState::Prepared,
+                ..
+            }) => self.0.store.abort(id)?,
+            Some(Task {
+                state: TaskState::Queued | TaskState::Paused | TaskState::Failed,
+                ..
+            }) => self.delete(id, true)?,
+            Some(_) => return Err(Error::InvalidState),
+        }
+        Ok(())
+    }
 }
 
 fn is_reparse_point(metadata: &std::fs::Metadata) -> bool {
@@ -266,6 +290,15 @@ async fn dispatch(inner: Arc<Inner>) {
             return;
         }
         let notified = inner.wake.notified();
+        if let Ok(requests) = inner.store.pending_discards()
+            && let Some(id) = requests.first().copied()
+        {
+            // Failed cleanup keeps the task and its files for the user; it must
+            // not spin forever or prevent unrelated downloads from starting.
+            let _ = Scheduler(inner.clone()).discard_copy(id).await;
+            let _ = inner.store.finish_discard(id);
+            continue;
+        }
         let capacity = inner
             .options
             .read()

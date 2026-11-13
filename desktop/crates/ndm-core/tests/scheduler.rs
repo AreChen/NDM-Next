@@ -233,6 +233,45 @@ async fn removing_an_active_task_waits_for_the_worker_to_stop() {
 }
 
 #[tokio::test]
+async fn external_discard_stops_an_active_copy_and_never_deletes_completed_files() {
+    let dir = TempDir::new().unwrap();
+    let store = Arc::new(Store::open(&dir.path().join("tasks.db")).unwrap());
+    let (url, _) = server().await;
+    let id = TaskId::new_v4();
+    store.prepare(id, &request(dir.path(), &url)).unwrap();
+    store.commit(id).unwrap();
+    let scheduler = Scheduler::start(store.clone(), SchedulerOptions::default()).unwrap();
+    wait_for(&store, id, TaskState::Running).await;
+    store.request_discard(id).unwrap();
+    scheduler.notify();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while store.get(id).unwrap().is_some() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!dir.path().join("file.bin").exists());
+    let finished = TaskId::new_v4();
+    store.prepare(finished, &request(dir.path(), &url)).unwrap();
+    store.commit(finished).unwrap();
+    scheduler.notify();
+    wait_for(&store, finished, TaskState::Completed).await;
+    store.request_discard(finished).unwrap();
+    scheduler.notify();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(
+        store.get(finished).unwrap().unwrap().state,
+        TaskState::Completed
+    );
+    assert_eq!(
+        std::fs::read(dir.path().join("file.bin")).unwrap(),
+        vec![42; 1024]
+    );
+    scheduler.shutdown().await;
+}
+
+#[tokio::test]
 async fn already_paused_tasks_do_not_restart_on_startup() {
     let dir = TempDir::new().unwrap();
     let store = Arc::new(Store::open(&dir.path().join("tasks.db")).unwrap());

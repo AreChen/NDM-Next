@@ -7,6 +7,8 @@ const HOST = 'com.ndmnext.host';
 const RECOVERY_ALARM = 'ndm-next-recover';
 let captureEnabled = false;
 let expiryTimer;
+let recoveryTimer;
+let mediaSequence = 0;
 
 async function settings() { return { ...DEFAULTS, ...(await chrome.storage.local.get(DEFAULTS)) }; }
 function setCaptureEnabled(config) {
@@ -18,7 +20,13 @@ chrome.storage.onChanged?.addListener((changes,area) => {
   if (area === 'local' && (changes.backend || changes.enabled)) settings().then(setCaptureEnabled).catch(() => {});
 });
 function native(message) { return chrome.runtime.sendNativeMessage(HOST, message); }
-function scheduleRecovery() { try { chrome.alarms?.create(RECOVERY_ALARM, {delayInMinutes:1}); } catch {} }
+function scheduleRecovery() {
+  try { chrome.alarms?.create(RECOVERY_ALARM, {delayInMinutes:1}); } catch {}
+  if (!recoveryTimer) {
+    recoveryTimer = setTimeout(() => { recoveryTimer = undefined; handoff.recover().catch(scheduleRecovery); },3000);
+    recoveryTimer?.unref?.();
+  }
+}
 const handoff = new Handoff({native,storage:chrome.storage.local,downloads:chrome.downloads,uuid:()=>crypto.randomUUID(),onPending:scheduleRecovery});
 
 // Existing installations retain the legacy backend. Brand-new installations
@@ -95,7 +103,7 @@ async function askToTakeOver(download, task, config) {
   if (!chrome.notifications) return;
   const id = `ndm-next-confirm:${download.id}`;
   const chinese = config.language === 'zh' || (config.language === 'auto' && chrome.i18n.getUILanguage().toLowerCase().startsWith('zh'));
-  pendingApprovals.set(id,{downloadId:download.id,task});
+  pendingApprovals.set(id,{downloadId:download.id,task,policy:config.transferPolicy});
   try {
     await chrome.notifications.create(id, {
       type:'basic',iconUrl:'icons/icon-128.png',title:'NDM Next',
@@ -108,7 +116,7 @@ chrome.notifications?.onButtonClicked.addListener((id,button) => {
   const pending = pendingApprovals.get(id);
   pendingApprovals.delete(id);
   chrome.notifications.clear(id).catch(() => {});
-  if (pending && button === 0) handoff.transfer(pending.downloadId,pending.task).catch(() => {});
+  if (pending && button === 0) handoff.transfer(pending.downloadId,pending.task,pending.policy).catch(() => {});
 });
 chrome.notifications?.onClosed.addListener(id => { pendingApprovals.delete(id); });
 
@@ -136,16 +144,18 @@ chrome.downloads.onCreated.addListener(async download => {
       const task = browserTask(item,current);
       if (!task) return;
       if (config.captureMode === 'confirm') await askToTakeOver(current,task,config);
-      else await handoff.transfer(download.id,task);
+      else await handoff.transfer(download.id,task,config.transferPolicy);
     } else if (await sendLegacy(item)) {
       await chrome.downloads.cancel(download.id);
       await chrome.downloads.erase({id:download.id});
     }
   } catch { console.warn('NDM Next: download left in browser'); }
 });
+chrome.downloads.onChanged?.addListener(delta => { if (delta.state || delta.error) handoff.recover().catch(scheduleRecovery); });
 
 chrome.webRequest.onHeadersReceived.addListener(async details => {
   if (details.tabId < 0 || details.method !== 'GET') return;
+  const sequence = ++mediaSequence;
   const captured = requests.get(details.requestId);
   const capture = captured?.url === details.url && captured?.tabId === details.tabId && captured?.headers ? captured : null;
   try {
@@ -157,8 +167,10 @@ chrome.webRequest.onHeadersReceived.addListener(async details => {
     const item = {url:details.url,pageUrl:tab.url,size:headers['content-length'] && Number.isFinite(size) ? size : undefined,type};
     if (isHls(item)) item.size = undefined; // This is the playlist's size, not the media size.
     if (shouldSkip(item,config) || ((config.blockedDomains || []).length && !reliablePage(item.pageUrl))) return;
-    const entries = (mediaByTab.get(details.tabId) || []).filter(entry => entry.item.url !== item.url);
-    entries.unshift({item,capture});
+    const previous = mediaByTab.get(details.tabId) || [];
+    if (previous.some(entry => entry.item.url === item.url && entry.sequence > sequence)) return;
+    const entries = previous.filter(entry => entry.item.url !== item.url);
+    entries.unshift({item,capture,sequence});
     mediaByTab.set(details.tabId,entries.slice(0,50));
   } catch {}
 }, {urls:['http://*/*','https://*/*']}, ['responseHeaders']);

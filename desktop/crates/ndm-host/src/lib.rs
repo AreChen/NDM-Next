@@ -89,6 +89,7 @@ enum Command {
     Prepare { id: TaskId, task: BrowserTask },
     Commit { id: TaskId },
     Abort { id: TaskId },
+    Discard { id: TaskId },
     Inspect { id: TaskId },
 }
 
@@ -231,8 +232,20 @@ impl Host {
                 Ok(()) => json!({"ok":true}),
                 Err(_) => json!({"ok":false,"error":"abort_failed"}),
             },
+            Command::Discard { id } => match self.store.request_discard(id) {
+                Ok(state) => json!({"ok":true,"state":state.map(state_name).unwrap_or("missing")}),
+                Err(_) => json!({"ok":false,"error":"discard_failed"}),
+            },
             Command::Inspect { id } => match self.store.get(id) {
-                Ok(Some(task)) => json!({"ok":true,"state":state_name(task.state)}),
+                Ok(Some(task)) => {
+                    let output_size = task
+                        .output_path
+                        .as_ref()
+                        .and_then(|path| std::fs::symlink_metadata(path).ok())
+                        .filter(|metadata| metadata.file_type().is_file())
+                        .map(|metadata| metadata.len());
+                    json!({"ok":true,"state":state_name(task.state),"size_verified":task.size_verified,"output_size":output_size})
+                }
                 Ok(None) => json!({"ok":true,"state":"missing"}),
                 Err(_) => json!({"ok":false,"error":"inspect_failed"}),
             },

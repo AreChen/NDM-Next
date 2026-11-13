@@ -37,7 +37,8 @@ impl Store {
                 error TEXT,
                 size_verified INTEGER,
                 created_at INTEGER NOT NULL DEFAULT (unixepoch())
-            );",
+            );
+            CREATE TABLE IF NOT EXISTS discard_requests (id TEXT PRIMARY KEY NOT NULL);",
         )?;
         let columns: Vec<String> = {
             let mut statement = tx.prepare("PRAGMA table_info(tasks)")?;
@@ -126,6 +127,39 @@ impl Store {
             Some(_) => return Err(Error::InvalidState),
         }
         tx.commit()?;
+        Ok(())
+    }
+
+    /// Ask the desktop scheduler to stop a redundant browser handoff. The
+    /// scheduler owns the worker and temporary files; the host must not delete
+    /// them while a worker may still be running.
+    pub fn request_discard(&self, id: TaskId) -> Result<Option<TaskState>> {
+        let mut conn = self.connection()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let state = read_task(&tx, id)?.map(|task| task.state);
+        if state.is_some_and(|state| state != TaskState::Completed) {
+            tx.execute(
+                "INSERT OR IGNORE INTO discard_requests (id) VALUES (?1)",
+                [id.to_string()],
+            )?;
+        }
+        tx.commit()?;
+        Ok(state)
+    }
+
+    pub(crate) fn pending_discards(&self) -> Result<Vec<TaskId>> {
+        let conn = self.connection()?;
+        let mut statement = conn.prepare("SELECT id FROM discard_requests ORDER BY rowid")?;
+        let ids = statement.query_map([], |row| row.get::<_, String>(0))?;
+        ids.map(|id| TaskId::parse_str(&id?).map_err(|_| Error::InvalidStoredState))
+            .collect()
+    }
+
+    pub(crate) fn finish_discard(&self, id: TaskId) -> Result<()> {
+        self.connection()?.execute(
+            "DELETE FROM discard_requests WHERE id = ?1",
+            [id.to_string()],
+        )?;
         Ok(())
     }
 
