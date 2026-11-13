@@ -1,7 +1,9 @@
 # Windows installer build
 
-Run `build.ps1` on Windows with the Rust 1.100.0 x64 MSVC toolchain, NSIS 3 and `cargo-about` installed. The `-Nsis` and `-CargoAbout` parameters can point to executables outside `PATH`.
+Build the media tools on Linux or WSL using `../ffmpeg/build.sh` and an empty output directory. The script verifies the FFmpeg source and produces a network-disabled, shared LGPL build with its corresponding source and licenses. Its dependencies are listed at the top of the script.
 
-The script builds both programs, checks dependency licenses against `about.toml`, generates the third-party notices and creates an installer under `desktop/dist/`. It includes the project's license, the generated notices and the separate Lucide/Feather icon license. The generated notices link to the exact published crate sources, including the unmodified MPL-2.0 component.
+Run `build.ps1 -MediaToolDir <output-directory>` on Windows with the Rust 1.100.0 x64 MSVC toolchain, NSIS 3 and `cargo-about` installed. `-Nsis` and `-CargoAbout` can point to executables outside `PATH`.
 
-This installer is per-user and is unsigned until a release signing process is configured. It registers the Chrome and Edge extension IDs for native messaging and retains download data on uninstall. An MSIX/Store package is a separate build and is not produced by this script.
+The build verifies the media files and configuration, checks dependency licenses, and creates an installer under `desktop/dist/` with the relevant source and license notices. The per-user installer registers the Chrome and Edge native messaging hosts. Uninstalling offers to retain or remove settings and download records; completed downloads are kept. Silent uninstall retains the records.
+
+The installer is unsigned until a release signing process is configured. This script does not create an MSIX or submit an app to the Microsoft Store.
