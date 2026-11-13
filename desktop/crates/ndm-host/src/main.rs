@@ -64,9 +64,9 @@ fn run() -> io::Result<()> {
         } else {
             true
         };
-        let mut result = if matches!(kind, Some("status" | "prepare")) && !executable.is_file() {
-            json!({"ok":false,"error":"desktop_unavailable"})
-        } else if !can_commit {
+        let mut result = if (matches!(kind, Some("status" | "prepare")) && !executable.is_file())
+            || !can_commit
+        {
             json!({"ok":false,"error":"desktop_unavailable"})
         } else {
             host.handle(request.clone())

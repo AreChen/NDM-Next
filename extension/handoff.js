@@ -37,7 +37,7 @@ class Handoff {
     return true;
   }
 
-  async transfer(downloadId, task, policy = 'safe') {
+  async transfer(downloadId, task, policy = 'immediate') {
     const key = `ndmNextHandoff:${downloadId}`;
     if (this.inFlight.has(key)) return false;
     this.inFlight.add(key);

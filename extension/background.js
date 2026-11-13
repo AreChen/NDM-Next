@@ -103,22 +103,33 @@ async function askToTakeOver(download, task, config) {
   if (!chrome.notifications) return;
   const id = `ndm-next-confirm:${download.id}`;
   const chinese = config.language === 'zh' || (config.language === 'auto' && chrome.i18n.getUILanguage().toLowerCase().startsWith('zh'));
-  pendingApprovals.set(id,{downloadId:download.id,task,policy:config.transferPolicy});
+  const pending = {downloadId:download.id,task,policy:config.transferPolicy,expires:Date.now()+300000};
+  pendingApprovals.set(id,pending);
+  // Session storage is memory-only and survives a service-worker restart. Never
+  // persist captured authorization headers or cookies in storage.local.
+  try { await chrome.storage.session?.set({[id]:pending}); } catch {}
   try {
     await chrome.notifications.create(id, {
       type:'basic',iconUrl:'icons/icon-128.png',title:'NDM Next',
       message:chinese ? '使用 NDM Next 下载此文件？' : 'Send this download to NDM Next?',
       buttons:[{title:chinese ? '接管下载' : 'Send download'},{title:chinese ? '留在浏览器' : 'Keep in browser'}],
     });
-  } catch { pendingApprovals.delete(id); }
+  } catch { await forgetApproval(id); }
+}
+async function forgetApproval(id) {
+  pendingApprovals.delete(id);
+  try { await chrome.storage.session?.remove(id); } catch {}
 }
 chrome.notifications?.onButtonClicked.addListener((id,button) => {
-  const pending = pendingApprovals.get(id);
-  pendingApprovals.delete(id);
-  chrome.notifications.clear(id).catch(() => {});
-  if (pending && button === 0) handoff.transfer(pending.downloadId,pending.task,pending.policy).catch(() => {});
+  (async () => {
+    let pending = pendingApprovals.get(id);
+    if (!pending) { try { pending = (await chrome.storage.session?.get(id))?.[id]; } catch {} }
+    await forgetApproval(id);
+    chrome.notifications.clear(id).catch(() => {});
+    if (pending && pending.expires >= Date.now() && button === 0) await handoff.transfer(pending.downloadId,pending.task,pending.policy);
+  })().catch(() => {});
 });
-chrome.notifications?.onClosed.addListener(id => { pendingApprovals.delete(id); });
+chrome.notifications?.onClosed.addListener(id => { forgetApproval(id).catch(() => {}); });
 
 chrome.downloads.onCreated.addListener(async download => {
   try {

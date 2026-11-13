@@ -7,6 +7,8 @@
 
 NDM Next 将浏览器下载交给 Neat Download Manager，同时过滤不需要的文件，让下载列表保持清爽。
 
+仓库还包含 Rust Windows 下载器及浏览器集成，参见[桌面版构建说明](desktop/packaging/windows/README.md)。
+
 - 按文件类型、大小和域名过滤下载。
 - 一键将当前网站加入黑名单。
 - 识别音频和视频，发送至 NDM。

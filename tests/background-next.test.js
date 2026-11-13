@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const fs = require('node:fs');
 
-function setup({capture=true,method='GET',referrer='https://page.test/',config={},prepareOk=true,backendAbsent=false}={}) {
+function setup({capture=true,method='GET',referrer='https://page.test/',config={},prepareOk=true,backendAbsent=false,sharedSession={}}={}) {
   const listeners={}, calls=[], saved={backend:'next',transferPolicy:'immediate',...config};
   if (backendAbsent) delete saved.backend;
   let state='in_progress', error;
@@ -12,7 +12,7 @@ function setup({capture=true,method='GET',referrer='https://page.test/',config={
     set:async value=>Object.assign(saved,value), remove:async key=>delete saved[key],
   };
   const chrome={
-    storage:{local:storage}, cookies:{getAll:async()=>[]},
+    storage:{local:storage,session:{get:async key=>({[key]:sharedSession[key]}),set:async value=>Object.assign(sharedSession,value),remove:async key=>delete sharedSession[key]}}, cookies:{getAll:async()=>[]},
     downloads:{onCreated:{addListener:f=>listeners.download=f},
       search:async()=>[{id:5,state,error,totalBytes:2097152,finalUrl:'https://files.test/file.zip'}],
       cancel:async()=>{calls.push('cancel');state='interrupted';error='USER_CANCELED'},
@@ -51,6 +51,16 @@ test('per-download confirmation leaves the browser alone until approved',async()
   t.approve();
   await new Promise(resolve=>setTimeout(resolve,10));
   assert.deepEqual(t.calls,['notification','prepare','cancel','commit','erase']);
+});
+test('confirmation survives an extension service-worker restart without writing credentials to local storage',async()=>{
+  const sharedSession={};
+  const first=setup({config:{captureMode:'confirm'},sharedSession}); await first.run();
+  assert(!JSON.stringify(first.saved).includes('session=private'));
+  const restarted=setup({config:{captureMode:'confirm'},sharedSession});
+  restarted.approve();
+  await new Promise(resolve=>setTimeout(resolve,10));
+  assert.deepEqual(restarted.calls,['prepare','cancel','commit','erase']);
+  assert.deepEqual(sharedSession,{});
 });
 test('new installs default to NDM Next while updates retain the legacy backend',async()=>{
   const fresh=setup({capture:false,backendAbsent:true});await fresh.install('install');assert.equal(fresh.saved.backend,'next');

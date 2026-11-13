@@ -7,6 +7,8 @@
 
 NDM Next sends browser downloads to Neat Download Manager while keeping unwanted files out of your download list.
 
+This repository also includes a Rust Windows downloader and browser integration; see the [desktop build instructions](desktop/packaging/windows/README.md).
+
 - Filter downloads by file type, size, and domain.
 - Block the current site in one click.
 - Detect audio and video and send them to NDM.
