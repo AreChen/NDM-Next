@@ -53,7 +53,7 @@ impl DownloadProgress {
         }
     }
 
-    fn set_total(&self, total: Option<u64>) {
+    pub(crate) fn set_total(&self, total: Option<u64>) {
         if let Some(total) = total {
             self.0.total.store(total, Ordering::Relaxed);
             self.0.total_known.store(true, Ordering::Release);
@@ -62,7 +62,7 @@ impl DownloadProgress {
         }
     }
 
-    fn add(&self, bytes: u64) {
+    pub(crate) fn add(&self, bytes: u64) {
         self.0.downloaded.fetch_add(bytes, Ordering::Relaxed);
     }
 }
@@ -572,13 +572,20 @@ async fn write_response(
     Ok(total)
 }
 
-struct RateLimiter {
+pub(crate) struct RateLimiter {
     bytes_per_second: Option<u64>,
     next: Mutex<Instant>,
 }
 
 impl RateLimiter {
-    async fn wait(&self, bytes: usize, cancel: &CancellationToken) -> Result<()> {
+    pub(crate) fn new(bytes_per_second: Option<u64>) -> Self {
+        Self {
+            bytes_per_second: bytes_per_second.filter(|value| *value > 0),
+            next: Mutex::new(Instant::now()),
+        }
+    }
+
+    pub(crate) async fn wait(&self, bytes: usize, cancel: &CancellationToken) -> Result<()> {
         let Some(rate) = self.bytes_per_second else {
             return Ok(());
         };
@@ -595,7 +602,7 @@ impl RateLimiter {
     }
 }
 
-fn safe_filename(suggested: &str) -> String {
+pub(crate) fn safe_filename(suggested: &str) -> String {
     let name = Path::new(suggested)
         .file_name()
         .and_then(|s| s.to_str())
@@ -618,7 +625,7 @@ fn safe_filename(suggested: &str) -> String {
     }
 }
 
-async fn publish_no_overwrite(
+pub(crate) async fn publish_no_overwrite(
     source: &Path,
     destination: &Path,
     filename: &str,
