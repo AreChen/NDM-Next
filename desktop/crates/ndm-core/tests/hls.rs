@@ -30,7 +30,7 @@ struct Fixture {
 }
 
 async fn serve(State(fixture): State<Arc<Fixture>>, AxumPath(path): AxumPath<String>) -> Response {
-    if fixture.missing && path.ends_with("seg001.ts") {
+    if fixture.missing && (path.ends_with("seg001.ts") || path == "mpeg2/index1.ts") {
         return Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body(Body::empty())
@@ -41,6 +41,13 @@ async fn serve(State(fixture): State<Arc<Fixture>>, AxumPath(path): AxumPath<Str
 #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"English\",LANGUAGE=\"en\",DEFAULT=YES,AUTOSELECT=YES,URI=\"audio_en/index.m3u8\"\n\
 #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"Japanese\",LANGUAGE=\"ja\",DEFAULT=NO,AUTOSELECT=YES,URI=\"audio_ja/index.m3u8\"\n\
 #EXT-X-STREAM-INF:BANDWIDTH=100000,AUDIO=\"aud\"\nvideo/index.m3u8\n";
+        return Response::new(Body::from(master));
+    }
+    if path == "master-mpeg2.m3u8" {
+        let master = "#EXTM3U\n\
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"English\",LANGUAGE=\"en\",DEFAULT=YES,AUTOSELECT=YES,URI=\"audio_en/index.m3u8\"\n\
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"Japanese\",LANGUAGE=\"ja\",DEFAULT=NO,AUTOSELECT=YES,URI=\"audio_ja/index.m3u8\"\n\
+#EXT-X-STREAM-INF:BANDWIDTH=100000,AUDIO=\"aud\"\nmpeg2/index.m3u8\n";
         return Response::new(Body::from(master));
     }
     if path.split('/').any(|part| part == "..") {
@@ -117,6 +124,95 @@ async fn vod_ts_fmp4_and_aes_are_muxed_to_mp4() {
         assert_eq!(&output[4..8], b"ftyp");
         assert!(result.tracks >= tracks);
     }
+}
+
+#[tokio::test]
+#[ignore = "requires NDM_TEST_FFMPEG_DIR containing the audited media tools"]
+async fn unsupported_mpeg2_is_remuxed_by_local_media_tool() {
+    let base = server(false).await;
+    let tool = std::env::var_os("NDM_TEST_FFMPEG_DIR").expect("NDM_TEST_FFMPEG_DIR is required");
+    for fixture in ["mpeg2", "mpeg2-aes"] {
+        let dir = TempDir::new().unwrap();
+        let id = TaskId::new_v4();
+        let result = ndm_core::download_hls_with_media_tool(
+            &request(dir.path(), format!("{base}/{fixture}/index.m3u8")),
+            id,
+            &HlsOptions::default(),
+            CancellationToken::new(),
+            CancellationToken::new(),
+            Path::new(&tool),
+        )
+        .await
+        .unwrap();
+        let bytes = std::fs::read(&result.path).unwrap();
+        assert_eq!(&bytes[..4], &[0x1a, 0x45, 0xdf, 0xa3]);
+        assert_eq!(result.path.extension().unwrap(), "mkv");
+        assert_eq!(result.tracks, 2);
+        assert!(!dir.path().join(format!(".ndm-next-{id}")).exists());
+        save_for_external_verification(&result.path, &format!("{fixture}-fallback.mkv"));
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires NDM_TEST_FFMPEG_DIR containing the audited media tools"]
+async fn fallback_preserves_selected_external_audio_and_rejects_missing_media() {
+    let tool = std::env::var_os("NDM_TEST_FFMPEG_DIR").expect("NDM_TEST_FFMPEG_DIR is required");
+    let base = server(false).await;
+    let dir = TempDir::new().unwrap();
+    let options = HlsOptions {
+        audio_names: vec!["English".into(), "Japanese".into()],
+        ..Default::default()
+    };
+    let output = ndm_core::download_hls_with_media_tool(
+        &request(dir.path(), format!("{base}/master-mpeg2.m3u8")),
+        TaskId::new_v4(),
+        &options,
+        CancellationToken::new(),
+        CancellationToken::new(),
+        Path::new(&tool),
+    )
+    .await
+    .unwrap();
+    assert_eq!(output.tracks, 3);
+    let probe = Path::new(&tool).join(if cfg!(windows) {
+        "ffprobe.exe"
+    } else {
+        "ffprobe"
+    });
+    let metadata = std::process::Command::new(probe)
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "a",
+            "-show_entries",
+            "stream_tags=language",
+            "-of",
+            "json",
+        ])
+        .arg(&output.path)
+        .output()
+        .unwrap();
+    assert!(metadata.status.success());
+    let metadata: serde_json::Value = serde_json::from_slice(&metadata.stdout).unwrap();
+    assert_eq!(metadata["streams"][0]["tags"]["language"], "eng");
+    assert_eq!(metadata["streams"][1]["tags"]["language"], "jpn");
+    save_for_external_verification(&output.path, "mpeg2-multiaudio.mp4");
+
+    let missing = server(true).await;
+    let another = TempDir::new().unwrap();
+    let result = ndm_core::download_hls_with_media_tool(
+        &request(another.path(), format!("{missing}/mpeg2/index.m3u8")),
+        TaskId::new_v4(),
+        &HlsOptions::default(),
+        CancellationToken::new(),
+        CancellationToken::new(),
+        Path::new(&tool),
+    )
+    .await;
+    assert!(result.is_err());
+    assert!(!another.path().join("video.mp4").exists());
+    assert!(!another.path().join("video.mkv").exists());
 }
 
 #[tokio::test]

@@ -2,6 +2,7 @@ use crate::{
     apply_theme,
     preferences::{Language, Preferences, Theme},
     protocol_auth::{AuthFields, apply as apply_protocol_auth},
+    updates::{self, UpdateState},
 };
 use gpui_kit::{
     component::{
@@ -76,6 +77,7 @@ pub(crate) struct Desktop {
     speed: HashMap<TaskId, u64>,
     tracking: bool,
     notice: Option<String>,
+    update_state: UpdateState,
 }
 
 pub(crate) struct DesktopServices {
@@ -268,6 +270,11 @@ impl Desktop {
             speed: HashMap::new(),
             tracking: false,
             notice: None,
+            update_state: if updates::is_store_managed() {
+                UpdateState::StoreManaged
+            } else {
+                UpdateState::NotChecked
+            },
         };
         if this
             .tasks
@@ -275,6 +282,13 @@ impl Desktop {
             .any(|task| task.state == TaskState::Running)
         {
             this.track_progress(cx);
+        }
+        if this.update_state != UpdateState::StoreManaged {
+            cx.spawn(async move |view, cx| {
+                cx.background_executor().timer(Duration::from_secs(3)).await;
+                let _ = view.update(cx, |this, cx| this.check_for_update(cx));
+            })
+            .detach();
         }
         this
     }
@@ -289,6 +303,29 @@ impl Desktop {
         if let Ok(tasks) = self.store.list() {
             self.tasks = tasks;
         }
+    }
+    fn check_for_update(&mut self, cx: &mut Context<Self>) {
+        if matches!(
+            self.update_state,
+            UpdateState::Checking | UpdateState::StoreManaged
+        ) {
+            return;
+        }
+        self.update_state = UpdateState::Checking;
+        cx.notify();
+        let runtime = self.runtime.clone();
+        cx.spawn(async move |view, cx| {
+            let outcome = runtime.spawn(updates::check()).await;
+            let _ = view.update(cx, |this, cx| {
+                this.update_state = match outcome {
+                    Ok(Ok(Some(version))) => UpdateState::Available(version),
+                    Ok(Ok(None)) => UpdateState::Current,
+                    _ => UpdateState::Failed,
+                };
+                cx.notify();
+            });
+        })
+        .detach();
     }
     fn track_progress(&mut self, cx: &mut Context<Self>) {
         if self.tracking {
@@ -1176,6 +1213,30 @@ impl Render for Desktop {
                         .child(self.text("准备就绪", "Ready")),
                 ),
         );
+        if let UpdateState::Available(version) = &self.update_state {
+            let url = updates::release_url(version);
+            content = content.child(
+                div()
+                    .rounded_xl()
+                    .border_1()
+                    .border_color(rgb(border))
+                    .bg(rgb(side))
+                    .p_4()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .child(format!(
+                        "{} {version}",
+                        self.text("发现新版本", "Update available")
+                    ))
+                    .child(
+                        Button::new("open-update")
+                            .label(self.text("查看更新", "View release"))
+                            .on_click(cx.listener(move |_, _, _, cx| cx.open_url(&url))),
+                    ),
+            );
+        }
         if self.section == Section::Settings {
             content = content.overflow_y_scroll();
             let language = self.preferences.language;
@@ -1388,6 +1449,66 @@ impl Render for Desktop {
                         ),
                 );
             }
+            let update_description = match &self.update_state {
+                UpdateState::NotChecked => {
+                    self.text("尚未检查更新。", "Updates have not been checked.")
+                }
+                UpdateState::Checking => self.text("正在检查更新…", "Checking for updates…"),
+                UpdateState::Current => {
+                    self.text("没有发现新版本。", "No newer release was found.")
+                }
+                UpdateState::Available(_) => self.text(
+                    "新版本已发布，可在上方查看。",
+                    "A new release is available above.",
+                ),
+                UpdateState::Failed => self.text(
+                    "检查更新失败，请稍后重试。",
+                    "Could not check for updates; try again later.",
+                ),
+                UpdateState::StoreManaged => self.text(
+                    "此安装由 Microsoft Store 更新。",
+                    "Microsoft Store manages updates for this installation.",
+                ),
+            };
+            let mut update_card = div()
+                .rounded_xl()
+                .border_1()
+                .border_color(rgb(border))
+                .bg(rgb(side))
+                .p_6()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .child(
+                    div()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(self.text("关于与更新", "About and updates")),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(muted))
+                        .child(format!("NDM Next {}", env!("CARGO_PKG_VERSION"))),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(muted))
+                        .child(update_description),
+                );
+            if self.update_state != UpdateState::StoreManaged {
+                update_card = update_card
+                    .child(div().text_xs().text_color(rgb(muted)).child(self.text(
+                        "启动后会向 GitHub 检查桌面版更新。",
+                        "Checks GitHub for desktop updates after startup.",
+                    )))
+                    .child(
+                        Button::new("check-updates")
+                            .label(self.text("检查更新", "Check for updates"))
+                            .on_click(cx.listener(|this, _, _, cx| this.check_for_update(cx))),
+                    );
+            }
+            content = content.child(update_card);
         } else {
             content = content.child(
                 div()

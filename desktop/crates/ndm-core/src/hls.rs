@@ -1,7 +1,7 @@
 use std::{
     fmt,
     future::Future,
-    path::PathBuf,
+    path::{Path, PathBuf},
     pin::Pin,
     sync::Arc,
     time::{Duration, Instant},
@@ -9,8 +9,8 @@ use std::{
 
 use futures_util::{StreamExt, future::try_join_all};
 use hls_engine::{
-    ByteRange, EmbeddedAudio, EngineEndReason, EngineInput, EngineInputs, EngineMode,
-    EngineOptions, EngineSession, EngineWait, FileOutputOptions, OutputFormat, Source,
+    ByteRange, EmbeddedAudio, EngineCause, EngineEndReason, EngineError, EngineInput, EngineInputs,
+    EngineMode, EngineOptions, EngineSession, EngineWait, FileOutputOptions, OutputFormat, Source,
     SourceLocation, TextResource, TrackMetadata,
     crypto::key::{
         AvailableKey, KeyClock, KeyFuture, KeyProvider, KeyRequest, KeyResolution, KeySession,
@@ -37,6 +37,8 @@ use crate::{
 
 const MAX_PLAYLIST_BYTES: usize = 2 * 1024 * 1024;
 const MAX_RESOURCE_BYTES: usize = 32 * 1024 * 1024;
+
+mod fallback;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HlsOptions {
@@ -347,7 +349,8 @@ pub async fn execute_hls(
 ) -> Result<HlsOutcome> {
     let task = store.get(id)?.ok_or(Error::NotFound)?;
     store.start(id)?;
-    match download_hls_with_progress(&task.request, id, options, cancel, stop, progress).await {
+    match download_hls_with_progress(&task.request, id, options, cancel, stop, progress, None).await
+    {
         Ok(outcome) => {
             store.complete(id, &outcome.path, false)?;
             Ok(outcome)
@@ -377,8 +380,49 @@ pub async fn download_hls(
         cancel,
         stop,
         DownloadProgress::default(),
+        None,
     )
     .await
+}
+
+/// Download HLS using media tools from an explicitly supplied directory for codec fallback.
+/// The tools must be trusted, network-disabled builds of FFmpeg and FFprobe.
+pub async fn download_hls_with_media_tool(
+    request: &NewTask,
+    id: TaskId,
+    options: &HlsOptions,
+    cancel: CancellationToken,
+    stop: CancellationToken,
+    media_tool_dir: &Path,
+) -> Result<HlsOutcome> {
+    download_hls_with_progress(
+        request,
+        id,
+        options,
+        cancel,
+        stop,
+        DownloadProgress::default(),
+        Some(media_tool_dir),
+    )
+    .await
+}
+
+fn engine_failure(error: &EngineError, cancel: &CancellationToken) -> Error {
+    if cancel.is_cancelled() {
+        return Error::Cancelled;
+    }
+    let unsupported = match error.cause() {
+        Some(EngineCause::Sample(cause)) => {
+            cause.kind() == hls_engine::crypto::sample::SampleErrorKind::Unsupported
+        }
+        Some(EngineCause::Media(hls_engine::Error::Unsupported(_))) => true,
+        _ => false,
+    };
+    if unsupported {
+        Error::HlsCodecUnsupported
+    } else {
+        Error::Hls
+    }
 }
 
 async fn download_hls_with_progress(
@@ -388,6 +432,7 @@ async fn download_hls_with_progress(
     cancel: CancellationToken,
     stop: CancellationToken,
     progress: DownloadProgress,
+    media_tool_dir: Option<&Path>,
 ) -> Result<HlsOutcome> {
     let (source, url) = network_source(
         request,
@@ -515,7 +560,7 @@ async fn download_hls_with_progress(
     fs::create_dir_all(&work_dir).await?;
     let temporary = work_dir.join("hls-output.mp4");
     let producer = async {
-        let jobs = selected.into_iter().map(|(input_id, location)| {
+        let jobs = selected.clone().into_iter().map(|(input_id, location)| {
             let handle = handle.clone();
             let source = source.clone();
             let cancel = cancel.clone();
@@ -537,7 +582,7 @@ async fn download_hls_with_progress(
                         biased;
                         _ = cancel.cancelled() => { handle.cancel(); return Err(Error::Cancelled); }
                         _ = stop.cancelled() => { handle.stop(); return Ok(()); }
-                        accepted = handle.accept_when_ready(&input_id, &snapshot) => accepted.map_err(|_| Error::Hls)?,
+                        accepted = handle.accept_when_ready(&input_id, &snapshot) => accepted.map_err(|error| engine_failure(&error, &cancel))?,
                     };
                     if end { return Ok(()); }
                     revision = revision.checked_add(1).ok_or(Error::Hls)?;
@@ -559,15 +604,33 @@ async fn download_hls_with_progress(
                 FileOutputOptions::default().with_format(OutputFormat::FragmentedMp4),
             )
             .await
-            .map_err(|_| {
-                if cancel.is_cancelled() {
-                    Error::Cancelled
-                } else {
-                    Error::Hls
-                }
-            })
+            .map_err(|error| engine_failure(&error, &cancel))
     };
-    let (_, report) = tokio::try_join!(producer, consumer)?;
+    let report = match tokio::try_join!(producer, consumer) {
+        Ok((_, report)) => report,
+        Err(Error::HlsCodecUnsupported) => {
+            let installed_tools = std::env::current_exe()
+                .ok()
+                .and_then(|path| path.parent().map(|parent| parent.join("ffmpeg")));
+            let tools = media_tool_dir
+                .or(installed_tools.as_deref())
+                .ok_or(Error::Hls)?;
+            return fallback::remux(
+                request,
+                id,
+                source,
+                fallback::Selection {
+                    inputs: &selected,
+                    audio: &external_audio,
+                },
+                &work_dir,
+                tools,
+                stop,
+            )
+            .await;
+        }
+        Err(error) => return Err(error),
+    };
     if report.media().bytes_written() == 0 || report.tracks().is_empty() {
         return Err(Error::Hls);
     }

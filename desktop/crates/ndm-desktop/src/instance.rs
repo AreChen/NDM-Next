@@ -1,7 +1,6 @@
 #[cfg(windows)]
 mod platform {
     use std::{
-        hash::{DefaultHasher, Hash, Hasher},
         io,
         path::Path,
         ptr,
@@ -31,9 +30,7 @@ mod platform {
 
     impl Instance {
         pub fn acquire(data_dir: &Path, show: bool) -> io::Result<Option<Self>> {
-            let mut hasher = DefaultHasher::new();
-            data_dir.to_string_lossy().to_lowercase().hash(&mut hasher);
-            let name = format!("Global\\NDMNext-{:016x}", hasher.finish());
+            let name = ndm_core::desktop_instance_namespace(data_dir);
             // SAFETY: Both names are NUL-terminated, security attributes are
             // null (the current user's default DACL), and handles are closed below.
             unsafe {
@@ -142,6 +139,16 @@ mod platform {
     mod tests {
         use super::*;
         use std::{sync::mpsc, time::Duration};
+
+        #[test]
+        fn running_status_tracks_the_actual_instance() {
+            let dir = tempfile::tempdir().unwrap();
+            assert!(!ndm_core::desktop_is_running(dir.path()).unwrap());
+            let first = Instance::acquire(dir.path(), false).unwrap().unwrap();
+            assert!(ndm_core::desktop_is_running(dir.path()).unwrap());
+            drop(first);
+            assert!(!ndm_core::desktop_is_running(dir.path()).unwrap());
+        }
 
         #[test]
         fn second_instance_wakes_first_and_does_not_hold_singleton() {

@@ -51,3 +51,33 @@ fn host_process_exchanges_framed_messages_and_reopens_durable_storage() {
     drop(input);
     assert!(child.wait().unwrap().success());
 }
+
+#[cfg(windows)]
+#[test]
+fn process_status_detects_a_desktop_instance_for_the_same_profile() {
+    use windows_sys::Win32::{Foundation::CloseHandle, System::Threading::CreateMutexW};
+
+    let dir = tempfile::tempdir().unwrap();
+    let status = || {
+        Command::new(env!("CARGO_BIN_EXE_ndm-host"))
+            .arg("--desktop-running")
+            .env("LOCALAPPDATA", dir.path())
+            .status()
+            .unwrap()
+            .code()
+            .unwrap()
+    };
+    assert_eq!(status(), 0);
+    let name = format!(
+        "{}-mutex",
+        ndm_core::desktop_instance_namespace(&dir.path().join("NDM Next"))
+    );
+    let wide_name: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+    // SAFETY: The name is NUL-terminated, and the created handle is closed below.
+    let mutex = unsafe { CreateMutexW(std::ptr::null(), 0, wide_name.as_ptr()) };
+    assert!(!mutex.is_null());
+    assert_eq!(status(), 1);
+    // SAFETY: The handle was just created and is still open.
+    unsafe { CloseHandle(mutex) };
+    assert_eq!(status(), 0);
+}

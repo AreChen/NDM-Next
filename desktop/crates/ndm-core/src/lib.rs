@@ -1,6 +1,7 @@
 mod ftp;
 mod hls;
 mod http;
+mod instance;
 mod model;
 mod scheduler;
 mod secrets;
@@ -9,12 +10,15 @@ mod store;
 
 pub use ftp::{FtpOptions, FtpSecurity, download_ftp, execute_ftp};
 pub use hls::{
-    HlsAudio, HlsCatalog, HlsOptions, HlsOutcome, HlsVariant, download_hls, execute_hls,
-    inspect_hls, inspect_hls_with_options,
+    HlsAudio, HlsCatalog, HlsOptions, HlsOutcome, HlsVariant, download_hls,
+    download_hls_with_media_tool, execute_hls, inspect_hls, inspect_hls_with_options,
 };
 pub use http::{
     DownloadProgress, HttpOptions, ProgressSnapshot, ProxyOptions, download_http, execute_http,
 };
+pub use instance::desktop_instance_namespace;
+#[cfg(windows)]
+pub use instance::desktop_is_running;
 pub use model::{NewTask, Task, TaskId, TaskOptions, TaskState};
 pub use scheduler::{Scheduler, SchedulerEvent, SchedulerOptions};
 pub use sftp::{SftpAuth, SftpOptions, download_sftp, execute_sftp};
@@ -74,6 +78,8 @@ pub enum Error {
     InvalidSftpResponse,
     #[error("HLS playlist, media, or output is invalid or unsupported")]
     Hls,
+    #[error("HLS media codec is unsupported")]
+    HlsCodecUnsupported,
     #[error("download was paused or cancelled")]
     Cancelled,
 }

@@ -68,6 +68,21 @@ fn run() -> io::Result<()> {
 
 fn main() {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
+    #[cfg(windows)]
+    if arguments
+        .first()
+        .is_some_and(|arg| arg == "--desktop-running")
+    {
+        let data_dir = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join("NDM Next");
+        std::process::exit(match ndm_core::desktop_is_running(&data_dir) {
+            Ok(false) => 0,
+            Ok(true) => 1,
+            Err(_) => 2,
+        });
+    }
     if arguments
         .first()
         .is_some_and(|arg| arg == "--write-manifest")

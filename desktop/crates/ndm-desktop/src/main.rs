@@ -7,6 +7,7 @@ mod protocol_auth;
 mod startup;
 #[cfg(windows)]
 mod tray;
+mod updates;
 mod view;
 
 use gpui_kit::{
