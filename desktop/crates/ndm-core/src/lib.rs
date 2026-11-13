@@ -1,4 +1,5 @@
 mod ftp;
+mod hls;
 mod http;
 mod model;
 mod secrets;
@@ -6,6 +7,10 @@ mod sftp;
 mod store;
 
 pub use ftp::{FtpOptions, FtpSecurity, download_ftp, execute_ftp};
+pub use hls::{
+    HlsAudio, HlsCatalog, HlsOptions, HlsOutcome, HlsVariant, download_hls, execute_hls,
+    inspect_hls,
+};
 pub use http::{DownloadProgress, HttpOptions, ProgressSnapshot, download_http, execute_http};
 pub use model::{NewTask, Task, TaskId, TaskState};
 pub use sftp::{SftpAuth, SftpOptions, download_sftp, execute_sftp};
@@ -59,6 +64,8 @@ pub enum Error {
     SftpTransfer,
     #[error("SFTP server returned an inconsistent file")]
     InvalidSftpResponse,
+    #[error("HLS playlist, media, or output is invalid or unsupported")]
+    Hls,
     #[error("download was paused or cancelled")]
     Cancelled,
 }

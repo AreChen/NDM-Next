@@ -309,7 +309,7 @@ async fn download_full(
     Ok(())
 }
 
-fn request_headers(request: &NewTask) -> Result<HeaderMap> {
+pub(crate) fn request_headers(request: &NewTask) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     let mut referer = request.source_url.as_deref();
     for (key, value) in &request.headers {
@@ -358,7 +358,7 @@ fn request_headers(request: &NewTask) -> Result<HeaderMap> {
     Ok(headers)
 }
 
-async fn send(
+pub(crate) async fn send(
     client: &Client,
     builder: reqwest::RequestBuilder,
     cancel: &CancellationToken,
@@ -447,7 +447,7 @@ fn strong_etag(headers: &HeaderMap) -> Option<String> {
     (etag.starts_with('"') && etag.ends_with('"') && etag.len() >= 2).then(|| etag.to_owned())
 }
 
-fn parse_content_range(value: &str) -> Option<(u64, u64, u64)> {
+pub(crate) fn parse_content_range(value: &str) -> Option<(u64, u64, u64)> {
     let (range, total) = value.strip_prefix("bytes ")?.split_once('/')?;
     let (start, end) = range.split_once('-')?;
     let (start, end, total) = (start.parse().ok()?, end.parse().ok()?, total.parse().ok()?);
