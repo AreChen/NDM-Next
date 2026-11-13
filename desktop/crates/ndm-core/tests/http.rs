@@ -261,6 +261,105 @@ async fn malformed_range_never_corrupts_output() {
 }
 
 #[tokio::test]
+async fn oversized_chunked_range_is_rejected_without_filling_disk() {
+    use futures_util::StreamExt;
+
+    let dir = TempDir::new().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app =
+        Router::new().route(
+            "/file",
+            get(|headers: HeaderMap| async move {
+                let range = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
+                if range == Some("bytes=0-0") {
+                    return Response::builder()
+                        .status(StatusCode::PARTIAL_CONTENT)
+                        .header(header::CONTENT_RANGE, "bytes 0-0/1024")
+                        .header(header::ETAG, "\"version-1\"")
+                        .body(Body::from("x"))
+                        .unwrap();
+                }
+                if range == Some("bytes=0-1023") {
+                    let stream = futures_util::stream::iter([Ok::<_, std::io::Error>(
+                        Bytes::from(vec![b'x'; 4096]),
+                    )])
+                    .chain(futures_util::stream::pending());
+                    return Response::builder()
+                        .status(StatusCode::PARTIAL_CONTENT)
+                        .header(header::CONTENT_RANGE, "bytes 0-1023/1024")
+                        .header(header::ETAG, "\"version-1\"")
+                        .body(Body::from_stream(stream))
+                        .unwrap();
+                }
+                Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Body::empty())
+                    .unwrap()
+            }),
+        );
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let id = TaskId::new_v4();
+    let options = HttpOptions {
+        max_connections: 1,
+        ..Default::default()
+    };
+    let result = tokio::time::timeout(
+        Duration::from_secs(3),
+        download_http(
+            &request(dir.path(), format!("http://{address}/file")),
+            id,
+            &options,
+            CancellationToken::new(),
+        ),
+    )
+    .await
+    .expect("an oversized stream must be rejected without waiting for EOF");
+    assert!(result.is_err());
+    let segment = dir.path().join(format!(".ndm-next-{id}/segment-0.part"));
+    assert!(std::fs::metadata(segment).unwrap().len() <= 1024);
+    assert!(!dir.path().join("file.bin").exists());
+}
+
+#[tokio::test]
+async fn oversized_chunked_full_response_respects_known_expected_size() {
+    use futures_util::StreamExt;
+
+    let dir = TempDir::new().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = Router::new().route(
+        "/file",
+        get(|| async move {
+            let stream =
+                futures_util::stream::iter([Ok::<_, std::io::Error>(Bytes::from(vec![
+                    b'x';
+                    4096
+                ]))])
+                .chain(futures_util::stream::pending());
+            Response::builder()
+                .status(StatusCode::OK)
+                .body(Body::from_stream(stream))
+                .unwrap()
+        }),
+    );
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let id = TaskId::new_v4();
+    let mut req = request(dir.path(), format!("http://{address}/file"));
+    req.expected_size = Some(1024);
+    let result = tokio::time::timeout(
+        Duration::from_secs(3),
+        download_http(&req, id, &HttpOptions::default(), CancellationToken::new()),
+    )
+    .await
+    .expect("an oversized stream must be rejected without waiting for EOF");
+    assert!(result.is_err());
+    let partial = dir.path().join(format!(".ndm-next-{id}/assembled.part"));
+    assert!(std::fs::metadata(partial).unwrap().len() <= 1024);
+    assert!(!dir.path().join("file.bin").exists());
+}
+
+#[tokio::test]
 async fn changed_validator_discards_old_partial_content() {
     let dir = TempDir::new().unwrap();
     let (server, url) = fixture(Mode::Ranges, data(4), true).await;

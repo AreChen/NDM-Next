@@ -299,7 +299,15 @@ async fn download_http_with_progress(
                 progress.0.downloaded.store(0, Ordering::Relaxed);
                 let response =
                     send(&client, client.get(&request.url).headers(headers), &cancel).await?;
-                download_full(response, &assembled, &limiter, &cancel, &progress).await?;
+                download_full(
+                    response,
+                    &assembled,
+                    &limiter,
+                    &cancel,
+                    &progress,
+                    request.expected_size,
+                )
+                .await?;
             }
             Some(error) => return Err(error),
             None => {
@@ -328,7 +336,15 @@ async fn download_http_with_progress(
         } else {
             return Err(Error::HttpStatus(probe.status().as_u16()));
         };
-        download_full(response, &assembled, &limiter, &cancel, &progress).await?;
+        download_full(
+            response,
+            &assembled,
+            &limiter,
+            &cancel,
+            &progress,
+            request.expected_size,
+        )
+        .await?;
     }
     if cancel.is_cancelled() {
         return Err(Error::Cancelled);
@@ -361,14 +377,20 @@ async fn download_full(
     limiter: &RateLimiter,
     cancel: &CancellationToken,
     progress: &DownloadProgress,
+    expected_size: Option<u64>,
 ) -> Result<()> {
     if response.status() != StatusCode::OK {
         return Err(Error::HttpStatus(response.status().as_u16()));
     }
     let expected = response.content_length();
+    let maximum = match (expected, expected_size) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (Some(a), None) | (None, Some(a)) => Some(a),
+        (None, None) => None,
+    };
     progress.set_total(expected);
     let mut file = fs::File::create(assembled).await?;
-    let result = write_response(response, &mut file, limiter, cancel, progress).await;
+    let result = write_response(response, &mut file, limiter, cancel, progress, maximum).await;
     file.flush().await?;
     let written = result?;
     if expected.is_some_and(|expected| expected != written) {
@@ -585,7 +607,15 @@ async fn fetch_segment(
         {
             return Err(Error::InvalidHttpResponse);
         }
-        let result = write_response(response, &mut file, &limiter, &cancel, &progress).await;
+        let result = write_response(
+            response,
+            &mut file,
+            &limiter,
+            &cancel,
+            &progress,
+            Some(length - present),
+        )
+        .await;
         file.flush().await?;
         match result {
             Ok(written) if written == length - present => {
@@ -617,6 +647,7 @@ async fn write_response(
     limiter: &RateLimiter,
     cancel: &CancellationToken,
     progress: &DownloadProgress,
+    maximum: Option<u64>,
 ) -> Result<u64> {
     let mut body = response.bytes_stream();
     let mut total = 0u64;
@@ -631,12 +662,16 @@ async fn write_response(
         };
         let Some(chunk) = chunk else { break };
         let chunk = chunk.map_err(network)?;
+        let next = total
+            .checked_add(chunk.len() as u64)
+            .ok_or(Error::InvalidHttpResponse)?;
+        if maximum.is_some_and(|maximum| next > maximum) {
+            return Err(Error::InvalidHttpResponse);
+        }
         limiter.wait(chunk.len(), cancel).await?;
         file.write_all(&chunk).await?;
         progress.add(chunk.len() as u64);
-        total = total
-            .checked_add(chunk.len() as u64)
-            .ok_or(Error::InvalidHttpResponse)?;
+        total = next;
     }
     Ok(total)
 }
