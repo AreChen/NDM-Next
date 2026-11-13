@@ -11,7 +11,7 @@ let expiryTimer;
 async function settings() { return { ...DEFAULTS, ...(await chrome.storage.local.get(DEFAULTS)) }; }
 function setCaptureEnabled(config) {
   captureEnabled = config.backend === 'next' && config.enabled;
-  if (!captureEnabled) requests.clear();
+  if (!captureEnabled) { requests.clear(); mediaByTab.clear(); }
 }
 settings().then(setCaptureEnabled).catch(() => {});
 chrome.storage.onChanged?.addListener((changes,area) => {
@@ -55,13 +55,14 @@ function reliablePage(value) {
   } catch { return null; }
 }
 
-function browserTask(item, download) {
-  const capture = findCapture([...requests.values()],item.url);
+function browserTask(item, download, mediaCapture) {
+  const capture = mediaCapture || findCapture([...requests.values()],item.url);
   if (!capture) return null;
   const filename = typeof download?.filename === 'string' ? download.filename.split(/[\\/]/).pop() : undefined;
   return {
     url:item.url, source_url:reliablePage(item.pageUrl), suggested_filename:filename || null,
-    expected_size:Number.isSafeInteger(item.size) && item.size >= 0 ? item.size : null,
+    expected_size:!isHls(item) && Number.isSafeInteger(item.size) && item.size >= 0 ? item.size : null,
+    media_type:item.type || null,
     headers:capture.headers,
   };
 }
@@ -145,6 +146,8 @@ chrome.downloads.onCreated.addListener(async download => {
 
 chrome.webRequest.onHeadersReceived.addListener(async details => {
   if (details.tabId < 0 || details.method !== 'GET') return;
+  const captured = requests.get(details.requestId);
+  const capture = captured?.url === details.url && captured?.tabId === details.tabId && captured?.headers ? captured : null;
   try {
     const headers = Object.fromEntries((details.responseHeaders || []).map(h => [h.name.toLowerCase(), h.value || '']));
     const type = (headers['content-type'] || '').split(';')[0].toLowerCase();
@@ -152,8 +155,10 @@ chrome.webRequest.onHeadersReceived.addListener(async details => {
     const config = await settings(); if (!config.media) return;
     const tab = await chrome.tabs.get(details.tabId); const size = Number(headers['content-length']);
     const item = {url:details.url,pageUrl:tab.url,size:headers['content-length'] && Number.isFinite(size) ? size : undefined,type};
+    if (isHls(item)) item.size = undefined; // This is the playlist's size, not the media size.
     if (shouldSkip(item,config) || ((config.blockedDomains || []).length && !reliablePage(item.pageUrl))) return;
-    const entries = mediaByTab.get(details.tabId) || []; if (!entries.some(e => e.url === item.url)) entries.unshift(item);
+    const entries = (mediaByTab.get(details.tabId) || []).filter(entry => entry.item.url !== item.url);
+    entries.unshift({item,capture});
     mediaByTab.set(details.tabId,entries.slice(0,50));
   } catch {}
 }, {urls:['http://*/*','https://*/*']}, ['responseHeaders']);
@@ -163,11 +168,13 @@ chrome.runtime.onMessage.addListener((message,sender,reply) => {
   (async () => {
     const config = await settings();
     if (message.action === 'status') return {connected:await status(config)};
-    if (message.action === 'media') return {items:mediaByTab.get(message.tabId) || []};
+    if (message.action === 'media') return {items:(mediaByTab.get(message.tabId) || []).map(entry => entry.item)};
     if (message.action === 'send') {
-      if (shouldSkip(message.item,config) || ((config.blockedDomains || []).length && !reliablePage(message.item.pageUrl))) return {ok:false};
-      if (config.backend !== 'next') return {ok:await sendLegacy(message.item)};
-      const task = browserTask(message.item);
+      const entry = (mediaByTab.get(message.tabId) || []).find(entry => entry.item.url === message.item?.url);
+      if (!entry || shouldSkip(entry.item,config) || ((config.blockedDomains || []).length && !reliablePage(entry.item.pageUrl))) return {ok:false};
+      if (config.backend !== 'next') return {ok:await sendLegacy(entry.item)};
+      if (!entry.capture || Date.now()-entry.capture.when > 1800000) return {ok:false};
+      const task = browserTask(entry.item,undefined,entry.capture);
       return {ok:!!task && await handoff.send(task)};
     }
     return {};

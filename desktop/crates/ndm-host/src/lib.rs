@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use ndm_core::{NewTask, Store, TaskId, TaskState};
+use ndm_core::{HlsOptions, NewTask, Store, TaskId, TaskOptions, TaskState};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -100,11 +100,13 @@ struct BrowserTask {
     suggested_filename: Option<String>,
     expected_size: Option<u64>,
     #[serde(default)]
+    media_type: Option<String>,
+    #[serde(default)]
     headers: BTreeMap<String, String>,
 }
 
 impl BrowserTask {
-    fn validate(self, destination: PathBuf) -> Option<NewTask> {
+    fn validate(self, destination: PathBuf) -> Option<(NewTask, TaskOptions)> {
         fn web_url(value: &str) -> bool {
             reqwest::Url::parse(value).is_ok_and(|url| {
                 matches!(url.scheme(), "http" | "https")
@@ -123,6 +125,10 @@ impl BrowserTask {
                 .suggested_filename
                 .as_ref()
                 .is_some_and(|name| name.len() > 1024 || name.chars().any(char::is_control))
+            || self
+                .media_type
+                .as_ref()
+                .is_some_and(|mime| mime.len() > 256 || mime.chars().any(char::is_control))
         {
             return None;
         }
@@ -147,14 +153,36 @@ impl BrowserTask {
                 return None;
             }
         }
-        Some(NewTask {
-            url: self.url,
-            destination,
-            suggested_filename: self.suggested_filename,
-            source_url: self.source_url,
-            expected_size: self.expected_size,
-            headers,
-        })
+        let is_hls = self.media_type.as_deref().is_some_and(|mime| {
+            matches!(
+                mime.split(';')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_ascii_lowercase()
+                    .as_str(),
+                "application/vnd.apple.mpegurl"
+                    | "application/x-mpegurl"
+                    | "audio/mpegurl"
+                    | "audio/x-mpegurl"
+            )
+        });
+        let options = if is_hls {
+            TaskOptions::Hls(HlsOptions::default())
+        } else {
+            TaskOptions::Auto
+        };
+        Some((
+            NewTask {
+                url: self.url,
+                destination,
+                suggested_filename: self.suggested_filename,
+                source_url: self.source_url,
+                expected_size: if is_hls { None } else { self.expected_size },
+                headers,
+            },
+            options,
+        ))
     }
 }
 
@@ -187,10 +215,10 @@ impl Host {
         match command {
             Command::Status => json!({"ok":true,"protocol":1}),
             Command::Prepare { id, task } => {
-                let Some(task) = task.validate(self.destination.clone()) else {
+                let Some((task, options)) = task.validate(self.destination.clone()) else {
                     return json!({"ok":false,"error":"invalid_request"});
                 };
-                match self.store.prepare(id, &task) {
+                match self.store.prepare_with_options(id, &task, &options) {
                     Ok(task) => json!({"ok":true,"state":state_name(task.state)}),
                     Err(_) => json!({"ok":false,"error":"prepare_failed"}),
                 }
