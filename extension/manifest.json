@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "NDM Next",
+  "version": "0.1.0",
+  "description": "A thoughtful browser companion for Neat Download Manager.",
+  "permissions": ["downloads", "storage", "tabs", "webRequest", "cookies"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "background": {"service_worker": "background.js"},
+  "action": {"default_popup": "popup.html", "default_title": "NDM Next"}
+}
