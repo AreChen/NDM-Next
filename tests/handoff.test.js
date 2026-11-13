@@ -27,7 +27,7 @@ function setup({ prepare = {ok:true,state:'prepared'}, commit = {ok:true,state:'
 
 test('persists and acknowledges before cancelling, then commits before erasing', async () => {
   const t=setup();
-  assert.equal(await t.service.transfer(5,t.task,'immediate'),true);
+  assert.equal(await t.service.transfer(5,t.task),true);
   assert.deepEqual(t.calls,['prepare','cancel','commit','erase']);
   assert.deepEqual(t.records,{});
 });

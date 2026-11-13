@@ -1,7 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { shouldSkip, domainMatches, normalizeDomain, encodeTask } = require('../extension/rules.js');
+const { DEFAULTS, shouldSkip, domainMatches, normalizeDomain, encodeTask } = require('../extension/rules.js');
 const defaults = { enabled: true, minBytes: 1048576, excludedExtensions: ['data','woff','woff2'], blockedDomains: ['example.com'] };
+test('new installations prefer immediate takeover', () => { assert.equal(DEFAULTS.transferPolicy, 'immediate'); });
 test('domains match boundary and subdomains', () => { assert.equal(domainMatches('a.example.com','example.com'), true); assert.equal(domainMatches('notexample.com','example.com'), false); assert.equal(normalizeDomain('https://Example.com/path'), 'example.com'); });
 test('skip page or destination domain, types, and known small files', () => { for (const item of [{url:'https://example.com/file.zip'}, {url:'https://other.org/f.zip',pageUrl:'https://a.example.com/'},{url:'https://other.org/a.data?x=1'},{url:'https://other.org/a.zip',size:100}]) assert.equal(shouldSkip(item, defaults), true); });
 test('unknown size and threshold boundary are eligible', () => { assert.equal(shouldSkip({url:'https://other.org/a.zip'}, defaults), false); assert.equal(shouldSkip({url:'https://other.org/a.zip',size:1048576}, defaults), false); });
