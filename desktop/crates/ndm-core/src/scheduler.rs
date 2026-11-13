@@ -1,5 +1,7 @@
 use std::{
     collections::HashMap,
+    io,
+    path::Path,
     sync::{
         Arc, Mutex, RwLock,
         atomic::{AtomicBool, Ordering},
@@ -120,6 +122,27 @@ impl Scheduler {
             .map(|active| active.progress.snapshot())
     }
 
+    /// Remove a task only after its worker has stopped. Completed files are kept.
+    pub fn delete(&self, id: TaskId, remove_partial: bool) -> Result<()> {
+        // The dispatcher inserts workers under the same lock. Holding it until
+        // the record is removed prevents a queued task from starting mid-delete.
+        let active = self.0.active.lock().unwrap();
+        if active.contains_key(&id) {
+            return Err(Error::InvalidState);
+        }
+        let task = self.0.store.get(id)?.ok_or(Error::NotFound)?;
+        if !matches!(
+            task.state,
+            TaskState::Queued | TaskState::Paused | TaskState::Failed | TaskState::Completed
+        ) {
+            return Err(Error::InvalidState);
+        }
+        if remove_partial && task.state != TaskState::Completed {
+            remove_owned_partial_files(&task.request.destination, id)?;
+        }
+        self.0.store.delete(id)
+    }
+
     pub async fn pause(&self, id: TaskId) -> Result<()> {
         let active = self.0.active.lock().unwrap().get(&id).cloned();
         if let Some(mut active) = active {
@@ -177,6 +200,57 @@ impl Scheduler {
             }
         }
     }
+}
+
+fn is_reparse_point(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        metadata.file_type().is_symlink()
+    }
+}
+
+fn remove_owned_partial_files(destination: &Path, id: TaskId) -> Result<()> {
+    let directory = destination.join(format!(".ndm-next-{id}"));
+    let metadata = match std::fs::symlink_metadata(&directory) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.is_dir() || is_reparse_point(&metadata) {
+        return Err(io::Error::other("temporary directory is not a regular directory").into());
+    }
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(&directory)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let known = matches!(
+            name.as_ref(),
+            "resume.bin" | "assembled.part" | "ftp.part" | "sftp.part" | "hls-output.mp4"
+        ) || name
+            .strip_prefix("segment-")
+            .and_then(|name| name.strip_suffix(".part"))
+            .and_then(|index| index.parse::<usize>().ok())
+            .is_some_and(|index| index < 16 && name == format!("segment-{index}.part"));
+        let metadata = std::fs::symlink_metadata(entry.path())?;
+        if !known || !metadata.is_file() || is_reparse_point(&metadata) {
+            return Err(
+                io::Error::other("temporary directory contains an unexpected entry").into(),
+            );
+        }
+        files.push(entry.path());
+    }
+    for file in files {
+        std::fs::remove_file(file)?;
+    }
+    std::fs::remove_dir(directory)?;
+    Ok(())
 }
 
 async fn dispatch(inner: Arc<Inner>) {
@@ -276,6 +350,7 @@ async fn run_one(inner: Arc<Inner>, task: Task, active: Active, done: watch::Sen
 async fn execute_one(inner: &Arc<Inner>, task: &Task, active: &Active) -> Result<()> {
     let defaults = inner.options.read().unwrap().clone();
     let options = match task.options.clone() {
+        TaskOptions::AutoHttp => TaskOptions::Http(defaults.http.clone()),
         TaskOptions::Auto => {
             match reqwest::Url::parse(&task.request.url).ok().map(|url| {
                 let scheme = url.scheme().to_owned();
@@ -327,7 +402,7 @@ async fn execute_one(inner: &Arc<Inner>, task: &Task, active: &Active) -> Result
         other => other,
     };
     match options {
-        TaskOptions::Auto => match inner.store.start(task.id) {
+        TaskOptions::Auto | TaskOptions::AutoHttp => match inner.store.start(task.id) {
             Ok(()) => {
                 let _ = inner.store.fail(task.id, "unsupported URL protocol");
                 Err(Error::InvalidState)

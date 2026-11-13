@@ -61,6 +61,7 @@ pub(crate) struct Desktop {
     pending_host_keys: HashMap<TaskId, PendingHostKey>,
     confirming_host_key: Option<TaskId>,
     editing_url: Option<TaskId>,
+    deleting_task: Option<TaskId>,
     hls_catalog: Option<(String, HlsCatalog)>,
     hls_variant: Option<usize>,
     hls_audio: Vec<String>,
@@ -252,6 +253,7 @@ impl Desktop {
             pending_host_keys: HashMap::new(),
             confirming_host_key: None,
             editing_url: None,
+            deleting_task: None,
             hls_catalog: None,
             hls_variant: None,
             hls_audio: Vec::new(),
@@ -689,24 +691,26 @@ impl Desktop {
         }
         cx.notify();
     }
-    fn delete_record(&mut self, id: TaskId, cx: &mut Context<Self>) {
-        match self.store.delete(id) {
+    fn delete_record(&mut self, id: TaskId, remove_partial: bool, cx: &mut Context<Self>) {
+        match self.scheduler.delete(id, remove_partial) {
             Ok(()) => {
                 self.pending_host_keys.remove(&id);
+                self.deleting_task = None;
                 if self.editing_url == Some(id) {
                     self.editing_url = None;
                 }
                 self.reload();
-                self.notice = Some(
-                    self.text(
-                        "记录已移除，文件已保留。",
-                        "Record removed; files were kept.",
-                    )
-                    .into(),
-                );
+                self.notice = Some(if remove_partial {
+                    self.text("记录和临时文件已移除。", "Record and temporary files removed.")
+                } else {
+                    self.text("记录已移除，文件已保留。", "Record removed; files were kept.")
+                }.into());
             }
             Err(_) => {
-                self.notice = Some(self.text("请先暂停任务。", "Pause the task first.").into())
+                self.notice = Some(self.text(
+                    "无法移除任务，请先暂停并检查临时目录和文件权限。",
+                    "Could not remove the task. Pause it and check the temporary folder and file permissions.",
+                ).into())
             }
         }
         cx.notify();
@@ -952,8 +956,9 @@ impl Desktop {
         let id = task.id;
         let state = task.state;
         let is_hls = matches!(&task.options, TaskOptions::Hls(_))
-            || reqwest::Url::parse(&task.request.url)
-                .is_ok_and(|url| url.path().to_ascii_lowercase().ends_with(".m3u8"));
+            || (matches!(&task.options, TaskOptions::Auto)
+                && reqwest::Url::parse(&task.request.url)
+                    .is_ok_and(|url| url.path().to_ascii_lowercase().ends_with(".m3u8")));
         let can_edit_url = matches!(state, TaskState::Paused | TaskState::Failed)
             && !matches!(&task.options, TaskOptions::Ftp(_) | TaskOptions::Sftp(_))
             && reqwest::Url::parse(&task.request.url)
@@ -1081,9 +1086,14 @@ impl Desktop {
                     row.child(
                         Button::new(SharedString::from(format!("delete-{id}")))
                             .label(self.text("移除", "Remove"))
-                            .on_click(
-                                cx.listener(move |this, _, _, cx| this.delete_record(id, cx)),
-                            ),
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if state == TaskState::Completed {
+                                    this.delete_record(id, false, cx);
+                                } else {
+                                    this.deleting_task = Some(id);
+                                    cx.notify();
+                                }
+                            })),
                     )
                 },
             )
@@ -1493,6 +1503,65 @@ impl Render for Desktop {
                                     this.replacement_input.update(cx, |input, cx| input.set_value("", window, cx));
                                     cx.notify();
                                 })))),
+                );
+            }
+            if let Some(id) = self.deleting_task {
+                let name = self
+                    .tasks
+                    .iter()
+                    .find(|task| task.id == id)
+                    .and_then(|task| task.request.suggested_filename.clone())
+                    .unwrap_or_else(|| self.text("未命名下载", "Untitled download").into());
+                content = content.child(
+                    div()
+                        .rounded_xl()
+                        .border_1()
+                        .border_color(rgb(border))
+                        .bg(rgb(side))
+                        .p_4()
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .child(
+                            div()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(self.text("移除下载任务", "Remove download")),
+                        )
+                        .child(div().text_xs().text_color(rgb(muted)).child(format!(
+                            "{} {name}",
+                            self.text(
+                                "是否同时删除此任务的临时文件？",
+                                "Also delete temporary files for:"
+                            )
+                        )))
+                        .child(
+                            div()
+                                .flex()
+                                .gap_3()
+                                .items_center()
+                                .child(
+                                    Button::new("remove-keep-partial")
+                                        .label(self.text("保留临时文件", "Keep temporary files"))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.delete_record(id, false, cx)
+                                        })),
+                                )
+                                .child(
+                                    Button::new("remove-delete-partial")
+                                        .label(self.text("删除临时文件", "Delete temporary files"))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.delete_record(id, true, cx)
+                                        })),
+                                )
+                                .child(
+                                    Button::new("cancel-remove")
+                                        .label(self.text("取消", "Cancel"))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.deleting_task = None;
+                                            cx.notify();
+                                        })),
+                                ),
+                        ),
                 );
             }
             let mut list = div()

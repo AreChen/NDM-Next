@@ -158,6 +158,75 @@ async fn pausing_a_running_task_remains_paused_until_resumed() {
 }
 
 #[tokio::test]
+async fn removing_a_paused_task_can_keep_or_remove_only_its_temporary_files() {
+    let dir = TempDir::new().unwrap();
+    let store = Arc::new(Store::open(&dir.path().join("tasks.db")).unwrap());
+    let mut tasks = Vec::new();
+    for remove_partial in [false, true] {
+        let id = TaskId::new_v4();
+        store
+            .prepare(id, &request(dir.path(), "https://example.test/file"))
+            .unwrap();
+        store.commit(id).unwrap();
+        store.pause(id).unwrap();
+        let work_dir = dir.path().join(format!(".ndm-next-{id}"));
+        std::fs::create_dir(&work_dir).unwrap();
+        std::fs::write(work_dir.join("segment-0.part"), b"partial").unwrap();
+        let completed_file = dir.path().join(format!("completed-{id}.bin"));
+        std::fs::write(&completed_file, b"keep me").unwrap();
+        tasks.push((id, remove_partial, work_dir, completed_file));
+    }
+    let scheduler = Scheduler::start(store.clone(), SchedulerOptions::default()).unwrap();
+    for (id, remove_partial, work_dir, completed_file) in tasks {
+        scheduler.delete(id, remove_partial).unwrap();
+        assert!(store.get(id).unwrap().is_none());
+        assert_eq!(work_dir.exists(), !remove_partial);
+        assert_eq!(std::fs::read(completed_file).unwrap(), b"keep me");
+    }
+    scheduler.shutdown().await;
+}
+
+#[tokio::test]
+async fn temporary_cleanup_refuses_unexpected_files_and_retains_the_record() {
+    let dir = TempDir::new().unwrap();
+    let store = Arc::new(Store::open(&dir.path().join("tasks.db")).unwrap());
+    let id = TaskId::new_v4();
+    store
+        .prepare(id, &request(dir.path(), "https://example.test/file"))
+        .unwrap();
+    store.commit(id).unwrap();
+    store.pause(id).unwrap();
+    let work_dir = dir.path().join(format!(".ndm-next-{id}"));
+    std::fs::create_dir(&work_dir).unwrap();
+    std::fs::write(work_dir.join("important.txt"), b"keep me").unwrap();
+    let scheduler = Scheduler::start(store.clone(), SchedulerOptions::default()).unwrap();
+    assert!(scheduler.delete(id, true).is_err());
+    assert!(store.get(id).unwrap().is_some());
+    assert_eq!(
+        std::fs::read(work_dir.join("important.txt")).unwrap(),
+        b"keep me"
+    );
+    scheduler.shutdown().await;
+}
+
+#[tokio::test]
+async fn removing_an_active_task_waits_for_the_worker_to_stop() {
+    let dir = TempDir::new().unwrap();
+    let store = Arc::new(Store::open(&dir.path().join("tasks.db")).unwrap());
+    let (url, _) = server().await;
+    let id = TaskId::new_v4();
+    store.prepare(id, &request(dir.path(), &url)).unwrap();
+    store.commit(id).unwrap();
+    let scheduler = Scheduler::start(store.clone(), SchedulerOptions::default()).unwrap();
+    wait_for(&store, id, TaskState::Running).await;
+    assert!(scheduler.delete(id, true).is_err());
+    scheduler.pause(id).await.unwrap();
+    scheduler.delete(id, true).unwrap();
+    assert!(store.get(id).unwrap().is_none());
+    scheduler.shutdown().await;
+}
+
+#[tokio::test]
 async fn already_paused_tasks_do_not_restart_on_startup() {
     let dir = TempDir::new().unwrap();
     let store = Arc::new(Store::open(&dir.path().join("tasks.db")).unwrap());

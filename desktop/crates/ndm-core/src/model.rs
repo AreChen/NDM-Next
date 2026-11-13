@@ -10,6 +10,8 @@ pub type TaskId = uuid::Uuid;
 pub enum TaskOptions {
     #[default]
     Auto,
+    /// HTTP with the current application defaults, independent of the URL suffix.
+    AutoHttp,
     Http(HttpOptions),
     Ftp(FtpOptions),
     Sftp(SftpOptions),

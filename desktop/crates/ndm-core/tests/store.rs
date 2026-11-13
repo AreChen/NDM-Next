@@ -74,6 +74,35 @@ fn replacing_expired_link_is_limited_to_paused_web_tasks_and_is_secret_safe() {
 }
 
 #[test]
+fn replacing_auto_detected_links_preserves_download_kind() {
+    let dir = TempDir::new().unwrap();
+    let store = Store::open(&dir.path().join("tasks.db")).unwrap();
+    for (original, replacement, is_hls) in [
+        (
+            "https://example.test/live.m3u8",
+            "https://cdn.test/renewed?id=1",
+            true,
+        ),
+        (
+            "https://example.test/file.zip",
+            "https://cdn.test/file.m3u8",
+            false,
+        ),
+    ] {
+        let id = TaskId::new_v4();
+        let mut request = new_task(dir.path());
+        request.url = original.into();
+        store.prepare(id, &request).unwrap();
+        store.commit(id).unwrap();
+        store.pause(id).unwrap();
+        store.update_web_url(id, replacement).unwrap();
+        let task = store.get(id).unwrap().unwrap();
+        assert!(!matches!(task.options, TaskOptions::Auto));
+        assert_eq!(matches!(task.options, TaskOptions::Hls(_)), is_hls);
+    }
+}
+
+#[test]
 fn prepare_and_commit_are_durable_and_idempotent() {
     let dir = TempDir::new().unwrap();
     let database = dir.path().join("tasks.db");

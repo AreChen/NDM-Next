@@ -5,7 +5,7 @@ use std::{
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
-use crate::{Error, NewTask, Result, Task, TaskId, TaskOptions, TaskState, secrets};
+use crate::{Error, HlsOptions, NewTask, Result, Task, TaskId, TaskOptions, TaskState, secrets};
 
 pub struct Store {
     path: PathBuf,
@@ -245,6 +245,13 @@ impl Store {
             return Err(Error::InvalidState);
         }
         let previous = web_url(&task.request.url)?;
+        let options = match task.options {
+            TaskOptions::Auto if previous.path().to_ascii_lowercase().ends_with(".m3u8") => {
+                TaskOptions::Hls(HlsOptions::default())
+            }
+            TaskOptions::Auto => TaskOptions::AutoHttp,
+            other => other,
+        };
         let mut request = task.request;
         if previous.origin() != replacement.origin() {
             request.headers.clear();
@@ -252,9 +259,10 @@ impl Store {
         }
         request.url = replacement.to_string();
         let encrypted = secrets::protect(&serde_json::to_vec(&request)?)?;
+        let encrypted_options = secrets::protect(&serde_json::to_vec(&options)?)?;
         tx.execute(
-            "UPDATE tasks SET request = ?1, error = NULL WHERE id = ?2",
-            params![encrypted, id.to_string()],
+            "UPDATE tasks SET request = ?1, options = ?2, error = NULL WHERE id = ?3",
+            params![encrypted, encrypted_options, id.to_string()],
         )?;
         tx.commit()?;
         Ok(())
