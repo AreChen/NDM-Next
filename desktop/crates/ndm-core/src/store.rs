@@ -220,6 +220,46 @@ impl Store {
         }
     }
 
+    /// Replace an expired web address while no worker can be using the task.
+    /// Credentials from the old origin must never be forwarded to another one.
+    pub fn update_web_url(&self, id: TaskId, url: &str) -> Result<()> {
+        fn web_url(url: &str) -> Result<reqwest::Url> {
+            let parsed = reqwest::Url::parse(url).map_err(|_| Error::InvalidDownloadAddress)?;
+            if url.len() > 65_536
+                || !matches!(parsed.scheme(), "http" | "https")
+                || parsed.host_str().is_none()
+                || !parsed.username().is_empty()
+                || parsed.password().is_some()
+            {
+                return Err(Error::InvalidDownloadAddress);
+            }
+            Ok(parsed)
+        }
+        let replacement = web_url(url)?;
+        let mut conn = self.connection()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let task = read_task(&tx, id)?.ok_or(Error::NotFound)?;
+        if !matches!(task.state, TaskState::Paused | TaskState::Failed)
+            || matches!(task.options, TaskOptions::Ftp(_) | TaskOptions::Sftp(_))
+        {
+            return Err(Error::InvalidState);
+        }
+        let previous = web_url(&task.request.url)?;
+        let mut request = task.request;
+        if previous.origin() != replacement.origin() {
+            request.headers.clear();
+            request.source_url = None;
+        }
+        request.url = replacement.to_string();
+        let encrypted = secrets::protect(&serde_json::to_vec(&request)?)?;
+        tx.execute(
+            "UPDATE tasks SET request = ?1, error = NULL WHERE id = ?2",
+            params![encrypted, id.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Deletes only the database record; downloaded and temporary files are preserved.
     pub fn delete(&self, id: TaskId) -> Result<()> {
         let changed = self.connection()?.execute(

@@ -15,6 +15,65 @@ fn new_task(destination: &Path) -> NewTask {
 }
 
 #[test]
+fn replacing_expired_link_is_limited_to_paused_web_tasks_and_is_secret_safe() {
+    let dir = TempDir::new().unwrap();
+    let store = Store::open(&dir.path().join("tasks.db")).unwrap();
+    let id = TaskId::new_v4();
+    let original = new_task(dir.path());
+    store.prepare(id, &original).unwrap();
+    assert!(
+        store
+            .update_web_url(id, "https://example.test/new")
+            .is_err()
+    );
+    store.commit(id).unwrap();
+    assert!(
+        store
+            .update_web_url(id, "https://example.test/new")
+            .is_err()
+    );
+    store.pause(id).unwrap();
+    for bad in [
+        "ftp://example.test/file",
+        "https://user:pass@example.test/file",
+        "not a url",
+    ] {
+        assert!(store.update_web_url(id, bad).is_err());
+    }
+    store
+        .update_web_url(id, "https://example.test/new?token=same-origin-secret")
+        .unwrap();
+    let same = store.get(id).unwrap().unwrap();
+    assert_eq!(same.request.headers, original.headers);
+    assert_eq!(same.request.source_url, original.source_url);
+    assert_eq!(same.state, TaskState::Paused);
+    store
+        .update_web_url(
+            id,
+            "https://cdn.example.test/file?token=cross-origin-secret",
+        )
+        .unwrap();
+    let cross = store.get(id).unwrap().unwrap();
+    assert!(cross.request.headers.is_empty());
+    assert!(cross.request.source_url.is_none());
+    assert_eq!(cross.request.expected_size, original.expected_size);
+    drop(store);
+    for entry in fs::read_dir(dir.path()).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_file() {
+            let bytes = fs::read(path).unwrap();
+            for secret in ["same-origin-secret", "cross-origin-secret"] {
+                assert!(
+                    !bytes
+                        .windows(secret.len())
+                        .any(|window| window == secret.as_bytes())
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn prepare_and_commit_are_durable_and_idempotent() {
     let dir = TempDir::new().unwrap();
     let database = dir.path().join("tasks.db");

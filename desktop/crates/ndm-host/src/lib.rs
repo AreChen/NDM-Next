@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     io::{self, Read, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
@@ -11,6 +11,41 @@ use serde_json::{Value, json};
 
 /// Chromium accepts at most 1 MiB from a native host; apply the same limit both ways.
 pub const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
+
+/// Build the manifest from the actual installed path, never a wildcard origin.
+pub fn native_manifest(name: &str, executable: &Path, ids: &[String]) -> io::Result<Value> {
+    let invalid = || {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid native host configuration",
+        )
+    };
+    if name.is_empty()
+        || name.len() > 255
+        || name.split('.').any(|part| {
+            part.is_empty()
+                || !part
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+        })
+        || ids.is_empty()
+        || ids.len() > 16
+        || ids
+            .iter()
+            .any(|id| id.len() != 32 || !id.bytes().all(|b| (b'a'..=b'p').contains(&b)))
+        || !executable.is_absolute()
+    {
+        return Err(invalid());
+    }
+    let path = executable.to_str().ok_or_else(invalid)?;
+    Ok(json!({
+        "name": name,
+        "description": "NDM Next browser integration",
+        "path": path,
+        "type": "stdio",
+        "allowed_origins": ids.iter().map(|id| format!("chrome-extension://{id}/")).collect::<Vec<_>>(),
+    }))
+}
 
 pub fn read_frame(reader: &mut impl Read) -> io::Result<Option<Vec<u8>>> {
     let mut length = [0_u8; 4];

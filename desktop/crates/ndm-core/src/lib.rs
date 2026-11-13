@@ -48,6 +48,8 @@ pub enum Error {
     InvalidHttpResponse,
     #[error("download request contains an invalid or reserved header")]
     InvalidHeader,
+    #[error("replacement download address is invalid")]
+    InvalidDownloadAddress,
     #[error("proxy configuration is invalid")]
     InvalidProxy,
     #[error("invalid FTP address or unsafe FTP command")]

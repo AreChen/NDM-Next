@@ -23,6 +23,37 @@ use tempfile::TempDir;
 use tokio::{net::TcpListener, sync::RwLock};
 use tokio_util::sync::CancellationToken;
 
+#[tokio::test]
+async fn missing_suggested_filename_uses_content_disposition_or_url_safely() {
+    let dir = TempDir::new().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = Router::new()
+        .route("/header", get(|| async {
+            ([(header::CONTENT_DISPOSITION, "attachment; filename=\"fallback.bin\"; filename*=UTF-8''%E4%B8%8B%E8%BD%BD.bin")], "hello")
+        }))
+        .route("/files/from-url.bin", get(|| async { "hello" }));
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    for (url_path, expected) in [
+        ("header", "下载.bin"),
+        ("files/from-url.bin", "from-url.bin"),
+    ] {
+        let mut req = request(dir.path(), format!("http://{address}/{url_path}"));
+        req.suggested_filename = None;
+        let output = download_http(
+            &req,
+            TaskId::new_v4(),
+            &HttpOptions::default(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(output.file_name().unwrap().to_str().unwrap(), expected);
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Mode {
     Ranges,
@@ -274,6 +305,57 @@ async fn changed_validator_discards_old_partial_content() {
     let output = download_http(&req, id, &HttpOptions::default(), CancellationToken::new())
         .await
         .unwrap();
+    assert_eq!(std::fs::read(output).unwrap(), replacement);
+}
+
+#[tokio::test]
+async fn changed_link_does_not_mix_old_partial_content_even_if_etag_matches() {
+    let dir = TempDir::new().unwrap();
+    let (server, url) = fixture(Mode::Ranges, data(7), true).await;
+    let store = Arc::new(Store::open(&dir.path().join("tasks.db")).unwrap());
+    let id = TaskId::new_v4();
+    store
+        .prepare(id, &request(dir.path(), format!("{url}?old")))
+        .unwrap();
+    store.commit(id).unwrap();
+    let cancel = CancellationToken::new();
+    let running = tokio::spawn({
+        let store = store.clone();
+        let cancel = cancel.clone();
+        async move {
+            execute_http(
+                &store,
+                id,
+                &HttpOptions::default(),
+                cancel,
+                DownloadProgress::default(),
+            )
+            .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while server.sent_bytes.load(Ordering::SeqCst) < 131_072 {
+            assert!(!running.is_finished());
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    cancel.cancel();
+    assert!(running.await.unwrap().is_err());
+    let replacement = data(8);
+    *server.current.write().await = ("\"version-1\"".into(), replacement.clone());
+    store.update_web_url(id, &format!("{url}?new")).unwrap();
+    store.resume(id).unwrap();
+    let output = execute_http(
+        &store,
+        id,
+        &HttpOptions::default(),
+        CancellationToken::new(),
+        DownloadProgress::default(),
+    )
+    .await
+    .unwrap();
     assert_eq!(std::fs::read(output).unwrap(), replacement);
 }
 

@@ -67,6 +67,32 @@ fn run() -> io::Result<()> {
 }
 
 fn main() {
+    let arguments: Vec<_> = std::env::args().skip(1).collect();
+    if arguments
+        .first()
+        .is_some_and(|arg| arg == "--write-manifest")
+    {
+        let result = (|| -> io::Result<()> {
+            let executable = std::env::current_exe()?;
+            let name = arguments
+                .get(1)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing host name"))?;
+            let manifest = ndm_host::native_manifest(name, &executable, &arguments[2..])?;
+            let destination = executable.with_file_name("native-messaging-host.json");
+            let mut temporary = tempfile::NamedTempFile::new_in(
+                destination
+                    .parent()
+                    .ok_or_else(|| io::Error::other("missing installation directory"))?,
+            )?;
+            serde_json::to_writer_pretty(&mut temporary, &manifest).map_err(io::Error::other)?;
+            temporary.persist(destination).map_err(io::Error::other)?;
+            Ok(())
+        })();
+        if result.is_err() {
+            std::process::exit(1);
+        }
+        return;
+    }
     // stdout is exclusively reserved for Native Messaging frames; neither
     // malformed requests nor task credentials are written to diagnostic logs.
     let _ = run();

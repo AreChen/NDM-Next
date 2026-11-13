@@ -210,6 +210,19 @@ async fn download_http_with_progress(
         &cancel,
     )
     .await?;
+    let discovered_filename = disposition_filename(probe.headers()).or_else(|| {
+        probe
+            .url()
+            .path_segments()
+            .and_then(|mut parts| parts.next_back())
+            .filter(|segment| !segment.is_empty())
+            .and_then(|segment| {
+                percent_encoding::percent_decode_str(segment)
+                    .decode_utf8()
+                    .ok()
+            })
+            .map(|name| name.into_owned())
+    });
     let ranged = if probe.status() == StatusCode::PARTIAL_CONTENT {
         probe
             .headers()
@@ -326,7 +339,14 @@ async fn download_http_with_progress(
         return Err(Error::InvalidHttpResponse);
     }
 
-    let filename = safe_filename(request.suggested_filename.as_deref().unwrap_or("download"));
+    let filename = safe_filename(
+        request
+            .suggested_filename
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+            .or(discovered_filename.as_deref())
+            .unwrap_or("download"),
+    );
     let target = publish_no_overwrite(&assembled, &request.destination, &filename).await?;
     // The target is already published; cleanup failures must not turn a
     // successful transfer into a failed task and cause a duplicate retry.
@@ -649,6 +669,75 @@ impl RateLimiter {
             _ = tokio::time::sleep_until(ready) => Ok(()),
         }
     }
+}
+
+fn disposition_filename(headers: &HeaderMap) -> Option<String> {
+    let value = headers.get(header::CONTENT_DISPOSITION)?.to_str().ok()?;
+    if value.len() > 8192 {
+        return None;
+    }
+    // Split only at unquoted semicolons, retaining escaped characters in values.
+    let mut fields = Vec::new();
+    let (mut start, mut quoted, mut escaped) = (0, false, false);
+    for (index, ch) in value.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if quoted && ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if ch == '"' {
+            quoted = !quoted;
+        } else if ch == ';' && !quoted {
+            fields.push(&value[start..index]);
+            start = index + 1;
+        }
+    }
+    if quoted {
+        return None;
+    }
+    fields.push(&value[start..]);
+    let (mut plain, mut extended) = (None, None);
+    for field in fields.into_iter().skip(1) {
+        let Some((key, raw)) = field.trim().split_once('=') else {
+            continue;
+        };
+        let raw = raw.trim();
+        let unquoted = raw
+            .strip_prefix('"')
+            .and_then(|s| s.strip_suffix('"'))
+            .unwrap_or(raw);
+        if key.trim().eq_ignore_ascii_case("filename*") {
+            let mut parts = unquoted.splitn(3, '\'');
+            if parts
+                .next()
+                .is_some_and(|charset| charset.eq_ignore_ascii_case("utf-8"))
+                && parts.next().is_some()
+                && let Some(encoded) = parts.next()
+            {
+                extended = percent_encoding::percent_decode_str(encoded)
+                    .decode_utf8()
+                    .ok()
+                    .map(|value| value.into_owned());
+            }
+        } else if key.trim().eq_ignore_ascii_case("filename") {
+            let mut name = String::new();
+            let mut chars = unquoted.chars();
+            while let Some(ch) = chars.next() {
+                if ch == '\\' {
+                    name.push(chars.next().unwrap_or(ch));
+                } else {
+                    name.push(ch);
+                }
+            }
+            plain = Some(name);
+        }
+    }
+    extended
+        .or(plain)
+        .filter(|name| !name.trim().is_empty() && !name.chars().any(char::is_control))
 }
 
 pub(crate) fn safe_filename(suggested: &str) -> String {

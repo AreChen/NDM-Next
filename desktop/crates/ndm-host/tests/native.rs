@@ -115,3 +115,27 @@ fn invalid_urls_and_headers_are_rejected_without_echoing_secrets() {
     assert!(!reply.to_string().contains("secret"));
     assert!(store.get(id).unwrap().is_none());
 }
+#[test]
+fn manifest_contains_only_validated_origins_and_preserves_unicode_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = dir.path().join("下载器").join("ndm-host.exe");
+    let id = "caegebfdojcdlkkiaiokeoadefdooamd";
+    let manifest = ndm_host::native_manifest("com.ndmnext.host", &host, &[id.into()]).unwrap();
+    let text = serde_json::to_string(&manifest).unwrap();
+    let decoded: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(decoded["path"], host.to_str().unwrap());
+    assert_eq!(
+        decoded["allowed_origins"][0],
+        format!("chrome-extension://{id}/")
+    );
+    assert!(ndm_host::native_manifest("com.ndmnext.host", &host, &["*".into()]).is_err());
+    assert!(ndm_host::native_manifest("invalid-name", &host, &[id.into()]).is_err());
+    assert!(
+        ndm_host::native_manifest(
+            "com.ndmnext.host",
+            std::path::Path::new("relative.exe"),
+            &[id.into()]
+        )
+        .is_err()
+    );
+}

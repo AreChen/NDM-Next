@@ -43,6 +43,7 @@ pub(crate) struct Desktop {
     preferences: Preferences,
     preferences_path: PathBuf,
     url_input: Entity<InputState>,
+    replacement_input: Entity<InputState>,
     directory_input: Entity<InputState>,
     active_input: Entity<InputState>,
     connections_input: Entity<InputState>,
@@ -59,6 +60,7 @@ pub(crate) struct Desktop {
     pending_auto_resume: bool,
     pending_host_keys: HashMap<TaskId, PendingHostKey>,
     confirming_host_key: Option<TaskId>,
+    editing_url: Option<TaskId>,
     hls_catalog: Option<(String, HlsCatalog)>,
     hls_variant: Option<usize>,
     hls_audio: Vec<String>,
@@ -105,6 +107,7 @@ impl Desktop {
             mut commands,
         } = services;
         let url_input = cx.new(|cx| InputState::new(window, cx).placeholder("https://…"));
+        let replacement_input = cx.new(|cx| InputState::new(window, cx).placeholder("https://…"));
         let directory = preferences.download_dir.to_string_lossy().into_owned();
         let directory_input = cx.new(|cx| InputState::new(window, cx).default_value(directory));
         let active_input = cx.new(|cx| {
@@ -231,6 +234,7 @@ impl Desktop {
             preferences,
             preferences_path,
             url_input,
+            replacement_input,
             directory_input,
             active_input,
             connections_input,
@@ -247,6 +251,7 @@ impl Desktop {
             pending_auto_resume,
             pending_host_keys: HashMap::new(),
             confirming_host_key: None,
+            editing_url: None,
             hls_catalog: None,
             hls_variant: None,
             hls_audio: Vec::new(),
@@ -688,6 +693,9 @@ impl Desktop {
         match self.store.delete(id) {
             Ok(()) => {
                 self.pending_host_keys.remove(&id);
+                if self.editing_url == Some(id) {
+                    self.editing_url = None;
+                }
                 self.reload();
                 self.notice = Some(
                     self.text(
@@ -699,6 +707,35 @@ impl Desktop {
             }
             Err(_) => {
                 self.notice = Some(self.text("请先暂停任务。", "Pause the task first.").into())
+            }
+        }
+        cx.notify();
+    }
+    fn save_replacement_url(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id) = self.editing_url else { return };
+        let url = self.replacement_input.read(cx).value().to_string();
+        match self.store.update_web_url(id, url.trim()) {
+            Ok(()) => {
+                self.editing_url = None;
+                self.replacement_input
+                    .update(cx, |input, cx| input.set_value("", window, cx));
+                self.reload();
+                self.notice = Some(
+                    self.text(
+                        "链接已更新，可以继续下载。",
+                        "Link updated; you can resume the download.",
+                    )
+                    .into(),
+                );
+            }
+            Err(_) => {
+                self.notice = Some(
+                    self.text(
+                        "链接无效，或任务已不再暂停。",
+                        "The link is invalid or the task is no longer paused.",
+                    )
+                    .into(),
+                );
             }
         }
         cx.notify();
@@ -917,6 +954,10 @@ impl Desktop {
         let is_hls = matches!(&task.options, TaskOptions::Hls(_))
             || reqwest::Url::parse(&task.request.url)
                 .is_ok_and(|url| url.path().to_ascii_lowercase().ends_with(".m3u8"));
+        let can_edit_url = matches!(state, TaskState::Paused | TaskState::Failed)
+            && !matches!(&task.options, TaskOptions::Ftp(_) | TaskOptions::Sftp(_))
+            && reqwest::Url::parse(&task.request.url)
+                .is_ok_and(|url| matches!(url.scheme(), "http" | "https"));
         let pending_key = self.pending_host_keys.get(&id);
         if let Some(key) = pending_key {
             let host = reqwest::Url::parse(&task.request.url)
@@ -1012,6 +1053,15 @@ impl Desktop {
                     if this.scheduler.stop_live(id).is_err() { this.notice = Some(this.text("无法停止该媒体任务。", "Could not stop the media task.").into()); }
                     cx.notify();
                 }))
+            ))
+            .when(can_edit_url, |row| row.child(
+                Button::new(SharedString::from(format!("edit-url-{id}")))
+                    .label(self.text("更换链接", "Change link"))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.replacement_input.update(cx, |input, cx| input.set_value("", window, cx));
+                        this.editing_url = Some(id);
+                        cx.notify();
+                    }))
             ))
             .when(pending_key.is_some(), |row| {
                 if self.confirming_host_key == Some(id) {
@@ -1422,6 +1472,28 @@ impl Render for Desktop {
                 && self.url_input.read(cx).value().as_ref().trim() == url
             {
                 content = content.child(self.hls_options_panel(catalog, dark, cx));
+            }
+            if self.editing_url.is_some() {
+                content = content.child(
+                    div().rounded_xl().border_1().border_color(rgb(border)).bg(rgb(side))
+                        .p_4().flex().flex_col().gap_3()
+                        .child(div().font_weight(FontWeight::SEMIBOLD).child(self.text("更换下载链接", "Change download link")))
+                        .child(div().text_xs().text_color(rgb(muted)).child(self.text(
+                            "请粘贴同一文件的新链接；跨域时会清除原有网站凭据。",
+                            "Paste a new link to the same file; credentials are cleared when the origin changes.",
+                        )))
+                        .child(div().flex().gap_3().items_center()
+                            .child(div().flex_1().child(Input::new(&self.replacement_input)
+                                .id("replacement-url").aria_label(self.text("新下载链接", "New download link")).w_full()))
+                            .child(Button::new("save-replacement-url").primary().label(self.text("保存", "Save"))
+                                .on_click(cx.listener(|this, _, window, cx| this.save_replacement_url(window, cx))))
+                            .child(Button::new("cancel-replacement-url").label(self.text("取消", "Cancel"))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.editing_url = None;
+                                    this.replacement_input.update(cx, |input, cx| input.set_value("", window, cx));
+                                    cx.notify();
+                                })))),
+                );
             }
             let mut list = div()
                 .id("task-list")
