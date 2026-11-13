@@ -1,8 +1,20 @@
 use std::{collections::BTreeMap, fmt, path::PathBuf};
 
+use crate::{FtpOptions, HlsOptions, HttpOptions, SftpOptions};
 use serde::{Deserialize, Serialize};
 
 pub type TaskId = uuid::Uuid;
+
+/// Protocol-specific choices are encrypted together with other task secrets.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TaskOptions {
+    #[default]
+    Auto,
+    Http(HttpOptions),
+    Ftp(FtpOptions),
+    Sftp(SftpOptions),
+    Hls(HlsOptions),
+}
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NewTask {
@@ -59,6 +71,7 @@ impl TaskState {
 pub struct Task {
     pub id: TaskId,
     pub request: NewTask,
+    pub options: TaskOptions,
     pub state: TaskState,
     pub output_path: Option<PathBuf>,
     pub error: Option<String>,

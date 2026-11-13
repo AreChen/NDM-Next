@@ -16,7 +16,10 @@ use axum::{
     response::Response,
     routing::get,
 };
-use ndm_core::{HlsOptions, NewTask, TaskId, download_hls, inspect_hls};
+use ndm_core::{
+    HlsOptions, NewTask, Scheduler, SchedulerOptions, Store, TaskId, TaskState, download_hls,
+    inspect_hls,
+};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
@@ -114,6 +117,35 @@ async fn vod_ts_fmp4_and_aes_are_muxed_to_mp4() {
         assert_eq!(&output[4..8], b"ftyp");
         assert!(result.tracks >= tracks);
     }
+}
+
+#[tokio::test]
+async fn scheduler_runs_hls_tasks_in_its_media_worker() {
+    let base = server(false).await;
+    let dir = TempDir::new().unwrap();
+    let store = Arc::new(Store::open(&dir.path().join("tasks.db")).unwrap());
+    let id = TaskId::new_v4();
+    store
+        .prepare(id, &request(dir.path(), format!("{base}/ts/index.m3u8")))
+        .unwrap();
+    store.commit(id).unwrap();
+    let scheduler = Scheduler::start(store.clone(), SchedulerOptions::default()).unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if store
+                .get(id)
+                .unwrap()
+                .is_some_and(|task| task.state == TaskState::Completed)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(dir.path().join("video.mp4").exists());
+    scheduler.shutdown().await;
 }
 
 #[tokio::test]

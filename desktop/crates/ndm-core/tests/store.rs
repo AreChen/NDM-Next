@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, fs, path::Path};
 
-use ndm_core::{NewTask, Store, TaskId, TaskState};
+use ndm_core::{NewTask, SftpAuth, SftpOptions, Store, TaskId, TaskOptions, TaskState};
 use tempfile::TempDir;
 
 fn new_task(destination: &Path) -> NewTask {
@@ -126,6 +126,56 @@ fn request_secrets_are_not_stored_as_plaintext() {
             .request,
         request
     );
+}
+
+#[test]
+fn protocol_options_are_durable_encrypted_and_checked_for_idempotency() {
+    let dir = TempDir::new().unwrap();
+    let database = dir.path().join("tasks.db");
+    let id = TaskId::new_v4();
+    let options = TaskOptions::Sftp(SftpOptions {
+        trusted_fingerprint: Some("SHA256:example".into()),
+        auth: Some(SftpAuth::Password("secret-sftp-password".into())),
+        ..Default::default()
+    });
+    let store = Store::open(&database).unwrap();
+    let request = new_task(dir.path());
+    store.prepare_with_options(id, &request, &options).unwrap();
+    store.prepare_with_options(id, &request, &options).unwrap();
+    assert!(
+        store
+            .prepare_with_options(id, &request, &TaskOptions::Auto)
+            .is_err()
+    );
+    drop(store);
+    let restored = Store::open(&database).unwrap().get(id).unwrap().unwrap();
+    assert_eq!(restored.options, options);
+    for entry in fs::read_dir(dir.path()).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_file() {
+            assert!(
+                !fs::read(path)
+                    .unwrap()
+                    .windows(b"secret-sftp-password".len())
+                    .any(|window| window == b"secret-sftp-password")
+            );
+        }
+    }
+}
+
+#[test]
+fn deleting_a_paused_record_preserves_unrelated_files() {
+    let dir = TempDir::new().unwrap();
+    let store = Store::open(&dir.path().join("tasks.db")).unwrap();
+    let id = TaskId::new_v4();
+    store.prepare(id, &new_task(dir.path())).unwrap();
+    store.commit(id).unwrap();
+    store.pause(id).unwrap();
+    let existing = dir.path().join("existing.bin");
+    fs::write(&existing, b"preserve").unwrap();
+    store.delete(id).unwrap();
+    assert!(store.get(id).unwrap().is_none());
+    assert_eq!(fs::read(existing).unwrap(), b"preserve");
 }
 
 #[test]

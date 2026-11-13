@@ -5,7 +5,7 @@ use std::{
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
-use crate::{Error, NewTask, Result, Task, TaskId, TaskState, secrets};
+use crate::{Error, NewTask, Result, Task, TaskId, TaskOptions, TaskState, secrets};
 
 pub struct Store {
     path: PathBuf,
@@ -23,13 +23,14 @@ impl Store {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let version: i64 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if version > 1 {
+        if version > 2 {
             return Err(Error::UnsupportedSchema);
         }
         tx.execute_batch(
             "CREATE TABLE IF NOT EXISTS tasks (
                 id TEXT PRIMARY KEY NOT NULL,
                 request BLOB NOT NULL,
+                options BLOB,
                 state TEXT NOT NULL CHECK(state IN
                     ('prepared','queued','running','paused','completed','failed')),
                 output BLOB,
@@ -46,6 +47,7 @@ impl Store {
         };
         for (name, declaration) in [
             ("output", "BLOB"),
+            ("options", "BLOB"),
             ("error", "TEXT"),
             ("size_verified", "INTEGER"),
         ] {
@@ -56,7 +58,7 @@ impl Store {
                 )?;
             }
         }
-        tx.pragma_update(None, "user_version", 1)?;
+        tx.pragma_update(None, "user_version", 2)?;
         tx.commit()?;
         Ok(store)
     }
@@ -69,19 +71,31 @@ impl Store {
     }
 
     pub fn prepare(&self, id: TaskId, request: &NewTask) -> Result<Task> {
+        self.prepare_with_options(id, request, &TaskOptions::Auto)
+    }
+
+    pub fn prepare_with_options(
+        &self,
+        id: TaskId,
+        request: &NewTask,
+        options: &TaskOptions,
+    ) -> Result<Task> {
         let encrypted = secrets::protect(&serde_json::to_vec(request)?)?;
+        let encrypted_options = secrets::protect(&serde_json::to_vec(options)?)?;
         let mut conn = self.connection()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         if let Some(existing) = read_task(&tx, id)? {
-            if existing.request != *request {
+            if existing.request != *request
+                || (existing.state == TaskState::Prepared && existing.options != *options)
+            {
                 return Err(Error::IdConflict);
             }
             tx.commit()?;
             return Ok(existing);
         }
         tx.execute(
-            "INSERT INTO tasks (id, request, state) VALUES (?1, ?2, 'prepared')",
-            params![id.to_string(), encrypted],
+            "INSERT INTO tasks (id, request, options, state) VALUES (?1, ?2, ?3, 'prepared')",
+            params![id.to_string(), encrypted, encrypted_options],
         )?;
         let task = read_task(&tx, id)?.ok_or(Error::NotFound)?;
         tx.commit()?;
@@ -122,7 +136,7 @@ impl Store {
     pub fn list(&self) -> Result<Vec<Task>> {
         let conn = self.connection()?;
         let mut statement = conn.prepare(
-            "SELECT id, request, state, output, error, size_verified FROM tasks ORDER BY rowid",
+            "SELECT id, request, state, output, error, size_verified, options FROM tasks ORDER BY rowid",
         )?;
         let mut rows = statement.query([])?;
         let mut tasks = Vec::new();
@@ -134,6 +148,7 @@ impl Store {
             let output: Option<Vec<u8>> = row.get(3)?;
             let error: Option<String> = row.get(4)?;
             let size_verified: Option<bool> = row.get(5)?;
+            let options: Option<Vec<u8>> = row.get(6)?;
             tasks.push(decode_task(
                 id,
                 &encrypted,
@@ -141,6 +156,7 @@ impl Store {
                 output,
                 error,
                 size_verified,
+                options,
             )?);
         }
         Ok(tasks)
@@ -184,10 +200,44 @@ impl Store {
         Ok(())
     }
 
+    pub fn recover_without_autostart(&self) -> Result<()> {
+        self.connection()?.execute(
+            "UPDATE tasks SET state = 'paused' WHERE state IN ('running', 'queued')",
+            [],
+        )?;
+        Ok(())
+    }
+
     pub fn resume(&self, id: TaskId) -> Result<()> {
         let changed = self.connection()?.execute(
             "UPDATE tasks SET state = 'queued', error = NULL WHERE id = ?1 AND state IN ('paused','failed')",
             [id.to_string()],
+        )?;
+        if changed == 1 {
+            Ok(())
+        } else {
+            Err(Error::InvalidState)
+        }
+    }
+
+    /// Deletes only the database record; downloaded and temporary files are preserved.
+    pub fn delete(&self, id: TaskId) -> Result<()> {
+        let changed = self.connection()?.execute(
+            "DELETE FROM tasks WHERE id = ?1 AND state IN ('queued','paused','completed','failed')",
+            [id.to_string()],
+        )?;
+        if changed == 1 {
+            Ok(())
+        } else {
+            Err(Error::InvalidState)
+        }
+    }
+
+    pub fn set_options(&self, id: TaskId, options: &TaskOptions) -> Result<()> {
+        let encrypted = secrets::protect(&serde_json::to_vec(options)?)?;
+        let changed = self.connection()?.execute(
+            "UPDATE tasks SET options = ?1 WHERE id = ?2 AND state IN ('queued','paused','failed')",
+            params![encrypted, id.to_string()],
         )?;
         if changed == 1 {
             Ok(())
@@ -220,12 +270,20 @@ impl Store {
             Err(Error::InvalidState)
         }
     }
+
+    pub(crate) fn fail_unexpected(&self, id: TaskId) -> Result<()> {
+        self.connection()?.execute(
+            "UPDATE tasks SET state = 'failed', error = 'download worker failed unexpectedly' WHERE id = ?1 AND state IN ('queued', 'running')",
+            [id.to_string()],
+        )?;
+        Ok(())
+    }
 }
 
 fn read_task(conn: &Connection, id: TaskId) -> Result<Option<Task>> {
     let row = conn
         .query_row(
-            "SELECT request, state, output, error, size_verified FROM tasks WHERE id = ?1",
+            "SELECT request, state, output, error, size_verified, options FROM tasks WHERE id = ?1",
             [id.to_string()],
             |row| {
                 Ok((
@@ -234,13 +292,24 @@ fn read_task(conn: &Connection, id: TaskId) -> Result<Option<Task>> {
                     row.get::<_, Option<Vec<u8>>>(2)?,
                     row.get::<_, Option<String>>(3)?,
                     row.get::<_, Option<bool>>(4)?,
+                    row.get::<_, Option<Vec<u8>>>(5)?,
                 ))
             },
         )
         .optional()?;
-    row.map(|(encrypted, state, output, error, size_verified)| {
-        decode_task(id, &encrypted, &state, output, error, size_verified)
-    })
+    row.map(
+        |(encrypted, state, output, error, size_verified, options)| {
+            decode_task(
+                id,
+                &encrypted,
+                &state,
+                output,
+                error,
+                size_verified,
+                options,
+            )
+        },
+    )
     .transpose()
 }
 
@@ -251,6 +320,7 @@ fn decode_task(
     output: Option<Vec<u8>>,
     error: Option<String>,
     size_verified: Option<bool>,
+    options: Option<Vec<u8>>,
 ) -> Result<Task> {
     let request = serde_json::from_slice(&secrets::unprotect(encrypted)?)?;
     let output_path = output
@@ -259,9 +329,14 @@ fn decode_task(
             Ok::<_, Error>(serde_json::from_slice(&plaintext)?)
         })
         .transpose()?;
+    let options = options
+        .map(|encrypted| Ok::<_, Error>(serde_json::from_slice(&secrets::unprotect(&encrypted)?)?))
+        .transpose()?
+        .unwrap_or_default();
     Ok(Task {
         id,
         request,
+        options,
         state: TaskState::from_database(state)?,
         output_path,
         error,

@@ -2,6 +2,7 @@ mod ftp;
 mod hls;
 mod http;
 mod model;
+mod scheduler;
 mod secrets;
 mod sftp;
 mod store;
@@ -12,7 +13,8 @@ pub use hls::{
     inspect_hls,
 };
 pub use http::{DownloadProgress, HttpOptions, ProgressSnapshot, download_http, execute_http};
-pub use model::{NewTask, Task, TaskId, TaskState};
+pub use model::{NewTask, Task, TaskId, TaskOptions, TaskState};
+pub use scheduler::{Scheduler, SchedulerEvent, SchedulerOptions};
 pub use sftp::{SftpAuth, SftpOptions, download_sftp, execute_sftp};
 pub use store::Store;
 

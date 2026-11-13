@@ -1,6 +1,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use percent_encoding::percent_decode_str;
+use serde::{Deserialize, Serialize};
 use suppaftp::{
     Status,
     async_native_tls::{Certificate, TlsConnector},
@@ -20,7 +21,7 @@ use crate::{
 
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(30);
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FtpSecurity {
     /// Plain FTP for ftp:// and explicit FTPS for ftps://.
     #[default]
@@ -30,7 +31,7 @@ pub enum FtpSecurity {
     ImplicitTls,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FtpOptions {
     pub security: FtpSecurity,
     pub max_bytes_per_second: Option<u64>,

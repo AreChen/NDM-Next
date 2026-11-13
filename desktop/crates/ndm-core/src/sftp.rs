@@ -11,6 +11,7 @@ use russh::{
     keys::{HashAlg, PublicKeyOrCertificate, key::PrivateKeyWithHashAlg, load_secret_key},
 };
 use russh_sftp::client::SftpSession;
+use serde::{Deserialize, Serialize};
 use tokio::{
     fs,
     io::{AsyncReadExt, AsyncWriteExt},
@@ -24,7 +25,7 @@ use crate::{
 
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(30);
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SftpAuth {
     Password(String),
     PrivateKey {
@@ -46,7 +47,7 @@ impl fmt::Debug for SftpAuth {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SftpOptions {
     /// SHA256 fingerprint explicitly trusted for this host and port.
     pub trusted_fingerprint: Option<String>,

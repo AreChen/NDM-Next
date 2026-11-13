@@ -1,0 +1,348 @@
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+};
+
+use futures_util::FutureExt;
+use tokio::{
+    sync::{Notify, broadcast, watch},
+    task::JoinHandle,
+};
+use tokio_util::sync::CancellationToken;
+
+use crate::{
+    DownloadProgress, Error, FtpOptions, HlsOptions, HttpOptions, ProgressSnapshot, Result,
+    SftpOptions, Store, Task, TaskId, TaskOptions, TaskState, execute_ftp, execute_hls,
+    execute_http, execute_sftp,
+};
+
+#[derive(Clone, Debug)]
+pub struct SchedulerOptions {
+    pub max_active_tasks: usize,
+    pub http: HttpOptions,
+    pub auto_resume: bool,
+}
+impl Default for SchedulerOptions {
+    fn default() -> Self {
+        Self {
+            max_active_tasks: 3,
+            http: HttpOptions::default(),
+            auto_resume: true,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum SchedulerEvent {
+    Started(TaskId),
+    Finished(TaskId),
+    SftpHostKeyRequired {
+        id: TaskId,
+        fingerprint: String,
+    },
+    SftpHostKeyChanged {
+        id: TaskId,
+        expected: String,
+        observed: String,
+    },
+}
+
+#[derive(Clone)]
+struct Active {
+    cancel: CancellationToken,
+    stop: CancellationToken,
+    manual_pause: Arc<AtomicBool>,
+    progress: DownloadProgress,
+    done: watch::Receiver<bool>,
+}
+struct Inner {
+    store: Arc<Store>,
+    options: SchedulerOptions,
+    active: Mutex<HashMap<TaskId, Active>>,
+    wake: Notify,
+    shutdown: CancellationToken,
+    events: broadcast::Sender<SchedulerEvent>,
+    dispatcher: Mutex<Option<JoinHandle<()>>>,
+}
+
+#[derive(Clone)]
+pub struct Scheduler(Arc<Inner>);
+
+impl Scheduler {
+    pub fn start(store: Arc<Store>, mut options: SchedulerOptions) -> Result<Self> {
+        let runtime = tokio::runtime::Handle::try_current().map_err(|_| Error::InvalidState)?;
+        options.max_active_tasks = options.max_active_tasks.clamp(1, 32);
+        if options.auto_resume {
+            store.recover_interrupted()?;
+        } else {
+            store.recover_without_autostart()?;
+        }
+        let (events, _) = broadcast::channel(128);
+        let inner = Arc::new(Inner {
+            store,
+            options,
+            active: Mutex::new(HashMap::new()),
+            wake: Notify::new(),
+            shutdown: CancellationToken::new(),
+            events,
+            dispatcher: Mutex::new(None),
+        });
+        let dispatcher = runtime.spawn(dispatch(inner.clone()));
+        *inner.dispatcher.lock().unwrap() = Some(dispatcher);
+        Ok(Self(inner))
+    }
+
+    /// Wake the dispatcher after another component commits a task.
+    pub fn notify(&self) {
+        self.0.wake.notify_one();
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<SchedulerEvent> {
+        self.0.events.subscribe()
+    }
+
+    pub fn progress(&self, id: TaskId) -> Option<ProgressSnapshot> {
+        self.0
+            .active
+            .lock()
+            .unwrap()
+            .get(&id)
+            .map(|active| active.progress.snapshot())
+    }
+
+    pub async fn pause(&self, id: TaskId) -> Result<()> {
+        let active = self.0.active.lock().unwrap().get(&id).cloned();
+        if let Some(mut active) = active {
+            active.manual_pause.store(true, Ordering::Release);
+            active.cancel.cancel();
+            while !*active.done.borrow_and_update() {
+                if active.done.changed().await.is_err() {
+                    break;
+                }
+            }
+            match self.0.store.get(id)? {
+                Some(task) if task.state == TaskState::Paused => Ok(()),
+                _ => Err(Error::InvalidState),
+            }
+        } else {
+            self.0.store.pause(id)
+        }
+    }
+
+    pub fn stop_live(&self, id: TaskId) -> Result<()> {
+        let active = self
+            .0
+            .active
+            .lock()
+            .unwrap()
+            .get(&id)
+            .cloned()
+            .ok_or(Error::InvalidState)?;
+        active.stop.cancel();
+        Ok(())
+    }
+
+    pub async fn resume(&self, id: TaskId) -> Result<()> {
+        self.0.store.resume(id)?;
+        self.notify();
+        Ok(())
+    }
+
+    pub async fn shutdown(&self) {
+        self.0.shutdown.cancel();
+        self.0.wake.notify_one();
+        let dispatcher = self.0.dispatcher.lock().unwrap().take();
+        if let Some(dispatcher) = dispatcher {
+            let _ = dispatcher.await;
+        }
+        let active: Vec<_> = self.0.active.lock().unwrap().values().cloned().collect();
+        for job in &active {
+            job.cancel.cancel();
+        }
+        for mut job in active {
+            while !*job.done.borrow_and_update() {
+                if job.done.changed().await.is_err() {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+async fn dispatch(inner: Arc<Inner>) {
+    loop {
+        if inner.shutdown.is_cancelled() {
+            return;
+        }
+        let notified = inner.wake.notified();
+        let capacity = inner
+            .options
+            .max_active_tasks
+            .saturating_sub(inner.active.lock().unwrap().len());
+        if capacity > 0 {
+            let queued = match inner.store.list() {
+                Ok(tasks) => tasks,
+                Err(_) => {
+                    tokio::select! { _ = inner.shutdown.cancelled() => return, _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {} }
+                    continue;
+                }
+            };
+            let mut started = 0;
+            for task in queued
+                .into_iter()
+                .filter(|task| task.state == TaskState::Queued)
+            {
+                if started >= capacity || inner.shutdown.is_cancelled() {
+                    break;
+                }
+                let mut active = inner.active.lock().unwrap();
+                if active.contains_key(&task.id) {
+                    continue;
+                }
+                let (done_tx, done) = watch::channel(false);
+                let job = Active {
+                    cancel: CancellationToken::new(),
+                    stop: CancellationToken::new(),
+                    manual_pause: Arc::new(AtomicBool::new(false)),
+                    progress: DownloadProgress::default(),
+                    done,
+                };
+                active.insert(task.id, job.clone());
+                drop(active);
+                started += 1;
+                tokio::spawn(run_one(inner.clone(), task, job, done_tx));
+            }
+            if started > 0 {
+                continue;
+            }
+        }
+        tokio::select! { _ = inner.shutdown.cancelled() => return, _ = notified => {} }
+    }
+}
+
+async fn run_one(inner: Arc<Inner>, task: Task, active: Active, done: watch::Sender<bool>) {
+    let _ = inner.events.send(SchedulerEvent::Started(task.id));
+    let result = std::panic::AssertUnwindSafe(execute_one(&inner, &task, &active))
+        .catch_unwind()
+        .await;
+    match result {
+        Ok(Err(Error::SftpUnknownHost { fingerprint })) => {
+            let _ = inner.events.send(SchedulerEvent::SftpHostKeyRequired {
+                id: task.id,
+                fingerprint,
+            });
+        }
+        Ok(Err(Error::SftpHostKeyChanged { expected, observed })) => {
+            let _ = inner.events.send(SchedulerEvent::SftpHostKeyChanged {
+                id: task.id,
+                expected,
+                observed,
+            });
+        }
+        Ok(Err(_)) | Err(_) => {
+            let _ = inner.store.fail_unexpected(task.id);
+        }
+        Ok(Ok(())) => {}
+    }
+    if inner.shutdown.is_cancelled()
+        && !active.manual_pause.load(Ordering::Acquire)
+        && inner
+            .store
+            .get(task.id)
+            .ok()
+            .flatten()
+            .is_some_and(|task| task.state == TaskState::Paused)
+    {
+        let _ = inner.store.resume(task.id);
+    }
+    inner.active.lock().unwrap().remove(&task.id);
+    let _ = done.send(true);
+    let _ = inner.events.send(SchedulerEvent::Finished(task.id));
+    inner.wake.notify_one();
+}
+
+async fn execute_one(inner: &Arc<Inner>, task: &Task, active: &Active) -> Result<()> {
+    let options = match task.options.clone() {
+        TaskOptions::Auto => {
+            match reqwest::Url::parse(&task.request.url).ok().map(|url| {
+                let scheme = url.scheme().to_owned();
+                let hls = url.path().to_ascii_lowercase().ends_with(".m3u8");
+                (scheme, hls)
+            }) {
+                Some((scheme, _)) if scheme == "ftp" || scheme == "ftps" => {
+                    TaskOptions::Ftp(FtpOptions::default())
+                }
+                Some((scheme, _)) if scheme == "sftp" => TaskOptions::Sftp(SftpOptions::default()),
+                Some((scheme, true)) if scheme == "http" || scheme == "https" => {
+                    TaskOptions::Hls(HlsOptions::default())
+                }
+                Some((scheme, false)) if scheme == "http" || scheme == "https" => {
+                    TaskOptions::Http(inner.options.http.clone())
+                }
+                _ => TaskOptions::Auto,
+            }
+        }
+        other => other,
+    };
+    match options {
+        TaskOptions::Auto => match inner.store.start(task.id) {
+            Ok(()) => {
+                let _ = inner.store.fail(task.id, "unsupported URL protocol");
+                Err(Error::InvalidState)
+            }
+            Err(error) => Err(error),
+        },
+        TaskOptions::Http(options) => execute_http(
+            &inner.store,
+            task.id,
+            &options,
+            active.cancel.clone(),
+            active.progress.clone(),
+        )
+        .await
+        .map(|_| ()),
+        TaskOptions::Ftp(options) => execute_ftp(
+            &inner.store,
+            task.id,
+            &options,
+            active.cancel.clone(),
+            active.progress.clone(),
+        )
+        .await
+        .map(|_| ()),
+        TaskOptions::Sftp(options) => execute_sftp(
+            &inner.store,
+            task.id,
+            &options,
+            active.cancel.clone(),
+            active.progress.clone(),
+        )
+        .await
+        .map(|_| ()),
+        TaskOptions::Hls(options) => {
+            // hls-engine uses non-Send futures, so its bounded worker owns a
+            // current-thread runtime instead of moving those futures between threads.
+            let store = inner.store.clone();
+            let id = task.id;
+            let cancel = active.cancel.clone();
+            let stop = active.stop.clone();
+            let progress = active.progress.clone();
+            match tokio::task::spawn_blocking(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()?;
+                runtime
+                    .block_on(execute_hls(&store, id, &options, cancel, stop, progress))
+                    .map(|_| ())
+            })
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => Err(Error::Hls),
+            }
+        }
+    }
+}

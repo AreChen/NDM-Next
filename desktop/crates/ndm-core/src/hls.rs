@@ -23,6 +23,7 @@ use reqwest::{
     Client, StatusCode, Url,
     header::{self, HeaderMap},
 };
+use serde::{Deserialize, Serialize};
 use tokio::{fs, io::AsyncReadExt};
 use tokio_util::sync::CancellationToken;
 
@@ -37,7 +38,7 @@ use crate::{
 const MAX_PLAYLIST_BYTES: usize = 2 * 1024 * 1024;
 const MAX_RESOURCE_BYTES: usize = 32 * 1024 * 1024;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HlsOptions {
     /// Zero-based index among playable variants; defaults to the highest bandwidth.
     pub variant_index: Option<usize>,

@@ -20,7 +20,7 @@ use crate::{Error, NewTask, Result, Store, TaskId, secrets};
 
 const MAX_CONNECTIONS: usize = 16;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HttpOptions {
     pub max_connections: usize,
     pub max_bytes_per_second: Option<u64>,
@@ -649,6 +649,7 @@ pub(crate) async fn publish_no_overwrite(
             Ok(()) => return Ok(target),
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(_) => {
+                let mut input = fs::File::open(source).await?;
                 match fs::OpenOptions::new()
                     .write(true)
                     .create_new(true)
@@ -656,11 +657,20 @@ pub(crate) async fn publish_no_overwrite(
                     .await
                 {
                     Ok(mut output) => {
-                        let mut input = fs::File::open(source).await?;
-                        tokio::io::copy(&mut input, &mut output).await?;
-                        output.flush().await?;
-                        output.sync_all().await?;
-                        return Ok(target);
+                        let copied = async {
+                            tokio::io::copy(&mut input, &mut output).await?;
+                            output.flush().await?;
+                            output.sync_all().await
+                        }
+                        .await;
+                        drop(output);
+                        match copied {
+                            Ok(()) => return Ok(target),
+                            Err(error) => {
+                                let _ = fs::remove_file(&target).await;
+                                return Err(error.into());
+                            }
+                        }
                     }
                     Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
                     Err(err) => return Err(err.into()),
@@ -685,5 +695,23 @@ async fn remove_if_present(path: PathBuf) -> Result<()> {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(err) => Err(err.into()),
+    }
+}
+
+#[cfg(test)]
+mod publication_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn missing_source_never_leaves_an_empty_published_target() {
+        let directory = tempfile::tempdir().unwrap();
+        let result = publish_no_overwrite(
+            &directory.path().join("missing.part"),
+            directory.path(),
+            "finished.bin",
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(!directory.path().join("finished.bin").exists());
     }
 }
