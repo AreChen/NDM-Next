@@ -566,7 +566,20 @@ async fn download_hls_with_progress(
         return Err(Error::Hls);
     }
     drop(file);
-    let name = safe_filename(request.suggested_filename.as_deref().unwrap_or("video.mp4"));
+    let suggested = safe_filename(request.suggested_filename.as_deref().unwrap_or("video.mp4"));
+    let path = std::path::Path::new(&suggested);
+    let name = if path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("mp4"))
+    {
+        suggested
+    } else {
+        let stem = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("video");
+        format!("{stem}.mp4")
+    };
     let target = publish_no_overwrite(&temporary, &request.destination, &name).await?;
     let _ = fs::remove_file(&temporary).await;
     let _ = fs::remove_dir(&work_dir).await;

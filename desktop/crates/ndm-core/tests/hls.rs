@@ -149,6 +149,24 @@ async fn scheduler_runs_hls_tasks_in_its_media_worker() {
 }
 
 #[tokio::test]
+async fn hls_output_uses_mp4_extension_even_when_playlist_name_is_suggested() {
+    let base = server(false).await;
+    let dir = TempDir::new().unwrap();
+    let mut task = request(dir.path(), format!("{base}/ts/index.m3u8"));
+    task.suggested_filename = Some("index.m3u8".into());
+    let result = download_hls(
+        &task,
+        TaskId::new_v4(),
+        &HlsOptions::default(),
+        CancellationToken::new(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.path.file_name().unwrap(), "index.mp4");
+}
+
+#[tokio::test]
 async fn master_playlist_selected_external_audio_tracks_are_preserved() {
     let base = server(false).await;
     let dir = TempDir::new().unwrap();
