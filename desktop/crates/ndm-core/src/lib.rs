@@ -10,9 +10,11 @@ mod store;
 pub use ftp::{FtpOptions, FtpSecurity, download_ftp, execute_ftp};
 pub use hls::{
     HlsAudio, HlsCatalog, HlsOptions, HlsOutcome, HlsVariant, download_hls, execute_hls,
-    inspect_hls,
+    inspect_hls, inspect_hls_with_options,
 };
-pub use http::{DownloadProgress, HttpOptions, ProgressSnapshot, download_http, execute_http};
+pub use http::{
+    DownloadProgress, HttpOptions, ProgressSnapshot, ProxyOptions, download_http, execute_http,
+};
 pub use model::{NewTask, Task, TaskId, TaskOptions, TaskState};
 pub use scheduler::{Scheduler, SchedulerEvent, SchedulerOptions};
 pub use sftp::{SftpAuth, SftpOptions, download_sftp, execute_sftp};
@@ -46,6 +48,8 @@ pub enum Error {
     InvalidHttpResponse,
     #[error("download request contains an invalid or reserved header")]
     InvalidHeader,
+    #[error("proxy configuration is invalid")]
+    InvalidProxy,
     #[error("invalid FTP address or unsafe FTP command")]
     InvalidFtpAddress,
     #[error("FTP server connection or transfer failed")]
@@ -73,3 +77,12 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Encrypt data for the current Windows user using the same protection as task credentials.
+pub fn protect_user_data(data: &[u8]) -> Result<Vec<u8>> {
+    secrets::protect(data)
+}
+/// Decrypt data previously protected for the current Windows user.
+pub fn unprotect_user_data(data: &[u8]) -> Result<Vec<u8>> {
+    secrets::unprotect(data)
+}

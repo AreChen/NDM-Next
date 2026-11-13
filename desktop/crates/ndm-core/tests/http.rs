@@ -16,7 +16,8 @@ use axum::{
 };
 use bytes::Bytes;
 use ndm_core::{
-    DownloadProgress, HttpOptions, NewTask, Store, TaskId, TaskState, download_http, execute_http,
+    DownloadProgress, HttpOptions, NewTask, ProxyOptions, Store, TaskId, TaskState, download_http,
+    execute_http,
 };
 use tempfile::TempDir;
 use tokio::{net::TcpListener, sync::RwLock};
@@ -579,6 +580,7 @@ async fn configured_speed_limit_applies_to_the_whole_download() {
     let options = HttpOptions {
         max_connections: 1,
         max_bytes_per_second: Some(65_536),
+        ..Default::default()
     };
     let started = std::time::Instant::now();
     let output = download_http(
@@ -594,6 +596,54 @@ async fn configured_speed_limit_applies_to_the_whole_download() {
         started.elapsed() >= Duration::from_millis(420),
         "speed limit allowed the file to arrive too quickly"
     );
+}
+
+#[tokio::test]
+async fn authenticated_proxy_is_used_for_http_downloads_without_exposing_credentials_in_debug() {
+    let dir = TempDir::new().unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed = calls.clone();
+    let proxy = Router::new().fallback(get(move |headers: HeaderMap| {
+        let observed = observed.clone();
+        async move {
+            if headers
+                .get(header::PROXY_AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                != Some("Basic cHJveHl1c2VyOnByb3h5cGFzcw==")
+            {
+                return (
+                    StatusCode::PROXY_AUTHENTICATION_REQUIRED,
+                    "authentication required",
+                );
+            }
+            observed.fetch_add(1, Ordering::SeqCst);
+            (StatusCode::OK, "proxied content")
+        }
+    }));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, proxy).await.unwrap();
+    });
+    let options = HttpOptions {
+        proxy: Some(ProxyOptions {
+            url: format!("http://{address}"),
+            username: Some("proxyuser".into()),
+            password: Some("proxypass".into()),
+        }),
+        ..Default::default()
+    };
+    let output = download_http(
+        &request(dir.path(), "http://not-resolvable.invalid/file".into()),
+        TaskId::new_v4(),
+        &options,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(std::fs::read(output).unwrap(), b"proxied content");
+    assert!(calls.load(Ordering::SeqCst) >= 1);
+    assert!(!format!("{options:?}").contains("proxypass"));
 }
 
 #[tokio::test]

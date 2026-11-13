@@ -13,6 +13,11 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
-
-[dev-dependencies]
+tokio-util.workspace = true
 tempfile = "3"
+
+[target.'cfg(windows)'.dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+raw-window-handle = "0.6"
+tray-icon = { version = "=0.26.1", default-features = false }
+winreg = "0.56"

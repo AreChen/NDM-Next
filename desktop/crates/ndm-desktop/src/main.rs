@@ -2,6 +2,11 @@
 
 mod instance;
 mod preferences;
+mod protocol_auth;
+#[cfg(windows)]
+mod startup;
+#[cfg(windows)]
+mod tray;
 mod view;
 
 use gpui_kit::{
@@ -9,7 +14,7 @@ use gpui_kit::{
     prelude::*,
     *,
 };
-use ndm_core::{Scheduler, SchedulerOptions, Store};
+use ndm_core::{Scheduler, Store};
 use preferences::{Preferences, Theme};
 use std::{path::PathBuf, sync::Arc};
 use view::Desktop;
@@ -38,12 +43,38 @@ fn main() {
         .unwrap_or_else(std::env::temp_dir)
         .join("NDM Next");
     #[cfg(windows)]
-    let mut instance = match instance::Instance::acquire(&data_dir).expect("create instance lock") {
+    let show_existing = !std::env::args_os().any(|arg| arg == "--background" || arg == "--handoff");
+    #[cfg(windows)]
+    let mut instance = match instance::Instance::acquire(&data_dir, show_existing)
+        .expect("create instance lock")
+    {
         Some(instance) => instance,
         None => return,
     };
     let preferences_path = data_dir.join("preferences.json");
-    let preferences = Preferences::load(&preferences_path).unwrap_or_default();
+    let preferences = match Preferences::load(&preferences_path) {
+        Ok(preferences) => preferences,
+        Err(_) => {
+            #[cfg(windows)]
+            {
+                use windows_sys::Win32::UI::WindowsAndMessaging::{
+                    MB_ICONERROR, MB_OK, MessageBoxW,
+                };
+                let text: Vec<u16> = "无法读取设置或解密代理凭据。请检查当前 Windows 账户和设置文件。\nCould not read settings or decrypt proxy credentials. Check your Windows account and settings file.\0".encode_utf16().collect();
+                let title: Vec<u16> = "NDM Next\0".encode_utf16().collect();
+                // SAFETY: both buffers are null-terminated and remain alive during the call.
+                unsafe {
+                    MessageBoxW(
+                        std::ptr::null_mut(),
+                        text.as_ptr(),
+                        title.as_ptr(),
+                        MB_OK | MB_ICONERROR,
+                    );
+                }
+            }
+            return;
+        }
+    };
     let store = Arc::new(Store::open(&data_dir.join("tasks.db")).expect("open task database"));
     let runtime = Arc::new(
         tokio::runtime::Builder::new_multi_thread()
@@ -53,23 +84,18 @@ fn main() {
     );
     let scheduler = {
         let _guard = runtime.enter();
-        Scheduler::start(
-            store.clone(),
-            SchedulerOptions {
-                max_active_tasks: preferences.max_active_tasks,
-                http: ndm_core::HttpOptions {
-                    max_connections: preferences.max_connections,
-                    ..Default::default()
-                },
-                auto_resume: preferences.auto_resume,
-            },
-        )
-        .expect("start scheduler")
+        Scheduler::start(store.clone(), preferences.scheduler_options()).expect("start scheduler")
     };
+    #[cfg(windows)]
+    let (ui_sender, ui_commands) = tokio::sync::mpsc::unbounded_channel();
     #[cfg(windows)]
     {
         let scheduler = scheduler.clone();
         instance.on_wake(move || scheduler.notify());
+        let sender = ui_sender.clone();
+        instance.on_show(move || {
+            let _ = sender.send(tray::Command::Show);
+        });
     }
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
@@ -84,11 +110,17 @@ fn main() {
             |window, cx| {
                 cx.new(|cx| {
                     Desktop::new(
-                        store,
-                        scheduler,
-                        runtime,
-                        preferences,
-                        preferences_path,
+                        view::DesktopServices {
+                            store,
+                            scheduler,
+                            runtime,
+                            preferences,
+                            preferences_path,
+                            #[cfg(windows)]
+                            ui_sender,
+                            #[cfg(windows)]
+                            commands: ui_commands,
+                        },
                         window,
                         cx,
                     )

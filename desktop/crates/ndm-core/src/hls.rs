@@ -28,10 +28,10 @@ use tokio::{fs, io::AsyncReadExt};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    DownloadProgress, Error, NewTask, Result, Store, TaskId,
+    DownloadProgress, Error, NewTask, ProxyOptions, Result, Store, TaskId,
     http::{
-        RateLimiter, parse_content_range, publish_no_overwrite, request_headers, safe_filename,
-        send,
+        RateLimiter, network_client, parse_content_range, publish_no_overwrite, request_headers,
+        safe_filename, send,
     },
 };
 
@@ -45,6 +45,8 @@ pub struct HlsOptions {
     /// Names in the chosen variant's audio group; defaults to its default track.
     pub audio_names: Vec<String>,
     pub max_bytes_per_second: Option<u64>,
+    #[serde(default)]
+    pub proxy: Option<ProxyOptions>,
 }
 
 #[derive(Clone, Debug)]
@@ -244,19 +246,14 @@ fn network_source(
     request: &NewTask,
     cancel: CancellationToken,
     max_bytes_per_second: Option<u64>,
+    proxy: Option<&ProxyOptions>,
     progress: DownloadProgress,
 ) -> Result<(Arc<NetworkSource>, Url)> {
     let url = Url::parse(&request.url).map_err(|_| Error::Hls)?;
     if !matches!(url.scheme(), "http" | "https") {
         return Err(Error::Hls);
     }
-    let client = Client::builder()
-        .connect_timeout(Duration::from_secs(30))
-        .read_timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::none())
-        .referer(false)
-        .build()
-        .map_err(|_| Error::Hls)?;
+    let client = network_client(proxy)?;
     let source = Arc::new(NetworkSource {
         client,
         origin: url.clone(),
@@ -270,7 +267,21 @@ fn network_source(
 
 /// Retrieve the available quality and external audio choices without downloading media.
 pub async fn inspect_hls(request: &NewTask, cancel: CancellationToken) -> Result<HlsCatalog> {
-    let (source, url) = network_source(request, cancel.clone(), None, DownloadProgress::default())?;
+    inspect_hls_with_options(request, &HlsOptions::default(), cancel).await
+}
+
+pub async fn inspect_hls_with_options(
+    request: &NewTask,
+    options: &HlsOptions,
+    cancel: CancellationToken,
+) -> Result<HlsCatalog> {
+    let (source, url) = network_source(
+        request,
+        cancel.clone(),
+        None,
+        options.proxy.as_ref(),
+        DownloadProgress::default(),
+    )?;
     let text = source
         .read_text(&SourceLocation::Url(url))
         .await
@@ -382,6 +393,7 @@ async fn download_hls_with_progress(
         request,
         cancel.clone(),
         options.max_bytes_per_second,
+        options.proxy.as_ref(),
         progress,
     )?;
     let first = source

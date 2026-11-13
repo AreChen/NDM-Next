@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
+    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -28,6 +29,9 @@ pub struct Preferences {
     pub max_active_tasks: usize,
     pub max_connections: usize,
     pub auto_resume: bool,
+    pub max_kib_per_second: u64,
+    #[serde(skip)]
+    pub proxy: Option<ndm_core::ProxyOptions>,
 }
 
 impl Default for Preferences {
@@ -43,13 +47,29 @@ impl Default for Preferences {
             max_active_tasks: 3,
             max_connections: 4,
             auto_resume: true,
+            max_kib_per_second: 0,
+            proxy: None,
         }
     }
 }
 impl Preferences {
     pub fn load(path: &Path) -> std::io::Result<Self> {
         match fs::read(path) {
-            Ok(data) => serde_json::from_slice(&data).map_err(std::io::Error::other),
+            Ok(data) => {
+                let value: serde_json::Value =
+                    serde_json::from_slice(&data).map_err(std::io::Error::other)?;
+                let mut preferences: Self =
+                    serde_json::from_value(value.clone()).map_err(std::io::Error::other)?;
+                if let Some(encrypted) = value.get("proxy_protected") {
+                    let encrypted: Vec<u8> =
+                        serde_json::from_value(encrypted.clone()).map_err(std::io::Error::other)?;
+                    let clear =
+                        ndm_core::unprotect_user_data(&encrypted).map_err(std::io::Error::other)?;
+                    preferences.proxy =
+                        Some(serde_json::from_slice(&clear).map_err(std::io::Error::other)?);
+                }
+                Ok(preferences)
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(error) => Err(error),
         }
@@ -59,8 +79,38 @@ impl Preferences {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let data = serde_json::to_vec_pretty(self).map_err(std::io::Error::other)?;
-        fs::write(path, data)
+        let mut value = serde_json::to_value(self).map_err(std::io::Error::other)?;
+        if let Some(proxy) = &self.proxy {
+            let clear = serde_json::to_vec(proxy).map_err(std::io::Error::other)?;
+            let encrypted = ndm_core::protect_user_data(&clear).map_err(std::io::Error::other)?;
+            value.as_object_mut().unwrap().insert(
+                "proxy_protected".into(),
+                serde_json::to_value(encrypted).map_err(std::io::Error::other)?,
+            );
+        }
+        let data = serde_json::to_vec_pretty(&value).map_err(std::io::Error::other)?;
+        let mut temporary =
+            tempfile::NamedTempFile::new_in(path.parent().unwrap_or_else(|| Path::new(".")))?;
+        temporary.write_all(&data)?;
+        temporary.as_file().sync_all()?;
+        temporary.persist(path).map_err(std::io::Error::other)?;
+        Ok(())
+    }
+
+    pub fn scheduler_options(&self) -> ndm_core::SchedulerOptions {
+        ndm_core::SchedulerOptions {
+            max_active_tasks: self.max_active_tasks,
+            auto_resume: self.auto_resume,
+            http: ndm_core::HttpOptions {
+                max_connections: self.max_connections,
+                max_bytes_per_second: if self.max_kib_per_second == 0 {
+                    None
+                } else {
+                    Some(self.max_kib_per_second.saturating_mul(1024))
+                },
+                proxy: self.proxy.clone(),
+            },
+        }
     }
 }
 
@@ -82,5 +132,25 @@ mod tests {
         let restored = Preferences::load(&path).unwrap();
         assert_eq!(restored.theme, Theme::Light);
         assert_eq!(restored.max_connections, 4);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn proxy_credentials_are_encrypted_at_rest_and_restored() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("preferences.json");
+        let preferences = Preferences {
+            proxy: Some(ndm_core::ProxyOptions {
+                url: "http://127.0.0.1:8080".into(),
+                username: Some("unique-proxy-user".into()),
+                password: Some("unique-proxy-password".into()),
+            }),
+            ..Default::default()
+        };
+        preferences.save(&path).unwrap();
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(!raw.contains("unique-proxy-user"));
+        assert!(!raw.contains("unique-proxy-password"));
+        assert_eq!(Preferences::load(&path).unwrap(), preferences);
     }
 }

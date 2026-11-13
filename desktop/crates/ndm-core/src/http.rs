@@ -1,4 +1,5 @@
 use std::{
+    fmt,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -24,6 +25,42 @@ const MAX_CONNECTIONS: usize = 16;
 pub struct HttpOptions {
     pub max_connections: usize,
     pub max_bytes_per_second: Option<u64>,
+    #[serde(default)]
+    pub proxy: Option<ProxyOptions>,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProxyOptions {
+    pub url: String,
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
+
+impl fmt::Debug for ProxyOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProxyOptions")
+            .field("url", &"<redacted>")
+            .field("username", &"<redacted>")
+            .field("password", &"<redacted>")
+            .finish()
+    }
+}
+
+impl ProxyOptions {
+    pub fn validate(&self) -> Result<()> {
+        let url = reqwest::Url::parse(&self.url).map_err(|_| Error::InvalidProxy)?;
+        if !matches!(url.scheme(), "http" | "https")
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || (self.username.is_none() && self.password.is_some())
+        {
+            return Err(Error::InvalidProxy);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -106,8 +143,26 @@ impl Default for HttpOptions {
         Self {
             max_connections: 4,
             max_bytes_per_second: None,
+            proxy: None,
         }
     }
+}
+
+pub(crate) fn network_client(proxy: Option<&ProxyOptions>) -> Result<Client> {
+    let mut builder = Client::builder()
+        .connect_timeout(Duration::from_secs(30))
+        .read_timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+        .referer(false);
+    if let Some(config) = proxy {
+        config.validate()?;
+        let mut proxy = reqwest::Proxy::all(&config.url).map_err(|_| Error::InvalidProxy)?;
+        if let Some(username) = &config.username {
+            proxy = proxy.basic_auth(username, config.password.as_deref().unwrap_or(""));
+        }
+        builder = builder.proxy(proxy);
+    }
+    builder.build().map_err(network)
 }
 
 #[derive(PartialEq, Eq, Serialize, Deserialize)]
@@ -136,13 +191,7 @@ async fn download_http_with_progress(
 ) -> Result<PathBuf> {
     progress.0.downloaded.store(0, Ordering::Relaxed);
     progress.set_total(None);
-    let client = Client::builder()
-        .connect_timeout(Duration::from_secs(30))
-        .read_timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::none())
-        .referer(false)
-        .build()
-        .map_err(network)?;
+    let client = network_client(options.proxy.as_ref())?;
     let headers = request_headers(request)?;
     fs::create_dir_all(&request.destination).await?;
     let work_dir = request.destination.join(format!(".ndm-next-{id}"));

@@ -109,6 +109,36 @@ async fn scheduler_runs_queued_tasks_with_bounded_concurrency() {
 }
 
 #[tokio::test]
+async fn updating_concurrency_wakes_waiting_tasks() {
+    let dir = TempDir::new().unwrap();
+    let store = Arc::new(Store::open(&dir.path().join("tasks.db")).unwrap());
+    let (url, peak) = server().await;
+    let ids = [TaskId::new_v4(), TaskId::new_v4()];
+    store.prepare(ids[0], &request(dir.path(), &url)).unwrap();
+    store.commit(ids[0]).unwrap();
+    let scheduler = Scheduler::start(
+        store.clone(),
+        SchedulerOptions {
+            max_active_tasks: 1,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    wait_for(&store, ids[0], TaskState::Running).await;
+    store.prepare(ids[1], &request(dir.path(), &url)).unwrap();
+    store.commit(ids[1]).unwrap();
+    scheduler.update_options(SchedulerOptions {
+        max_active_tasks: 2,
+        ..Default::default()
+    });
+    for id in ids {
+        wait_for(&store, id, TaskState::Completed).await;
+    }
+    assert_eq!(peak.load(Ordering::SeqCst), 2);
+    scheduler.shutdown().await;
+}
+
+#[tokio::test]
 async fn pausing_a_running_task_remains_paused_until_resumed() {
     let dir = TempDir::new().unwrap();
     let store = Arc::new(Store::open(&dir.path().join("tasks.db")).unwrap());

@@ -19,8 +19,10 @@ mod platform {
     pub struct Instance {
         mutex: HANDLE,
         event: HANDLE,
+        show_event: HANDLE,
         stopping: Arc<AtomicBool>,
         worker: Option<JoinHandle<()>>,
+        show_worker: Option<JoinHandle<()>>,
     }
 
     fn wide(value: &str) -> Vec<u16> {
@@ -28,7 +30,7 @@ mod platform {
     }
 
     impl Instance {
-        pub fn acquire(data_dir: &Path) -> io::Result<Option<Self>> {
+        pub fn acquire(data_dir: &Path, show: bool) -> io::Result<Option<Self>> {
             let mut hasher = DefaultHasher::new();
             data_dir.to_string_lossy().to_lowercase().hash(&mut hasher);
             let name = format!("Global\\NDMNext-{:016x}", hasher.finish());
@@ -46,13 +48,22 @@ mod platform {
                     CloseHandle(mutex);
                     return Err(error);
                 }
+                let show_event =
+                    CreateEventW(ptr::null(), 0, 0, wide(&format!("{name}-show")).as_ptr());
+                if show_event.is_null() {
+                    let error = io::Error::last_os_error();
+                    CloseHandle(event);
+                    CloseHandle(mutex);
+                    return Err(error);
+                }
                 if exists {
                     let result = SetEvent(event);
-                    let error = if result == 0 {
+                    let error = if result == 0 || (show && SetEvent(show_event) == 0) {
                         Some(io::Error::last_os_error())
                     } else {
                         None
                     };
+                    CloseHandle(show_event);
                     CloseHandle(event);
                     CloseHandle(mutex);
                     return match error {
@@ -63,8 +74,10 @@ mod platform {
                 Ok(Some(Self {
                     mutex,
                     event,
+                    show_event,
                     stopping: Arc::new(AtomicBool::new(false)),
                     worker: None,
+                    show_worker: None,
                 }))
             }
         }
@@ -85,6 +98,22 @@ mod platform {
                 }
             }));
         }
+
+        pub fn on_show(&mut self, notify: impl Fn() + Send + 'static) {
+            let event = self.show_event as usize;
+            let stopping = self.stopping.clone();
+            self.show_worker = Some(thread::spawn(move || {
+                loop {
+                    // SAFETY: Instance keeps the event open until this worker exits.
+                    if unsafe { WaitForSingleObject(event as HANDLE, INFINITE) } != WAIT_OBJECT_0
+                        || stopping.load(Ordering::Acquire)
+                    {
+                        break;
+                    }
+                    notify();
+                }
+            }));
+        }
     }
 
     impl Drop for Instance {
@@ -93,11 +122,16 @@ mod platform {
             // SAFETY: Handles were created by acquire and remain valid until closed.
             unsafe {
                 SetEvent(self.event);
+                SetEvent(self.show_event);
             }
             if let Some(worker) = self.worker.take() {
                 let _ = worker.join();
             }
+            if let Some(worker) = self.show_worker.take() {
+                let _ = worker.join();
+            }
             unsafe {
+                CloseHandle(self.show_event);
                 CloseHandle(self.event);
                 CloseHandle(self.mutex);
             }
@@ -112,15 +146,27 @@ mod platform {
         #[test]
         fn second_instance_wakes_first_and_does_not_hold_singleton() {
             let dir = tempfile::tempdir().unwrap();
-            let mut first = Instance::acquire(dir.path()).unwrap().unwrap();
+            let mut first = Instance::acquire(dir.path(), true).unwrap().unwrap();
             let (send, receive) = mpsc::channel();
             first.on_wake(move || {
                 let _ = send.send(());
             });
-            assert!(Instance::acquire(dir.path()).unwrap().is_none());
+            let (show_send, show_receive) = mpsc::channel();
+            first.on_show(move || {
+                let _ = show_send.send(());
+            });
+            assert!(Instance::acquire(dir.path(), false).unwrap().is_none());
             receive.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert!(
+                show_receive
+                    .recv_timeout(Duration::from_millis(100))
+                    .is_err()
+            );
+            assert!(Instance::acquire(dir.path(), true).unwrap().is_none());
+            receive.recv_timeout(Duration::from_secs(2)).unwrap();
+            show_receive.recv_timeout(Duration::from_secs(2)).unwrap();
             drop(first);
-            assert!(Instance::acquire(dir.path()).unwrap().is_some());
+            assert!(Instance::acquire(dir.path(), true).unwrap().is_some());
         }
     }
 }

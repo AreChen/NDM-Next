@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, RwLock,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -60,7 +60,7 @@ struct Active {
 }
 struct Inner {
     store: Arc<Store>,
-    options: SchedulerOptions,
+    options: RwLock<SchedulerOptions>,
     active: Mutex<HashMap<TaskId, Active>>,
     wake: Notify,
     shutdown: CancellationToken,
@@ -83,7 +83,7 @@ impl Scheduler {
         let (events, _) = broadcast::channel(128);
         let inner = Arc::new(Inner {
             store,
-            options,
+            options: RwLock::new(options),
             active: Mutex::new(HashMap::new()),
             wake: Notify::new(),
             shutdown: CancellationToken::new(),
@@ -98,6 +98,13 @@ impl Scheduler {
     /// Wake the dispatcher after another component commits a task.
     pub fn notify(&self) {
         self.0.wake.notify_one();
+    }
+
+    /// Update defaults for queued and future tasks. Running workers retain their settings.
+    pub fn update_options(&self, mut options: SchedulerOptions) {
+        options.max_active_tasks = options.max_active_tasks.clamp(1, 32);
+        *self.0.options.write().unwrap() = options;
+        self.notify();
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<SchedulerEvent> {
@@ -180,6 +187,8 @@ async fn dispatch(inner: Arc<Inner>) {
         let notified = inner.wake.notified();
         let capacity = inner
             .options
+            .read()
+            .unwrap()
             .max_active_tasks
             .saturating_sub(inner.active.lock().unwrap().len());
         if capacity > 0 {
@@ -265,6 +274,7 @@ async fn run_one(inner: Arc<Inner>, task: Task, active: Active, done: watch::Sen
 }
 
 async fn execute_one(inner: &Arc<Inner>, task: &Task, active: &Active) -> Result<()> {
+    let defaults = inner.options.read().unwrap().clone();
     let options = match task.options.clone() {
         TaskOptions::Auto => {
             match reqwest::Url::parse(&task.request.url).ok().map(|url| {
@@ -273,17 +283,46 @@ async fn execute_one(inner: &Arc<Inner>, task: &Task, active: &Active) -> Result
                 (scheme, hls)
             }) {
                 Some((scheme, _)) if scheme == "ftp" || scheme == "ftps" => {
-                    TaskOptions::Ftp(FtpOptions::default())
+                    TaskOptions::Ftp(FtpOptions {
+                        max_bytes_per_second: defaults.http.max_bytes_per_second,
+                        ..Default::default()
+                    })
                 }
-                Some((scheme, _)) if scheme == "sftp" => TaskOptions::Sftp(SftpOptions::default()),
+                Some((scheme, _)) if scheme == "sftp" => TaskOptions::Sftp(SftpOptions {
+                    max_bytes_per_second: defaults.http.max_bytes_per_second,
+                    ..Default::default()
+                }),
                 Some((scheme, true)) if scheme == "http" || scheme == "https" => {
-                    TaskOptions::Hls(HlsOptions::default())
+                    TaskOptions::Hls(HlsOptions {
+                        max_bytes_per_second: defaults.http.max_bytes_per_second,
+                        proxy: defaults.http.proxy.clone(),
+                        ..Default::default()
+                    })
                 }
                 Some((scheme, false)) if scheme == "http" || scheme == "https" => {
-                    TaskOptions::Http(inner.options.http.clone())
+                    TaskOptions::Http(defaults.http.clone())
                 }
                 _ => TaskOptions::Auto,
             }
+        }
+        TaskOptions::Hls(mut options) => {
+            options.proxy = options.proxy.or(defaults.http.proxy.clone());
+            options.max_bytes_per_second = options
+                .max_bytes_per_second
+                .or(defaults.http.max_bytes_per_second);
+            TaskOptions::Hls(options)
+        }
+        TaskOptions::Sftp(mut options) => {
+            options.max_bytes_per_second = options
+                .max_bytes_per_second
+                .or(defaults.http.max_bytes_per_second);
+            TaskOptions::Sftp(options)
+        }
+        TaskOptions::Ftp(mut options) => {
+            options.max_bytes_per_second = options
+                .max_bytes_per_second
+                .or(defaults.http.max_bytes_per_second);
+            TaskOptions::Ftp(options)
         }
         other => other,
     };

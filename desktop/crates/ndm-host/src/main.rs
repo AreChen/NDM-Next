@@ -50,6 +50,7 @@ fn run() -> io::Result<()> {
             // The window process owns the scheduler. A second launch wakes the
             // existing process and exits without creating another scheduler.
             let launched = Command::new(&executable)
+                .arg("--handoff")
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
