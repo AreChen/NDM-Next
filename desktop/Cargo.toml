@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/ndm-core"]
+members = ["crates/ndm-core", "crates/ndm-desktop"]
 resolver = "3"
 
 [workspace.package]
@@ -9,6 +9,7 @@ license = "MIT"
 
 [workspace.dependencies]
 futures-util = "0.3"
+gpui-kit = "=0.9.1"
 hls-engine = "=1.2.0"
 m3u8-rs = "6"
 percent-encoding = "2"
