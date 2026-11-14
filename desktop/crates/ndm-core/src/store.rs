@@ -6,7 +6,8 @@ use std::{
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use crate::{
-    Error, HlsOptions, NewTask, Result, SftpOptions, Task, TaskId, TaskOptions, TaskState, secrets,
+    DashOptions, Error, HlsOptions, NewTask, Result, SftpOptions, Task, TaskId, TaskOptions,
+    TaskState, secrets,
 };
 
 pub struct Store {
@@ -316,6 +317,9 @@ impl Store {
         }
         let previous = web_url(&task.request.url)?;
         let options = match task.options {
+            TaskOptions::Auto if previous.path().to_ascii_lowercase().ends_with(".mpd") => {
+                TaskOptions::Dash(DashOptions::default())
+            }
             TaskOptions::Auto if previous.path().to_ascii_lowercase().ends_with(".m3u8") => {
                 TaskOptions::Hls(HlsOptions::default())
             }
@@ -323,6 +327,9 @@ impl Store {
             other => other,
         };
         let mut request = task.request;
+        if matches!(options, TaskOptions::Dash(_)) {
+            request.expected_size = None;
+        }
         if previous.origin() != replacement.origin() {
             request.headers.clear();
             request.source_url = None;

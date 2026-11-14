@@ -16,9 +16,9 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    DownloadProgress, Error, FtpOptions, HlsOptions, HttpOptions, ProgressSnapshot, Result,
-    SftpOptions, Store, Task, TaskId, TaskOptions, TaskState, execute_ftp, execute_hls,
-    execute_http, execute_sftp,
+    DashOptions, DownloadProgress, Error, FtpOptions, HlsOptions, HttpOptions, ProgressSnapshot,
+    Result, SftpOptions, Store, Task, TaskId, TaskOptions, TaskState, execute_dash, execute_ftp,
+    execute_hls, execute_http, execute_sftp,
 };
 
 #[derive(Clone, Debug)]
@@ -40,7 +40,10 @@ impl Default for SchedulerOptions {
 #[derive(Clone, Debug)]
 pub enum SchedulerEvent {
     Started(TaskId),
-    Finished(TaskId),
+    Finished {
+        id: TaskId,
+        progress: ProgressSnapshot,
+    },
     SftpHostKeyRequired {
         id: TaskId,
         fingerprint: String,
@@ -260,6 +263,8 @@ fn remove_owned_partial_files(destination: &Path, id: TaskId) -> Result<()> {
                 | "assembled.part"
                 | "ftp.part"
                 | "sftp.part"
+                | "protocol-resume.bin"
+                | "protocol-resume.pending"
                 | "hls-output.mp4"
                 | "hls-output.mp4.hls-partial"
                 | "hls-checkpoint.sqlite"
@@ -268,7 +273,8 @@ fn remove_owned_partial_files(destination: &Path, id: TaskId) -> Result<()> {
             .strip_prefix("segment-")
             .and_then(|name| name.strip_suffix(".part"))
             .and_then(|index| index.parse::<usize>().ok())
-            .is_some_and(|index| index < 16 && name == format!("segment-{index}.part"));
+            .is_some_and(|index| index < 16 && name == format!("segment-{index}.part"))
+            || crate::dash::owns_partial_name(&name);
         let metadata = std::fs::symlink_metadata(entry.path())?;
         if !known || !metadata.is_file() || is_reparse_point(&metadata) {
             return Err(
@@ -381,9 +387,13 @@ async fn run_one(inner: Arc<Inner>, task: Task, active: Active, done: watch::Sen
     {
         let _ = inner.store.resume(task.id);
     }
+    let progress = active.progress.snapshot();
     inner.active.lock().unwrap().remove(&task.id);
     let _ = done.send(true);
-    let _ = inner.events.send(SchedulerEvent::Finished(task.id));
+    let _ = inner.events.send(SchedulerEvent::Finished {
+        id: task.id,
+        progress,
+    });
     inner.wake.notify_one();
 }
 
@@ -394,8 +404,8 @@ async fn execute_one(inner: &Arc<Inner>, task: &Task, active: &Active) -> Result
         TaskOptions::Auto => {
             match reqwest::Url::parse(&task.request.url).ok().map(|url| {
                 let scheme = url.scheme().to_owned();
-                let hls = url.path().to_ascii_lowercase().ends_with(".m3u8");
-                (scheme, hls)
+                let path = url.path().to_ascii_lowercase();
+                (scheme, path)
             }) {
                 Some((scheme, _)) if scheme == "ftp" || scheme == "ftps" => {
                     TaskOptions::Ftp(FtpOptions {
@@ -407,18 +417,36 @@ async fn execute_one(inner: &Arc<Inner>, task: &Task, active: &Active) -> Result
                     max_bytes_per_second: defaults.http.max_bytes_per_second,
                     ..Default::default()
                 }),
-                Some((scheme, true)) if scheme == "http" || scheme == "https" => {
+                Some((scheme, path))
+                    if (scheme == "http" || scheme == "https") && path.ends_with(".mpd") =>
+                {
+                    TaskOptions::Dash(DashOptions {
+                        max_bytes_per_second: defaults.http.max_bytes_per_second,
+                        proxy: defaults.http.proxy.clone(),
+                        ..Default::default()
+                    })
+                }
+                Some((scheme, path))
+                    if (scheme == "http" || scheme == "https") && path.ends_with(".m3u8") =>
+                {
                     TaskOptions::Hls(HlsOptions {
                         max_bytes_per_second: defaults.http.max_bytes_per_second,
                         proxy: defaults.http.proxy.clone(),
                         ..Default::default()
                     })
                 }
-                Some((scheme, false)) if scheme == "http" || scheme == "https" => {
+                Some((scheme, _)) if scheme == "http" || scheme == "https" => {
                     TaskOptions::Http(defaults.http.clone())
                 }
                 _ => TaskOptions::Auto,
             }
+        }
+        TaskOptions::Dash(mut options) => {
+            options.proxy = options.proxy.or(defaults.http.proxy.clone());
+            options.max_bytes_per_second = options
+                .max_bytes_per_second
+                .or(defaults.http.max_bytes_per_second);
+            TaskOptions::Dash(options)
         }
         TaskOptions::Hls(mut options) => {
             options.proxy = options.proxy.or(defaults.http.proxy.clone());
@@ -481,6 +509,15 @@ async fn execute_one(inner: &Arc<Inner>, task: &Task, active: &Active) -> Result
             .await
             .map(|_| ())
         }
+        TaskOptions::Dash(options) => execute_dash(
+            &inner.store,
+            task.id,
+            &options,
+            active.cancel.clone(),
+            active.progress.clone(),
+        )
+        .await
+        .map(|_| ()),
         TaskOptions::Hls(options) => {
             // hls-engine uses non-Send futures, so its bounded worker owns a
             // current-thread runtime instead of moving those futures between threads.

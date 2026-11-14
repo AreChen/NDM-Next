@@ -12,14 +12,12 @@ use russh::{
 };
 use russh_sftp::client::SftpSession;
 use serde::{Deserialize, Serialize};
-use tokio::{
-    fs,
-    io::{AsyncReadExt, AsyncWriteExt},
-};
+use tokio::{fs, io::AsyncReadExt};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
     DownloadProgress, Error, NewTask, Result, Store, TaskId,
+    continuation::{PartialFile, source_binding},
     http::{RateLimiter, publish_no_overwrite, safe_filename},
 };
 
@@ -204,19 +202,17 @@ async fn download_sftp_with_progress(
         let sftp = SftpSession::new(channel.into_stream())
             .await
             .map_err(|_| Error::SftpTransfer)?;
-        let metadata = sftp
-            .metadata(path.clone())
+        let file = sftp
+            .open(path.clone())
             .await
             .map_err(|_| Error::SftpTransfer)?;
+        // Bind validation and transfer to the same opened handle, avoiding a stat/open race.
+        let metadata = file.metadata().await.map_err(|_| Error::SftpTransfer)?;
         if let (Some(expected), Some(actual)) = (request.expected_size, metadata.size)
             && expected != actual
         {
             return Err(Error::InvalidSftpResponse);
         }
-        let file = sftp
-            .open(path.clone())
-            .await
-            .map_err(|_| Error::SftpTransfer)?;
         Ok((session, sftp, file, metadata))
     };
     let (_session, sftp, mut input, metadata) = tokio::select! {
@@ -230,51 +226,71 @@ async fn download_sftp_with_progress(
     let work_dir = request.destination.join(format!(".ndm-next-{id}"));
     fs::create_dir_all(&work_dir).await?;
     let temporary = work_dir.join("sftp.part");
-    // SFTP metadata does not provide a strong content identity; restart on retry.
-    let mut output = fs::File::create(&temporary).await?;
+    let binding = source_binding(&(&request.url, &options.trusted_fingerprint, &options.auth))?;
+    // Host keys authenticate the server, not a file version. SFTP's size/mtime do not
+    // prove immutable content, so validate every old byte on this handle before reuse.
+    // The handle then already stands at the continuation offset; no unsafe seek is needed.
+    let mut partial =
+        PartialFile::open(&work_dir, &temporary, binding, size, None, &cancel).await?;
     let limiter = RateLimiter::new(options.max_bytes_per_second);
-    let mut written = 0u64;
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-        let count = tokio::select! {
-            biased;
-            _ = cancel.cancelled() => {
-                output.flush().await?;
-                return Err(Error::Cancelled);
+    let transfer = async {
+        let mut buffer = [0u8; 64 * 1024];
+        loop {
+            let count = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => return Err(Error::Cancelled),
+                result = tokio::time::timeout(NETWORK_TIMEOUT, input.read(&mut buffer)) => {
+                    result.map_err(|_| Error::SftpTransfer)??
+                }
+            };
+            if count == 0 {
+                break;
             }
-            result = tokio::time::timeout(NETWORK_TIMEOUT, input.read(&mut buffer)) => {
+            if size
+                .is_some_and(|expected| partial.received().saturating_add(count as u64) > expected)
+            {
+                return Err(Error::InvalidSftpResponse);
+            }
+            limiter.wait(count, &cancel).await?;
+            partial.consume(&buffer[..count]).await?;
+            progress.add(count as u64);
+        }
+        if size.is_some_and(|expected| partial.received() != expected) {
+            return Err(Error::InvalidSftpResponse);
+        }
+        let (after, at_path) = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(Error::Cancelled),
+            result = tokio::time::timeout(NETWORK_TIMEOUT, async {
+                Ok::<_, Error>((
+                    input.metadata().await.map_err(|_| Error::SftpTransfer)?,
+                    sftp.metadata(path.clone()).await.map_err(|_| Error::SftpTransfer)?,
+                ))
+            }) => {
                 result.map_err(|_| Error::SftpTransfer)??
             }
         };
-        if count == 0 {
-            break;
-        }
-        limiter.wait(count, &cancel).await?;
-        output.write_all(&buffer[..count]).await?;
-        progress.add(count as u64);
-        written = written
-            .checked_add(count as u64)
-            .ok_or(Error::InvalidSftpResponse)?;
-        if size.is_some_and(|expected| written > expected) {
+        if metadata.size != after.size
+            || metadata.mtime != after.mtime
+            || metadata.size != at_path.size
+            || metadata.mtime != at_path.mtime
+        {
             return Err(Error::InvalidSftpResponse);
         }
+        partial.finish().await
     }
-    if size.is_some_and(|expected| written != expected) {
-        return Err(Error::InvalidSftpResponse);
+    .await;
+    if transfer.is_err() {
+        partial.save_checkpoint().await?;
     }
-    let after = tokio::select! {
-        biased;
-        _ = cancel.cancelled() => return Err(Error::Cancelled),
-        result = tokio::time::timeout(NETWORK_TIMEOUT, sftp.metadata(path.clone())) => {
-            result.map_err(|_| Error::SftpTransfer)?.map_err(|_| Error::SftpTransfer)?
-        }
-    };
-    if metadata.size != after.size || metadata.mtime != after.mtime {
-        return Err(Error::InvalidSftpResponse);
+    if matches!(transfer, Err(Error::InvalidSftpResponse)) {
+        partial.invalidate().await?;
     }
-    output.flush().await?;
-    output.sync_all().await?;
-    drop(output);
+    transfer?;
+    if cancel.is_cancelled() {
+        return Err(Error::Cancelled);
+    }
+    drop(partial);
     let filename = safe_filename(
         request
             .suggested_filename
@@ -284,7 +300,7 @@ async fn download_sftp_with_progress(
     );
     let target = publish_no_overwrite(&temporary, &request.destination, &filename).await?;
     let _ = fs::remove_file(&temporary).await;
-    let _ = fs::remove_dir(&work_dir).await;
+    PartialFile::cleanup(&work_dir).await;
     Ok(target)
 }
 

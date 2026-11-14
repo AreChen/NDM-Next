@@ -12,6 +12,7 @@ isolang.workspace = true
 m3u8-rs.workspace = true
 percent-encoding.workspace = true
 reqwest.workspace = true
+roxmltree.workspace = true
 russh.workspace = true
 russh-sftp.workspace = true
 rusqlite.workspace = true

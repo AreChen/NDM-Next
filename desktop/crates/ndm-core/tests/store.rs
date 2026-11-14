@@ -127,6 +127,39 @@ fn prepare_and_commit_are_durable_and_idempotent() {
 }
 
 #[test]
+fn replacing_dash_link_preserves_media_processing_and_selected_tracks() {
+    let directory = TempDir::new().unwrap();
+    let store = Store::open(&directory.path().join("tasks.db")).unwrap();
+    for options in [
+        TaskOptions::Auto,
+        TaskOptions::Dash(ndm_core::DashOptions {
+            representation_index: Some(1),
+            audio_indices: vec![0, 1],
+            ..Default::default()
+        }),
+    ] {
+        let id = TaskId::new_v4();
+        let mut request = new_task(directory.path());
+        request.url = "https://example.test/VIDEO.MPD?token=old".into();
+        store.prepare_with_options(id, &request, &options).unwrap();
+        store.commit(id).unwrap();
+        store.pause(id).unwrap();
+        store
+            .update_web_url(id, "https://cdn.test/renewed?id=1")
+            .unwrap();
+        let task = store.get(id).unwrap().unwrap();
+        let TaskOptions::Dash(updated) = task.options else {
+            panic!("DASH kind must survive a suffixless replacement URL")
+        };
+        if let TaskOptions::Dash(original) = options {
+            assert_eq!(updated, original);
+        }
+        assert!(task.request.headers.is_empty());
+        assert_eq!(task.request.expected_size, None);
+    }
+}
+
+#[test]
 fn reused_identifier_with_different_request_is_rejected() {
     let dir = TempDir::new().unwrap();
     let store = Store::open(&dir.path().join("tasks.db")).unwrap();

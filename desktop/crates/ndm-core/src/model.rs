@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, fmt, path::PathBuf};
 
-use crate::{FtpOptions, HlsOptions, HttpOptions, SftpOptions};
+use crate::{DashOptions, FtpOptions, HlsOptions, HttpOptions, SftpOptions};
 use serde::{Deserialize, Serialize};
 
 pub type TaskId = uuid::Uuid;
@@ -16,6 +16,7 @@ pub enum TaskOptions {
     Ftp(FtpOptions),
     Sftp(SftpOptions),
     Hls(HlsOptions),
+    Dash(DashOptions),
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]

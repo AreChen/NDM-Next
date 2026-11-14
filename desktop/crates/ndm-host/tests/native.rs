@@ -81,6 +81,26 @@ fn hls_mime_selects_media_processing_without_treating_playlist_size_as_video_siz
 }
 
 #[test]
+fn dash_mime_selects_media_processing_without_treating_manifest_size_as_video_size() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::open(&dir.path().join("tasks.db")).unwrap());
+    let host = Host::new(store.clone(), dir.path().join("downloads"));
+    let id = TaskId::new_v4();
+    let mut message = request(id);
+    message["task"]["url"] = "https://example.test/manifest?id=4".into();
+    message["task"]["media_type"] = "application/dash+xml; charset=UTF-8".into();
+    assert_eq!(host.handle(message)["ok"], true);
+    let task = store.get(id).unwrap().unwrap();
+    assert!(
+        serde_json::to_value(task.options)
+            .unwrap()
+            .get("Dash")
+            .is_some()
+    );
+    assert_eq!(task.request.expected_size, None);
+}
+
+#[test]
 fn conflict_abort_and_invalid_messages_do_not_start_downloads() {
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(Store::open(&dir.path().join("tasks.db")).unwrap());

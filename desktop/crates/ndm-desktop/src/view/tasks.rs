@@ -1,0 +1,394 @@
+use super::*;
+
+impl Desktop {
+    pub(super) fn task_row(
+        &self,
+        task: &Task,
+        dark: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let id = task.id;
+        let state = task.state;
+        let name = crate::filenames::display_name(task)
+            .unwrap_or_else(|| self.text("未命名下载", "Untitled download").into());
+        let host = reqwest::Url::parse(&task.request.url)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_owned))
+            .unwrap_or_default();
+        let progress = self
+            .scheduler
+            .progress(id)
+            .or_else(|| self.retained_progress.get(&id).cloned());
+        let total = self.task_index.known_size(id).or_else(|| {
+            progress
+                .as_ref()
+                .and_then(|value| value.total)
+                .or(task.request.expected_size)
+        });
+        let done = progress
+            .as_ref()
+            .map(|value| {
+                if value.phase == ndm_core::ProgressPhase::Merging {
+                    value.merged
+                } else {
+                    value.downloaded
+                }
+            })
+            .unwrap_or(0);
+        let ratio = if state == TaskState::Completed {
+            Some(1.)
+        } else if progress
+            .as_ref()
+            .is_some_and(|value| value.phase == ndm_core::ProgressPhase::Finalizing)
+        {
+            progress.as_ref().and_then(|value| {
+                value
+                    .finalization_total_ms
+                    .filter(|total| *total > 0)
+                    .map(|total| (value.finalized_ms as f32 / total as f32).clamp(0., 0.999))
+            })
+        } else if progress.is_some() || state == TaskState::Queued {
+            total
+                .filter(|value| *value > 0)
+                .map(|value| (done as f32 / value as f32).clamp(0., 0.999))
+        } else {
+            None
+        };
+        let status = match state {
+            TaskState::Prepared => self.text("待确认", "Pending"),
+            TaskState::Queued => self.text("等待中", "Queued"),
+            TaskState::Running => match progress.as_ref().map(|p| p.phase) {
+                Some(ndm_core::ProgressPhase::Merging) => self.text("合并中", "Merging"),
+                Some(ndm_core::ProgressPhase::Finalizing) => self.text("封装中", "Finalizing"),
+                _ => self.text("下载中", "Downloading"),
+            },
+            TaskState::Paused => self.text("已暂停", "Paused"),
+            TaskState::Completed => self.text("已完成", "Completed"),
+            TaskState::Failed => self.text("失败", "Failed"),
+        };
+        let (start, end, edge, accent) = match (state, dark) {
+            (TaskState::Running, true) => (0x252044, 0x183e69, 0x49418c, 0xb19bff),
+            (TaskState::Completed, true) => (0x172238, 0x124b40, 0x286055, 0x60e1bc),
+            (TaskState::Paused, true) => (0x222435, 0x443424, 0x62513c, 0xe7ba6f),
+            (TaskState::Failed, true) => (0x252237, 0x4c2836, 0x764052, 0xff929d),
+            (_, true) => (0x1a2134, 0x1c2b42, 0x303e59, 0x9facca),
+            (TaskState::Running, false) => (0xf0ebff, 0xdeefff, 0xc6c0f2, 0x6e4dcc),
+            (TaskState::Completed, false) => (0xf3f8fc, 0xdaf4e9, 0xb4dccc, 0x168262),
+            (TaskState::Paused, false) => (0xf8f7fc, 0xffefd7, 0xe7d3af, 0x9a651d),
+            (TaskState::Failed, false) => (0xf8f4fc, 0xffe2e8, 0xeabdc7, 0xb93752),
+            (_, false) => (0xffffff, 0xedf3fc, 0xdce4f1, 0x697c9c),
+        };
+        let foreground = if dark { 0xf1f3ff } else { 0x22324b };
+        let muted = if dark { 0xa0b0cc } else { 0x6c7b94 };
+        let size = total
+            .map(format_bytes)
+            .unwrap_or_else(|| self.text("大小未知", "Unknown size").into());
+        let speed = self.speed.get(&id).copied().unwrap_or(0);
+        let unverified = state == TaskState::Completed && task.size_verified == Some(false);
+        let error = task.error.as_ref().map(|code| {
+            crate::failure::description(code, self.preferences.language == Language::Chinese)
+                .to_owned()
+        });
+        let pending_key = self.pending_host_keys.contains_key(&id);
+        let is_hls = matches!(task.options, TaskOptions::Hls(_))
+            || reqwest::Url::parse(&task.request.url)
+                .is_ok_and(|url| url.path().ends_with(".m3u8"));
+        let can_edit = matches!(state, TaskState::Paused | TaskState::Failed)
+            && reqwest::Url::parse(&task.request.url)
+                .is_ok_and(|url| matches!(url.scheme(), "http" | "https"));
+        let zh = self.preferences.language == Language::Chinese;
+        let view = cx.entity().downgrade();
+        let more = Button::new(SharedString::from(format!("more-task-{id}")))
+            .small()
+            .ghost()
+            .icon(IconName::Ellipsis)
+            .tooltip(self.text("更多操作", "More actions"))
+            .accessibility_label(self.text("更多操作", "More actions"))
+            .dropdown_menu(move |mut menu, _, _| {
+                if unverified {
+                    menu = menu.item(
+                        PopupMenuItem::new(if zh {
+                            "文件长度未校验"
+                        } else {
+                            "File length unverified"
+                        })
+                        .disabled(true),
+                    );
+                }
+                if let Some(error) = &error {
+                    menu = menu.item(PopupMenuItem::new(error.clone()).disabled(true));
+                }
+                if can_edit {
+                    let view = view.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(if zh {
+                            "更换下载链接"
+                        } else {
+                            "Change download link"
+                        })
+                        .on_click(move |_, window, cx| {
+                            let _ = view.update(cx, |this, cx| {
+                                this.replacement_input
+                                    .update(cx, |input, cx| input.set_value("", window, cx));
+                                this.editing_url = Some(id);
+                                cx.notify();
+                            });
+                        }),
+                    );
+                }
+                if state == TaskState::Running && is_hls {
+                    let view = view.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(if zh {
+                            "停止直播并保存"
+                        } else {
+                            "Stop and save live media"
+                        })
+                        .on_click(move |_, _, cx| {
+                            let _ = view.update(cx, |this, cx| {
+                                if this.scheduler.stop_live(id).is_err() {
+                                    this.notice = Some(
+                                        this.text(
+                                            "无法停止该媒体任务。",
+                                            "Could not stop the media task.",
+                                        )
+                                        .into(),
+                                    );
+                                }
+                                cx.notify();
+                            });
+                        }),
+                    );
+                }
+                if pending_key {
+                    let view = view.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(if zh {
+                            "核对 SFTP 主机密钥"
+                        } else {
+                            "Review SFTP host key"
+                        })
+                        .on_click(move |_, _, cx| {
+                            let _ = view.update(cx, |this, cx| {
+                                this.confirming_host_key = Some(id);
+                                cx.notify();
+                            });
+                        }),
+                    );
+                }
+                if state != TaskState::Prepared {
+                    let view = view.clone();
+                    menu = menu.separator().item(
+                        PopupMenuItem::new(if zh {
+                            "删除任务…"
+                        } else {
+                            "Delete download…"
+                        })
+                        .on_click(move |_, _, cx| {
+                            let _ = view.update(cx, |this, cx| this.confirm_delete(vec![id], cx));
+                        }),
+                    );
+                }
+                menu
+            });
+        let action = match state {
+            TaskState::Queued | TaskState::Running => {
+                Some((IconName::Pause, self.text("暂停", "Pause")))
+            }
+            TaskState::Paused => Some((IconName::Play, self.text("继续", "Resume"))),
+            TaskState::Failed => Some((IconName::RotateCw, self.text("重试", "Retry"))),
+            _ => None,
+        };
+        let mut metrics = div()
+            .w(px(178.))
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .gap(px(4.));
+        if state == TaskState::Running || state == TaskState::Paused || state == TaskState::Queued {
+            metrics = metrics
+                .child(
+                    div()
+                        .flex()
+                        .justify_between()
+                        .text_xs()
+                        .child(
+                            ratio
+                                .map(|value| format!("{}%", (value * 100.).floor() as u32))
+                                .unwrap_or_else(|| "—".into()),
+                        )
+                        .child(div().text_color(rgb(muted)).child(
+                            if state == TaskState::Running {
+                                format!("{}/s", format_bytes(speed))
+                            } else {
+                                size.clone()
+                            },
+                        )),
+                )
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(4.))
+                        .rounded_full()
+                        .overflow_hidden()
+                        .bg(rgba(if dark { 0xffffff20 } else { 0x26365c18 }))
+                        .child(
+                            div()
+                                .h_full()
+                                .w(relative(ratio.unwrap_or(0.)))
+                                .rounded_full()
+                                .bg(linear_gradient(
+                                    90.,
+                                    linear_color_stop(rgb(0x8958ff), 0.),
+                                    linear_color_stop(rgb(0x39cbf3), 1.),
+                                )),
+                        ),
+                );
+        } else {
+            metrics = metrics.child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(if unverified { muted } else { accent }))
+                    .child(if unverified {
+                        self.text("文件长度未校验", "Length unverified").into()
+                    } else if state == TaskState::Failed {
+                        self.text("可重试或更换链接", "Retry or change link").into()
+                    } else {
+                        size.clone()
+                    }),
+            );
+        }
+        div().h(px(58.)).pb(px(6.)).child(
+            div()
+                .w_full()
+                .h_full()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .px(px(10.))
+                .rounded_lg()
+                .border_1()
+                .border_color(rgb(edge))
+                .bg(linear_gradient(
+                    105.,
+                    linear_color_stop(rgb(start), 0.),
+                    linear_color_stop(rgb(end), 1.),
+                ))
+                .child(
+                    Button::new(SharedString::from(format!("select-task-{id}")))
+                        .small()
+                        .ghost()
+                        .icon(if self.selected_tasks.contains(&id) {
+                            IconName::CircleCheck
+                        } else {
+                            IconName::Square
+                        })
+                        .accessibility_label(self.text("选择任务", "Select download"))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if !this.selected_tasks.insert(id) {
+                                this.selected_tasks.remove(&id);
+                            }
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    div()
+                        .size(px(28.))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_md()
+                        .bg(rgba(if dark { 0x8a66ff25 } else { 0x8a66ff18 }))
+                        .text_color(rgb(accent))
+                        .child(Icon::new(IconName::File).with_size(px(18.))),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(rgb(foreground))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .truncate()
+                                .child(name),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(muted))
+                                .truncate()
+                                .child(format!("{host}  ·  {size}")),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_size(px(10.))
+                        .px_2()
+                        .py(px(3.))
+                        .rounded_full()
+                        .text_color(rgb(accent))
+                        .bg(rgba(if dark { 0xffffff0d } else { 0xffffff80 }))
+                        .child(status),
+                )
+                .child(metrics)
+                .when_some(action, |row, (icon, label)| {
+                    row.child(
+                        Button::new(SharedString::from(format!("task-action-{id}")))
+                            .small()
+                            .ghost()
+                            .icon(icon)
+                            .tooltip(label)
+                            .accessibility_label(label)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.task_action(id, state);
+                                cx.notify();
+                            })),
+                    )
+                })
+                .child(
+                    Button::new(SharedString::from(format!("task-progress-{id}")))
+                        .small()
+                        .ghost()
+                        .icon(IconName::ChartPie)
+                        .tooltip(self.text("下载详情", "Download details"))
+                        .accessibility_label(self.text("下载详情", "Download details"))
+                        .on_click(cx.listener(move |this, _, _, cx| this.show_progress(id, cx))),
+                )
+                .child(
+                    Button::new(SharedString::from(format!("task-folder-{id}")))
+                        .small()
+                        .ghost()
+                        .icon(IconName::FolderOpen)
+                        .tooltip(self.text("打开文件夹", "Open folder"))
+                        .accessibility_label(self.text("打开文件夹", "Open folder"))
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.open_task_path(id, false, cx)),
+                        ),
+                )
+                .when(state == TaskState::Completed, |row| {
+                    row.child(
+                        Button::new(SharedString::from(format!("task-open-{id}")))
+                            .small()
+                            .ghost()
+                            .icon(IconName::ExternalLink)
+                            .tooltip(self.text("打开文件", "Open file"))
+                            .accessibility_label(self.text("打开文件", "Open file"))
+                            .on_click(
+                                cx.listener(move |this, _, _, cx| {
+                                    this.open_task_path(id, true, cx)
+                                }),
+                            ),
+                    )
+                })
+                .child(more),
+        )
+    }
+}

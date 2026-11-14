@@ -8,6 +8,65 @@ use ndm_host::{read_frame, write_frame};
 use serde_json::{Value, json};
 
 #[test]
+fn rewriting_manifest_preserves_existing_valid_origins_for_the_same_host() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = dir.path().join("ndm-host.exe");
+    fs::copy(env!("CARGO_BIN_EXE_ndm-host"), &host).unwrap();
+    let first = "caegebfdojcdlkkiaiokeoadefdooamd";
+    let added = "pdkhpmalkocjfkfopjhmopikegpmcbcf";
+    let edge = "hiblommiheggidolemmnnlocmocebckp";
+    let write = |preserve: bool, ids: &[&str]| {
+        Command::new(&host)
+            .arg("--write-manifest")
+            .arg("com.ndmnext.host")
+            .args(if preserve {
+                vec!["--preserve-origins"]
+            } else {
+                vec![]
+            })
+            .args(ids)
+            .status()
+            .unwrap()
+    };
+    assert!(write(false, &[first, added]).success());
+    let path = dir.path().join("native-messaging-host.json");
+    let mut existing: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    existing["allowed_origins"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("*"));
+    fs::write(&path, serde_json::to_vec(&existing).unwrap()).unwrap();
+    assert!(write(true, &[first, edge]).success());
+    let updated: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        updated["allowed_origins"],
+        json!([
+            format!("chrome-extension://{first}/"),
+            format!("chrome-extension://{edge}/"),
+            format!("chrome-extension://{added}/")
+        ])
+    );
+    let mut other_host = updated;
+    other_host["path"] = json!(dir.path().join("another-host.exe"));
+    fs::write(&path, serde_json::to_vec(&other_host).unwrap()).unwrap();
+    assert!(write(true, &[first, edge]).success());
+    let replaced: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        replaced["allowed_origins"],
+        json!([
+            format!("chrome-extension://{first}/"),
+            format!("chrome-extension://{edge}/")
+        ])
+    );
+    assert!(write(false, &[first]).success());
+    let reset: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        reset["allowed_origins"],
+        json!([format!("chrome-extension://{first}/")])
+    );
+}
+
+#[test]
 fn host_process_exchanges_framed_messages_and_reopens_durable_storage() {
     let dir = tempfile::tempdir().unwrap();
     let bin = dir.path().join("bin");
@@ -80,4 +139,386 @@ fn process_status_detects_a_desktop_instance_for_the_same_profile() {
     // SAFETY: The handle was just created and is still open.
     unsafe { CloseHandle(mutex) };
     assert_eq!(status(), 0);
+}
+
+#[cfg(windows)]
+#[test]
+fn installation_namespace_command_returns_profile_guard_without_newline() {
+    let dir = tempfile::tempdir().unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_ndm-host"))
+        .arg("--installation-namespace")
+        .env("LOCALAPPDATA", dir.path())
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    let expected = format!(
+        "{}-installing",
+        ndm_core::desktop_instance_namespace(&dir.path().join("NDM Next"))
+    );
+    assert_eq!(String::from_utf8(result.stdout).unwrap(), expected);
+    assert!(!dir.path().join("NDM Next/tasks.db").exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn native_host_does_not_open_storage_during_installation() {
+    use windows_sys::Win32::{Foundation::CloseHandle, System::Threading::CreateMutexW};
+    let dir = tempfile::tempdir().unwrap();
+    let name: Vec<u16> = format!(
+        "{}-installing",
+        ndm_core::desktop_instance_namespace(&dir.path().join("NDM Next"))
+    )
+    .encode_utf16()
+    .chain(Some(0))
+    .collect();
+    // SAFETY: This test creates and closes the guard for an isolated profile.
+    let guard = unsafe { CreateMutexW(std::ptr::null(), 1, name.as_ptr()) };
+    assert!(!guard.is_null());
+    let result = Command::new(env!("CARGO_BIN_EXE_ndm-host"))
+        .env("LOCALAPPDATA", dir.path())
+        .output()
+        .unwrap();
+    unsafe {
+        CloseHandle(guard);
+    }
+    assert!(result.stdout.is_empty());
+    assert!(
+        !dir.path().join("NDM Next/tasks.db").exists(),
+        "native host must not open task storage during replacement"
+    );
+}
+
+#[cfg(windows)]
+mod shutdown {
+    use super::*;
+    use std::{
+        path::{Path, PathBuf},
+        process::Child,
+        thread,
+        time::{Duration, Instant},
+    };
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, WAIT_OBJECT_0},
+        System::Threading::{CreateEventW, CreateMutexW, ResetEvent, WaitForSingleObject},
+    };
+
+    struct Fixture {
+        child: Child,
+        marker: PathBuf,
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+    fn fixture(image: &Path, profile: &Path, marker: &Path, mode: &str) -> Fixture {
+        fs::create_dir_all(image.parent().unwrap()).unwrap();
+        if !image.exists() {
+            fs::copy(std::env::current_exe().unwrap(), image).unwrap();
+        }
+        let child = Command::new(image)
+            .args([
+                "--exact",
+                "shutdown::fixture_process",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("NDM_TEST_SHUTDOWN_PROFILE", profile)
+            .env("NDM_TEST_SHUTDOWN_MARKER", marker)
+            .env("NDM_TEST_SHUTDOWN_MODE", mode)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let result = Fixture {
+            child,
+            marker: marker.to_owned(),
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !marker.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(marker.exists(), "isolated fixture did not initialize");
+        result
+    }
+    fn helper(image: &Path, profile: &Path) -> std::process::Output {
+        Command::new(env!("CARGO_BIN_EXE_ndm-host"))
+            .arg("--shutdown-desktop")
+            .arg(image)
+            .arg("--data-dir")
+            .arg(profile)
+            .output()
+            .unwrap()
+    }
+    #[test]
+    #[ignore = "only launched as an isolated child by shutdown tests"]
+    fn fixture_process() {
+        let Some(profile) = std::env::var_os("NDM_TEST_SHUTDOWN_PROFILE") else {
+            return;
+        };
+        let marker = PathBuf::from(std::env::var_os("NDM_TEST_SHUTDOWN_MARKER").unwrap());
+        let mode = std::env::var("NDM_TEST_SHUTDOWN_MODE").unwrap();
+        let name = ndm_core::desktop_instance_namespace(Path::new(&profile));
+        let wide = |suffix: &str| {
+            format!("{name}-{suffix}")
+                .encode_utf16()
+                .chain(Some(0))
+                .collect::<Vec<_>>()
+        };
+        unsafe {
+            let mutex = CreateMutexW(std::ptr::null(), 0, wide("mutex").as_ptr());
+            let ready = CreateEventW(std::ptr::null(), 1, 1, wide("ready").as_ptr());
+            let event = if mode == "legacy" {
+                std::ptr::null_mut()
+            } else {
+                CreateEventW(std::ptr::null(), 0, 0, wide("shutdown").as_ptr())
+            };
+            assert!(!mutex.is_null() && !ready.is_null());
+            let _media_child = std::env::var_os("NDM_TEST_MEDIA_IMAGE").map(|image| {
+                let media_marker = marker.with_extension("media");
+                let child = Command::new(image)
+                    .args([
+                        "--exact",
+                        "shutdown::fixture_process",
+                        "--ignored",
+                        "--nocapture",
+                    ])
+                    .env_remove("NDM_TEST_MEDIA_IMAGE")
+                    .env("NDM_TEST_SHUTDOWN_MODE", "legacy")
+                    .env(
+                        "NDM_TEST_SHUTDOWN_PROFILE",
+                        Path::new(&profile).join("media"),
+                    )
+                    .env("NDM_TEST_SHUTDOWN_MARKER", &media_marker)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .unwrap();
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while !media_marker.exists() && Instant::now() < deadline {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                assert!(media_marker.exists());
+                child
+            });
+            fs::write(&marker, std::process::id().to_string()).unwrap();
+            if event.is_null() {
+                thread::sleep(Duration::from_secs(30));
+            } else if WaitForSingleObject(event, 30_000) == WAIT_OBJECT_0 {
+                ResetEvent(ready);
+                fs::write(marker.with_extension("requested"), b"shutdown").unwrap();
+                if mode == "hang" {
+                    thread::sleep(Duration::from_secs(30));
+                }
+            }
+            if !event.is_null() {
+                CloseHandle(event);
+            }
+            CloseHandle(ready);
+            CloseHandle(mutex);
+        }
+    }
+    #[test]
+    fn shutdown_command_signals_and_waits_for_matching_desktop() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join("install/ndm-desktop.exe");
+        let profile = dir.path().join("profile/NDM Next");
+        let mut child = fixture(
+            &image,
+            &profile,
+            &dir.path().join("desktop.ready"),
+            "graceful",
+        );
+        let result = helper(&image, &profile);
+        assert!(
+            child.marker.with_extension("requested").exists(),
+            "helper did not request graceful shutdown"
+        );
+        assert!(result.status.success(), "{:?}", result);
+        assert!(
+            child.child.try_wait().unwrap().is_some(),
+            "helper must wait for the desktop to exit"
+        );
+    }
+
+    #[test]
+    fn legacy_shutdown_only_terminates_the_canonical_installation_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = dir.path().join("profile/NDM Next");
+        let image = dir.path().join("install/ndm-desktop.exe");
+        let mut matching = fixture(
+            &image,
+            &profile,
+            &dir.path().join("matching.ready"),
+            "legacy",
+        );
+        let mut unrelated = fixture(
+            &dir.path().join("other/ndm-desktop.exe"),
+            &dir.path().join("other-profile"),
+            &dir.path().join("unrelated.ready"),
+            "legacy",
+        );
+        let result = helper(&image, &profile);
+        assert!(result.status.success(), "{:?}", result);
+        assert!(matching.child.try_wait().unwrap().is_some());
+        assert!(
+            unrelated.child.try_wait().unwrap().is_none(),
+            "same basename in another directory must survive"
+        );
+    }
+
+    #[test]
+    fn graceful_timeout_preserves_the_active_desktop() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join("install/ndm-desktop.exe");
+        let profile = dir.path().join("profile/NDM Next");
+        let mut matching = fixture(&image, &profile, &dir.path().join("matching.ready"), "hang");
+        let error =
+            ndm_core::shutdown_desktop_installation(&profile, &image, Duration::from_millis(150))
+                .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        assert!(matching.marker.with_extension("requested").exists());
+        assert!(
+            matching.child.try_wait().unwrap().is_none(),
+            "graceful timeout must not terminate active jobs"
+        );
+    }
+
+    #[test]
+    fn a_different_installation_owning_the_profile_is_not_signaled() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join("install/ndm-desktop.exe");
+        fs::create_dir_all(image.parent().unwrap()).unwrap();
+        fs::write(&image, b"not running").unwrap();
+        let profile = dir.path().join("profile/NDM Next");
+        let mut unrelated = fixture(
+            &dir.path().join("other/ndm-desktop.exe"),
+            &profile,
+            &dir.path().join("other.ready"),
+            "graceful",
+        );
+        assert_eq!(helper(&image, &profile).status.code(), Some(3));
+        assert!(!unrelated.marker.with_extension("requested").exists());
+        assert!(unrelated.child.try_wait().unwrap().is_none());
+    }
+
+    #[test]
+    fn relative_or_unexpected_desktop_image_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = dir.path().join("profile/NDM Next");
+        assert!(
+            !helper(Path::new("ndm-desktop.exe"), &profile)
+                .status
+                .success()
+        );
+        assert!(
+            !helper(&dir.path().join("other.exe"), &profile)
+                .status
+                .success()
+        );
+    }
+
+    #[test]
+    fn shutdown_releases_only_installed_hosts_and_descendant_media() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join("install/ndm-desktop.exe");
+        let media = dir.path().join("install/ffmpeg/ffmpeg.exe");
+        fs::create_dir_all(media.parent().unwrap()).unwrap();
+        fs::copy(std::env::current_exe().unwrap(), &media).unwrap();
+        // Independent tools at the same exact image are not owned by the desktop.
+        let mut independent = fixture(
+            &media,
+            &dir.path().join("tool-profile"),
+            &dir.path().join("tool.ready"),
+            "legacy",
+        );
+        fs::copy(std::env::current_exe().unwrap(), &image).unwrap();
+        let profile = dir.path().join("profile/NDM Next");
+        let marker = dir.path().join("desktop.ready");
+        let child = Command::new(&image)
+            .args([
+                "--exact",
+                "shutdown::fixture_process",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("NDM_TEST_SHUTDOWN_PROFILE", &profile)
+            .env("NDM_TEST_SHUTDOWN_MARKER", &marker)
+            .env("NDM_TEST_SHUTDOWN_MODE", "graceful")
+            .env("NDM_TEST_MEDIA_IMAGE", &media)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut desktop = Fixture {
+            child,
+            marker: marker.clone(),
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !marker.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(marker.exists());
+        let media_pid: u32 = fs::read_to_string(marker.with_extension("media"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        let media_handle = unsafe {
+            windows_sys::Win32::System::Threading::OpenProcess(
+                windows_sys::Win32::System::Threading::SYNCHRONIZATION_SYNCHRONIZE,
+                0,
+                media_pid,
+            )
+        };
+        assert!(!media_handle.is_null());
+        let host_image = dir.path().join("install/ndm-host.exe");
+        fs::copy(env!("CARGO_BIN_EXE_ndm-host"), &host_image).unwrap();
+        let host_child = Command::new(&host_image)
+            .env("LOCALAPPDATA", dir.path().join("host-profile"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut host = Fixture {
+            child: host_child,
+            marker: dir.path().join("unused"),
+        };
+        let unrelated_host_image = dir.path().join("other/ndm-host.exe");
+        fs::create_dir_all(unrelated_host_image.parent().unwrap()).unwrap();
+        fs::copy(env!("CARGO_BIN_EXE_ndm-host"), &unrelated_host_image).unwrap();
+        let unrelated_host_child = Command::new(unrelated_host_image)
+            .env("LOCALAPPDATA", dir.path().join("other-host-profile"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut unrelated_host = Fixture {
+            child: unrelated_host_child,
+            marker: dir.path().join("unused"),
+        };
+        let result = helper(&image, &profile);
+        let media_exited = unsafe { WaitForSingleObject(media_handle, 1_000) } == WAIT_OBJECT_0;
+        unsafe {
+            CloseHandle(media_handle);
+        }
+        assert!(result.status.success(), "{:?}", result);
+        assert!(desktop.child.try_wait().unwrap().is_some());
+        assert!(
+            host.child.try_wait().unwrap().is_some(),
+            "installation native host must release its executable"
+        );
+        assert!(
+            media_exited,
+            "desktop's media child must release its executable"
+        );
+        assert!(
+            independent.child.try_wait().unwrap().is_none(),
+            "independent media at the same path must survive"
+        );
+        assert!(
+            unrelated_host.child.try_wait().unwrap().is_none(),
+            "other installation's native host must survive"
+        );
+    }
 }

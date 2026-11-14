@@ -3,19 +3,17 @@ use std::{path::PathBuf, time::Duration};
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use suppaftp::{
-    Status,
+    FtpError, Status,
     async_native_tls::{Certificate, TlsConnector},
     tokio::{AsyncNativeTlsConnector, AsyncNativeTlsFtpStream},
     types::FileType,
 };
-use tokio::{
-    fs,
-    io::{AsyncReadExt, AsyncWriteExt},
-};
+use tokio::{fs, io::AsyncReadExt};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
     DownloadProgress, Error, NewTask, Result, Store, TaskId,
+    continuation::{PartialFile, source_binding},
     http::{RateLimiter, publish_no_overwrite, safe_filename},
 };
 
@@ -60,7 +58,7 @@ pub async fn execute_ftp(
         Err(error) => {
             let reason = match error {
                 Error::FtpAuthentication => "FTP authentication failed",
-                Error::InvalidFtpResponse => "FTP server returned an inconsistent file size",
+                Error::InvalidFtpResponse => "FTP file changed or failed integrity validation",
                 Error::Io(_) => "file or operating system error",
                 _ => "FTP connection or transfer failed",
             };
@@ -164,9 +162,12 @@ async fn download_ftp_with_progress(
         {
             return Err(Error::InvalidFtpResponse);
         }
-        Ok((ftp, size.or(request.expected_size)))
+        let size = size.or(request.expected_size);
+        let modified = ftp.mdtm(&path).await.ok();
+        let sha256 = remote_sha256(&mut ftp, &path, size).await;
+        Ok((ftp, size, modified, sha256))
     };
-    let (mut ftp, size) = tokio::select! {
+    let (mut ftp, size, modified, sha256) = tokio::select! {
         biased;
         _ = cancel.cancelled() => return Err(Error::Cancelled),
         result = tokio::time::timeout(NETWORK_TIMEOUT, setup) => result.map_err(|_| Error::FtpTransfer)??,
@@ -176,56 +177,92 @@ async fn download_ftp_with_progress(
     let work_dir = request.destination.join(format!(".ndm-next-{id}"));
     fs::create_dir_all(&work_dir).await?;
     let temporary = work_dir.join("ftp.part");
-    // FTP SIZE and timestamps are not strong enough to safely identify an old file.
-    // Restart from zero unless a future protocol-specific validator proves identity.
-    let mut output = fs::File::create(&temporary).await?;
-    let mut data = tokio::select! {
-        biased;
-        _ = cancel.cancelled() => return Err(Error::Cancelled),
-        result = tokio::time::timeout(NETWORK_TIMEOUT, ftp.retr_as_stream(&path)) => {
-            result.map_err(|_| Error::FtpTransfer)?.map_err(|_| Error::FtpTransfer)?
-        }
-    };
+    let binding = source_binding(&(&request.url, security, &options.additional_ca_der))?;
+    let mut partial =
+        PartialFile::open(&work_dir, &temporary, binding, size, sha256, &cancel).await?;
     let limiter = RateLimiter::new(options.max_bytes_per_second);
-    let mut written = 0u64;
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-        let count = tokio::select! {
+    let transfer = async {
+        let mut offset = partial.resume_offset();
+        if offset > 0 {
+            ftp.resume_transfer(usize::try_from(offset).map_err(|_| Error::InvalidFtpResponse)?)
+                .await.map_err(|_| Error::FtpTransfer)?;
+        }
+        let open = tokio::select! {
             biased;
-            _ = cancel.cancelled() => {
-                output.flush().await?;
-                return Err(Error::Cancelled);
-            }
-            result = tokio::time::timeout(NETWORK_TIMEOUT, data.read(&mut buffer)) => {
-                result.map_err(|_| Error::FtpTransfer)??
+            _ = cancel.cancelled() => return Err(Error::Cancelled),
+            result = tokio::time::timeout(NETWORK_TIMEOUT, ftp.retr_as_stream(&path)) => {
+                result.map_err(|_| Error::FtpTransfer)?
             }
         };
-        if count == 0 {
-            break;
+        let mut data = match open {
+            Ok(data) => data,
+            Err(FtpError::UnexpectedResponse(response)) if offset > 0 && matches!(response.status.code(), 500 | 501 | 502 | 504 | 550) => {
+                // REST is optional. Keep the saved file, but re-read/compare its prefix.
+                partial.require_prefix_validation();
+                offset = 0;
+                ftp.resume_transfer(0).await.map_err(|_| Error::FtpTransfer)?;
+                tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => return Err(Error::Cancelled),
+                    result = tokio::time::timeout(NETWORK_TIMEOUT, ftp.retr_as_stream(&path)) => {
+                        result.map_err(|_| Error::FtpTransfer)?.map_err(|_| Error::FtpTransfer)?
+                    }
+                }
+            }
+            Err(_) => return Err(Error::FtpTransfer),
+        };
+        progress.add_existing(offset);
+        let mut buffer = [0u8; 64 * 1024];
+        loop {
+            let count = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => return Err(Error::Cancelled),
+                result = tokio::time::timeout(NETWORK_TIMEOUT, data.read(&mut buffer)) => {
+                    result.map_err(|_| Error::FtpTransfer)??
+                }
+            };
+            if count == 0 { break; }
+            if size.is_some_and(|expected| partial.received().saturating_add(count as u64) > expected) {
+                return Err(Error::InvalidFtpResponse);
+            }
+            limiter.wait(count, &cancel).await?;
+            partial.consume(&buffer[..count]).await?;
+            progress.add(count as u64);
         }
-        limiter.wait(count, &cancel).await?;
-        output.write_all(&buffer[..count]).await?;
-        progress.add(count as u64);
-        written = written
-            .checked_add(count as u64)
-            .ok_or(Error::InvalidFtpResponse)?;
-        if size.is_some_and(|expected| written > expected) {
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(Error::Cancelled),
+            result = tokio::time::timeout(NETWORK_TIMEOUT, data.finish()) => {
+                result.map_err(|_| Error::FtpTransfer)?.map_err(|_| Error::FtpTransfer)?;
+            }
+        }
+        if size.is_some_and(|expected| partial.received() != expected) {
             return Err(Error::InvalidFtpResponse);
         }
-    }
-    tokio::select! {
-        biased;
-        _ = cancel.cancelled() => return Err(Error::Cancelled),
-        result = tokio::time::timeout(NETWORK_TIMEOUT, data.finish()) => {
-            result.map_err(|_| Error::FtpTransfer)?.map_err(|_| Error::FtpTransfer)?;
+        let (after_modified, after_sha256) = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(Error::Cancelled),
+            result = tokio::time::timeout(NETWORK_TIMEOUT, async {
+                (ftp.mdtm(&path).await.ok(), if sha256.is_some() { remote_sha256(&mut ftp, &path, size).await } else { None })
+            }) => result.map_err(|_| Error::FtpTransfer)?,
+        };
+        if modified != after_modified || sha256 != after_sha256 || !partial.matches_remote_hash() {
+            return Err(Error::InvalidFtpResponse);
         }
+        partial.finish().await
+    }.await;
+    if transfer.is_err() {
+        partial.save_checkpoint().await?;
     }
-    if size.is_some_and(|expected| written != expected) {
-        return Err(Error::InvalidFtpResponse);
+    if matches!(transfer, Err(Error::InvalidFtpResponse)) {
+        // A digest mismatch or inconsistent transfer must never authorize a future REST.
+        partial.invalidate().await?;
     }
-    output.flush().await?;
-    output.sync_all().await?;
-    drop(output);
+    transfer?;
+    if cancel.is_cancelled() {
+        return Err(Error::Cancelled);
+    }
+    drop(partial);
     let filename = safe_filename(
         request
             .suggested_filename
@@ -235,9 +272,46 @@ async fn download_ftp_with_progress(
     );
     let target = publish_no_overwrite(&temporary, &request.destination, &filename).await?;
     let _ = fs::remove_file(&temporary).await;
-    let _ = fs::remove_dir(&work_dir).await;
+    PartialFile::cleanup(&work_dir).await;
     let _ = tokio::time::timeout(Duration::from_secs(1), ftp.quit()).await;
     Ok(target)
+}
+
+/// Optional HASH extension, deliberately restricted to an unambiguous full-file SHA-256.
+/// Other hashes/ranges/legacy response formats fall back to full-prefix verification.
+async fn remote_sha256(
+    ftp: &mut AsyncNativeTlsFtpStream,
+    path: &str,
+    size: Option<u64>,
+) -> Option<[u8; 32]> {
+    let size = size.filter(|size| *size > 0)?;
+    ftp.custom_command("OPTS HASH SHA-256", &[Status::CommandOk])
+        .await
+        .ok()?;
+    let response = ftp
+        .custom_command(format!("HASH {path}"), &[Status::File])
+        .await
+        .ok()?
+        .as_string()
+        .ok()?;
+    let line = response.lines().last()?.strip_prefix("213 ")?;
+    let mut fields = line.splitn(4, ' ');
+    if !fields.next()?.eq_ignore_ascii_case("SHA-256") {
+        return None;
+    }
+    let (start, end) = fields.next()?.split_once('-')?;
+    if start.parse::<u64>().ok()? != 0 || end.parse::<u64>().ok()?.checked_add(1)? != size {
+        return None;
+    }
+    let hex = fields.next()?;
+    if hex.len() != 64 || fields.next()? != path {
+        return None;
+    }
+    let mut digest = [0; 32];
+    for (byte, pair) in digest.iter_mut().zip(hex.as_bytes().as_chunks::<2>().0) {
+        *byte = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
+    }
+    Some(digest)
 }
 
 fn decode_field(field: &str) -> Result<String> {

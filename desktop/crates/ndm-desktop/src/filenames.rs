@@ -10,10 +10,12 @@ fn url_filename(url: &Url) -> Option<String> {
 }
 
 pub(crate) fn manual_suggestion(url: &Url, options: &TaskOptions) -> Option<String> {
-    let is_hls = matches!(options, TaskOptions::Hls(_))
+    let is_media = matches!(options, TaskOptions::Hls(_) | TaskOptions::Dash(_))
         || (matches!(options, TaskOptions::Auto)
-            && url.path().to_ascii_lowercase().ends_with(".m3u8"));
-    if is_hls { url_filename(url) } else { None }
+            && [".m3u8", ".mpd"]
+                .iter()
+                .any(|extension| url.path().to_ascii_lowercase().ends_with(extension)));
+    if is_media { url_filename(url) } else { None }
 }
 
 pub(crate) fn display_name(task: &Task) -> Option<String> {
@@ -76,5 +78,24 @@ mod tests {
             display_name(&task(url.as_str())).as_deref(),
             Some("下载.m3u8")
         );
+    }
+
+    #[test]
+    fn dash_manual_requests_keep_the_decoded_manifest_name_for_media_naming() {
+        let url = Url::parse("https://example.test/%E4%B8%8B%E8%BD%BD.MPD").unwrap();
+        assert_eq!(
+            manual_suggestion(&url, &TaskOptions::Auto).as_deref(),
+            Some("下载.MPD")
+        );
+        assert_eq!(
+            manual_suggestion(&url, &TaskOptions::Dash(Default::default())).as_deref(),
+            Some("下载.MPD")
+        );
+        let endpoint = Url::parse("https://example.test/stream?id=42").unwrap();
+        assert_eq!(
+            manual_suggestion(&endpoint, &TaskOptions::Dash(Default::default())).as_deref(),
+            Some("stream")
+        );
+        assert_eq!(manual_suggestion(&endpoint, &TaskOptions::Auto), None);
     }
 }

@@ -14,6 +14,7 @@ use windows_sys::Win32::{
 #[derive(Clone, Copy)]
 pub enum Command {
     Show,
+    Refresh,
     Quit,
 }
 

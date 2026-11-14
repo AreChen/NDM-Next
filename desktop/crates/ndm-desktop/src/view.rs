@@ -1,27 +1,40 @@
 use crate::{
     apply_theme,
+    library::{Category, SortOrder, TaskIndex},
     preferences::{Language, Preferences, Theme},
+    progress::ProgressWindow,
     protocol_auth::{AuthFields, apply as apply_protocol_auth},
+    speed::SpeedMeter,
     updates::{self, UpdateState},
 };
 use gpui_kit::{
     component::{
+        Icon, IconName, Sizable,
         button::{Button, ButtonVariants},
         input::{Input, InputState},
+        menu::{DropdownMenu, PopupMenuItem},
     },
     prelude::*,
     *,
 };
 use ndm_core::{
-    FtpSecurity, HlsCatalog, HlsOptions, NewTask, ProxyOptions, Scheduler, SchedulerEvent, Store,
-    Task, TaskId, TaskOptions, TaskState, inspect_hls_with_options,
+    DashCatalog, DashOptions, FtpSecurity, HlsCatalog, HlsOptions, NewTask, ProxyOptions,
+    Scheduler, SchedulerEvent, Store, Task, TaskId, TaskOptions, TaskState,
+    inspect_dash_with_options, inspect_hls_with_options,
 };
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
 };
+
+mod media;
+mod settings;
+mod tasks;
+mod updating;
+
+gpui_kit::actions!(ndm_next, [FocusSearch]);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Section {
@@ -29,6 +42,11 @@ enum Section {
     Active,
     Completed,
     Settings,
+}
+
+enum MediaCatalog {
+    Hls(HlsCatalog),
+    Dash(DashCatalog),
 }
 
 #[derive(Clone)]
@@ -44,6 +62,13 @@ pub(crate) struct Desktop {
     preferences: Preferences,
     preferences_path: PathBuf,
     url_input: Entity<InputState>,
+    search_input: Entity<InputState>,
+    search_query: String,
+    task_index: TaskIndex,
+    matching_tasks: Vec<usize>,
+    category: Category,
+    sort_order: SortOrder,
+    settings_open: HashSet<usize>,
     replacement_input: Entity<InputState>,
     directory_input: Entity<InputState>,
     active_input: Entity<InputState>,
@@ -62,10 +87,17 @@ pub(crate) struct Desktop {
     pending_host_keys: HashMap<TaskId, PendingHostKey>,
     confirming_host_key: Option<TaskId>,
     editing_url: Option<TaskId>,
-    deleting_task: Option<TaskId>,
+    delete_dialog: Option<AnyWindowHandle>,
+    deleting: bool,
+    selected_tasks: HashSet<TaskId>,
+    sidebar_collapsed: bool,
+    new_download_open: bool,
     hls_catalog: Option<(String, HlsCatalog)>,
     hls_variant: Option<usize>,
     hls_audio: Vec<String>,
+    dash_catalog: Option<(String, DashCatalog)>,
+    dash_variant: Option<usize>,
+    dash_audio: Vec<usize>,
     inspecting_hls: bool,
     #[cfg(windows)]
     tray: Option<crate::tray::Tray>,
@@ -73,11 +105,15 @@ pub(crate) struct Desktop {
     startup_enabled: bool,
     section: Section,
     tasks: Vec<Task>,
-    sample: HashMap<TaskId, (u64, Instant)>,
+    seen_tasks: HashSet<TaskId>,
+    progress_windows: HashMap<TaskId, (AnyWindowHandle, WeakEntity<ProgressWindow>)>,
+    retained_progress: HashMap<TaskId, ndm_core::ProgressSnapshot>,
+    sample: HashMap<TaskId, (ndm_core::ProgressPhase, SpeedMeter)>,
     speed: HashMap<TaskId, u64>,
     tracking: bool,
     notice: Option<String>,
     update_state: UpdateState,
+    install_update_when_idle: bool,
 }
 
 pub(crate) struct DesktopServices {
@@ -86,6 +122,7 @@ pub(crate) struct DesktopServices {
     pub runtime: Arc<tokio::runtime::Runtime>,
     pub preferences: Preferences,
     pub preferences_path: PathBuf,
+    pub prepared_at_launch: HashSet<TaskId>,
     #[cfg(windows)]
     pub ui_sender: tokio::sync::mpsc::UnboundedSender<crate::tray::Command>,
     #[cfg(windows)]
@@ -104,12 +141,24 @@ impl Desktop {
             runtime,
             preferences,
             preferences_path,
+            prepared_at_launch,
             #[cfg(windows)]
             ui_sender,
             #[cfg(windows)]
             mut commands,
         } = services;
+        cx.bind_keys([KeyBinding::new("ctrl-k", FocusSearch, Some("NDMNext"))]);
         let url_input = cx.new(|cx| InputState::new(window, cx).placeholder("https://…"));
+        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索 / Search"));
+        cx.observe(&search_input, |this, input, cx| {
+            let query = input.read(cx).value().to_string();
+            if this.search_query != query {
+                this.search_query = query;
+                this.refilter();
+                cx.notify();
+            }
+        })
+        .detach();
         let replacement_input = cx.new(|cx| InputState::new(window, cx).placeholder("https://…"));
         let directory = preferences.download_dir.to_string_lossy().into_owned();
         let directory_input = cx.new(|cx| InputState::new(window, cx).default_value(directory));
@@ -156,6 +205,7 @@ impl Desktop {
         let auth_key_input = cx.new(|cx| InputState::new(window, cx));
         let auth_passphrase_input = cx.new(|cx| InputState::new(window, cx).masked(true));
         let pending_auto_resume = preferences.auto_resume;
+        let sidebar_collapsed = preferences.sidebar_collapsed;
         #[cfg(windows)]
         let startup_enabled = crate::startup::enabled().unwrap_or(false);
         #[cfg(windows)]
@@ -189,6 +239,14 @@ impl Desktop {
                                 break;
                             }
                         }
+                        crate::tray::Command::Refresh => {
+                            if view
+                                .update(cx, |this, cx| this.discover_new_tasks(cx))
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
                         crate::tray::Command::Quit => {
                             let scheduler = scheduler.clone();
                             let _ = runtime
@@ -204,6 +262,13 @@ impl Desktop {
         }
         let mut events = scheduler.subscribe();
         let tasks = store.list().unwrap_or_default();
+        let seen_tasks = tasks
+            .iter()
+            .filter(|task| {
+                task.state != TaskState::Prepared && !prepared_at_launch.contains(&task.id)
+            })
+            .map(|task| task.id)
+            .collect();
         let pending_host_keys = store
             .pending_sftp_hosts()
             .unwrap_or_default()
@@ -225,14 +290,25 @@ impl Desktop {
                         if view.update(cx, |this, cx| {
                             this.reload();
                             match event {
-                                SchedulerEvent::Started(_) => this.track_progress(cx),
+                                SchedulerEvent::Started(id) => {
+                                    this.retained_progress.remove(&id);
+                                    this.sample.remove(&id);
+                                    this.speed.remove(&id);
+                                    this.track_progress(cx);
+                                    if this.seen_tasks.insert(id) { this.show_progress(id, cx); }
+                                }
                                 SchedulerEvent::SftpHostKeyRequired { .. } => {
                                     this.notice = Some(this.text("SFTP 服务器密钥需要核对。", "Check the SFTP server key before trusting it.").into());
                                 },
                                 SchedulerEvent::SftpHostKeyChanged { .. } => {
                                     this.notice = Some(this.text("SFTP 服务器密钥已改变，请谨慎核对。", "The SFTP server key has changed; verify it carefully.").into());
                                 },
-                                SchedulerEvent::Finished(_) => {}
+                                SchedulerEvent::Finished { id, progress } => {
+                                    this.retained_progress.insert(id, progress);
+                                    this.speed.remove(&id);
+                                    this.sample.remove(&id);
+                                    this.refilter();
+                                }
                             }
                             cx.notify();
                         }).is_err() { break; }
@@ -242,6 +318,9 @@ impl Desktop {
                 }
             }
         }).detach();
+        let mut task_index = TaskIndex::default();
+        task_index.rebuild(&tasks);
+        let matching_tasks = task_index.filter("", Category::All, SortOrder::Recent);
         let mut this = Self {
             store,
             scheduler,
@@ -249,6 +328,13 @@ impl Desktop {
             preferences,
             preferences_path,
             url_input,
+            search_input,
+            search_query: String::new(),
+            task_index,
+            matching_tasks,
+            category: Category::All,
+            sort_order: SortOrder::Recent,
+            settings_open: HashSet::new(),
             replacement_input,
             directory_input,
             active_input,
@@ -267,10 +353,17 @@ impl Desktop {
             pending_host_keys,
             confirming_host_key: None,
             editing_url: None,
-            deleting_task: None,
+            delete_dialog: None,
+            deleting: false,
+            selected_tasks: HashSet::new(),
+            sidebar_collapsed,
+            new_download_open: false,
             hls_catalog: None,
             hls_variant: None,
             hls_audio: Vec::new(),
+            dash_catalog: None,
+            dash_variant: None,
+            dash_audio: Vec::new(),
             inspecting_hls: false,
             #[cfg(windows)]
             tray,
@@ -278,15 +371,15 @@ impl Desktop {
             startup_enabled,
             section: Section::All,
             tasks,
+            seen_tasks,
+            progress_windows: HashMap::new(),
+            retained_progress: HashMap::new(),
             sample: HashMap::new(),
             speed: HashMap::new(),
             tracking: false,
             notice: None,
-            update_state: if updates::is_store_managed() {
-                UpdateState::StoreManaged
-            } else {
-                UpdateState::NotChecked
-            },
+            update_state: UpdateState::NotChecked,
+            install_update_when_idle: false,
         };
         if this
             .tasks
@@ -295,13 +388,7 @@ impl Desktop {
         {
             this.track_progress(cx);
         }
-        if this.update_state != UpdateState::StoreManaged {
-            cx.spawn(async move |view, cx| {
-                cx.background_executor().timer(Duration::from_secs(3)).await;
-                let _ = view.update(cx, |this, cx| this.check_for_update(cx));
-            })
-            .detach();
-        }
+        this.start_update_watcher(cx);
         this
     }
 
@@ -314,6 +401,16 @@ impl Desktop {
     fn reload(&mut self) {
         if let Ok(tasks) = self.store.list() {
             self.tasks = tasks;
+            self.task_index.update(&self.tasks);
+            self.refilter();
+            let task_ids: HashSet<_> = self
+                .tasks
+                .iter()
+                .filter(|task| task.state != TaskState::Prepared)
+                .map(|task| task.id)
+                .collect();
+            self.selected_tasks.retain(|id| task_ids.contains(id));
+            self.retained_progress.retain(|id, _| task_ids.contains(id));
         }
         if let Ok(pending) = self.store.pending_sftp_hosts() {
             self.pending_host_keys = pending
@@ -330,28 +427,93 @@ impl Desktop {
                 .collect();
         }
     }
-    fn check_for_update(&mut self, cx: &mut Context<Self>) {
-        if matches!(
-            self.update_state,
-            UpdateState::Checking | UpdateState::StoreManaged
-        ) {
+    fn refilter(&mut self) {
+        let mut totals = HashMap::new();
+        if self.sort_order == SortOrder::Size {
+            totals.extend(
+                self.retained_progress
+                    .iter()
+                    .filter_map(|(&id, progress)| progress.total.map(|size| (id, size))),
+            );
+            for task in self
+                .tasks
+                .iter()
+                .filter(|task| task.state == TaskState::Running)
+            {
+                if let Some(total) = self
+                    .scheduler
+                    .progress(task.id)
+                    .and_then(|progress| progress.total)
+                {
+                    totals.insert(task.id, total);
+                }
+            }
+        }
+        self.matching_tasks = self.task_index.filter_with_totals(
+            &self.search_query,
+            self.category,
+            self.sort_order,
+            &totals,
+        );
+    }
+    fn discover_new_tasks(&mut self, cx: &mut Context<Self>) {
+        self.reload();
+        let new_tasks: Vec<_> = self
+            .tasks
+            .iter()
+            .filter(|task| task.state != TaskState::Prepared && !self.seen_tasks.contains(&task.id))
+            .map(|task| task.id)
+            .collect();
+        for id in new_tasks {
+            self.seen_tasks.insert(id);
+            self.show_progress(id, cx);
+        }
+        cx.notify();
+    }
+    fn show_progress(&mut self, id: TaskId, cx: &mut Context<Self>) {
+        if let Some((handle, _)) = self.progress_windows.get(&id)
+            && handle
+                .update(cx, |_, window, _| window.activate_window())
+                .is_ok()
+        {
             return;
         }
-        self.update_state = UpdateState::Checking;
-        cx.notify();
+        let store = self.store.clone();
+        let scheduler = self.scheduler.clone();
         let runtime = self.runtime.clone();
-        cx.spawn(async move |view, cx| {
-            let outcome = runtime.spawn(updates::check()).await;
-            let _ = view.update(cx, |this, cx| {
-                this.update_state = match outcome {
-                    Ok(Ok(Some(version))) => UpdateState::Available(version),
-                    Ok(Ok(None)) => UpdateState::Current,
-                    _ => UpdateState::Failed,
-                };
-                cx.notify();
-            });
-        })
-        .detach();
+        let language = self.preferences.language;
+        let bounds = Bounds::centered(
+            None,
+            size(
+                px(crate::progress::WINDOW_WIDTH),
+                px(crate::progress::COMPACT_HEIGHT),
+            ),
+            cx,
+        );
+        match gpui_kit::open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                window_min_size: Some(size(px(460.), px(136.))),
+                ..gpui_kit::component::TitleBar::window_options()
+            },
+            cx,
+            move |window, cx| {
+                crate::chrome::round_window(window);
+                cx.new(|cx| {
+                    ProgressWindow::new(id, store, scheduler, runtime, language, window, cx)
+                })
+            },
+        ) {
+            Ok((handle, view)) => {
+                self.progress_windows.insert(id, (handle, view.downgrade()));
+            }
+            Err(_) => {
+                self.notice = Some(
+                    self.text("无法打开进度窗口。", "Could not open the progress window.")
+                        .into(),
+                )
+            }
+        }
     }
     fn track_progress(&mut self, cx: &mut Context<Self>) {
         if self.tracking {
@@ -359,26 +521,39 @@ impl Desktop {
         }
         self.tracking = true;
         cx.spawn(async move |view, cx| {
+            let mut refresh_tick = 0_u8;
             loop {
-                cx.background_executor().timer(Duration::from_secs(1)).await;
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
+                refresh_tick = (refresh_tick + 1) % 10;
                 let keep_tracking = view
                     .update(cx, |this, cx| {
-                        this.reload();
+                        if refresh_tick == 0 {
+                            this.reload();
+                        }
                         let mut any = false;
                         for task in &this.tasks {
                             if let Some(progress) = this.scheduler.progress(task.id) {
                                 any = true;
-                                let now = Instant::now();
-                                if let Some((old, then)) =
-                                    this.sample.insert(task.id, (progress.downloaded, now))
-                                {
-                                    let elapsed = now.duration_since(then).as_secs_f64().max(0.001);
-                                    this.speed.insert(
-                                        task.id,
-                                        (progress.downloaded.saturating_sub(old) as f64 / elapsed)
-                                            as u64,
-                                    );
+                                let (phase, meter) = this
+                                    .sample
+                                    .entry(task.id)
+                                    .or_insert_with(|| (progress.phase, SpeedMeter::default()));
+                                if *phase != progress.phase {
+                                    *phase = progress.phase;
+                                    meter.reset();
                                 }
+                                let bytes = match progress.phase {
+                                    ndm_core::ProgressPhase::Downloading => progress.transferred,
+                                    ndm_core::ProgressPhase::Merging => progress.merged,
+                                    ndm_core::ProgressPhase::Finalizing => 0,
+                                };
+                                this.speed
+                                    .insert(task.id, meter.sample(Instant::now(), bytes));
+                            } else {
+                                this.sample.remove(&task.id);
+                                this.speed.remove(&task.id);
                             }
                         }
                         this.tracking = any;
@@ -394,6 +569,9 @@ impl Desktop {
         .detach();
     }
     fn add(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(self.update_state, UpdateState::Installing) {
+            return;
+        }
         let url = self
             .url_input
             .read(cx)
@@ -453,6 +631,17 @@ impl Desktop {
                 audio_names: self.hls_audio.clone(),
                 ..Default::default()
             })
+        } else if matches!(protocol_options, TaskOptions::Auto)
+            && self
+                .dash_catalog
+                .as_ref()
+                .is_some_and(|(catalog_url, _)| catalog_url == &url)
+        {
+            TaskOptions::Dash(DashOptions {
+                representation_index: self.dash_variant,
+                audio_indices: self.dash_audio.clone(),
+                ..Default::default()
+            })
         } else {
             protocol_options
         };
@@ -471,13 +660,21 @@ impl Desktop {
         {
             Ok(_) => {
                 self.scheduler.notify();
+                self.seen_tasks.insert(id);
+                self.show_progress(id, cx);
                 self.preferences.download_dir = request.destination.clone();
                 self.save_preferences();
                 self.notice = Some(self.text("下载已添加。", "Download added.").into());
                 self.section = Section::All;
+                self.new_download_open = false;
+                self.url_input
+                    .update(cx, |state, cx| state.set_value("", window, cx));
                 self.hls_catalog = None;
                 self.hls_variant = None;
                 self.hls_audio.clear();
+                self.dash_catalog = None;
+                self.dash_variant = None;
+                self.dash_audio.clear();
                 self.ftp_security = FtpSecurity::Auto;
                 self.auth_expanded = false;
                 for input in [
@@ -497,86 +694,6 @@ impl Desktop {
                 )
             }
         }
-        cx.notify();
-    }
-    fn inspect_hls(&mut self, cx: &mut Context<Self>) {
-        if self.inspecting_hls {
-            return;
-        }
-        let url = self
-            .url_input
-            .read(cx)
-            .value()
-            .to_string()
-            .trim()
-            .to_owned();
-        if !reqwest::Url::parse(&url).is_ok_and(|url| matches!(url.scheme(), "http" | "https")) {
-            self.notice = Some(
-                self.text("请输入有效的 HLS 链接。", "Enter a valid HLS URL.")
-                    .into(),
-            );
-            cx.notify();
-            return;
-        }
-        let request = NewTask {
-            url: url.clone(),
-            destination: self.preferences.download_dir.clone(),
-            suggested_filename: None,
-            source_url: None,
-            expected_size: None,
-            headers: BTreeMap::new(),
-        };
-        let options = HlsOptions {
-            proxy: self.preferences.proxy.clone(),
-            ..Default::default()
-        };
-        self.inspecting_hls = true;
-        self.notice = Some(
-            self.text("正在读取媒体选项…", "Inspecting media options…")
-                .into(),
-        );
-        let result = self.runtime.spawn(async move {
-            inspect_hls_with_options(
-                &request,
-                &options,
-                tokio_util::sync::CancellationToken::new(),
-            )
-            .await
-        });
-        cx.spawn(async move |view, cx| {
-            let result = result.await;
-            let _ = view.update(cx, |this, cx| {
-                this.inspecting_hls = false;
-                if this.url_input.read(cx).value().as_ref().trim() == url {
-                    match result {
-                        Ok(Ok(catalog)) => {
-                            this.hls_catalog = Some((url, catalog));
-                            this.hls_variant = None;
-                            this.hls_audio.clear();
-                            this.notice = Some(
-                                this.text(
-                                    "请选择清晰度和音轨，或使用默认选项。",
-                                    "Choose quality and audio tracks, or use the defaults.",
-                                )
-                                .into(),
-                            );
-                        }
-                        _ => {
-                            this.hls_catalog = None;
-                            this.notice = Some(
-                                this.text(
-                                    "无法读取 HLS 列表，请检查链接或代理。",
-                                    "Could not inspect the HLS playlist; check the URL or proxy.",
-                                )
-                                .into(),
-                            );
-                        }
-                    }
-                }
-                cx.notify();
-            });
-        })
-        .detach();
         cx.notify();
     }
     fn save_preferences(&mut self) {
@@ -702,6 +819,9 @@ impl Desktop {
         cx.notify();
     }
     fn task_action(&mut self, id: TaskId, state: TaskState) {
+        if matches!(self.update_state, UpdateState::Installing) {
+            return;
+        }
         let scheduler = self.scheduler.clone();
         self.runtime.spawn(async move {
             match state {
@@ -746,29 +866,132 @@ impl Desktop {
         }
         cx.notify();
     }
-    fn delete_record(&mut self, id: TaskId, remove_partial: bool, cx: &mut Context<Self>) {
-        match self.scheduler.delete(id, remove_partial) {
-            Ok(()) => {
-                self.pending_host_keys.remove(&id);
-                self.deleting_task = None;
-                if self.editing_url == Some(id) {
-                    self.editing_url = None;
-                }
-                self.reload();
-                self.notice = Some(if remove_partial {
-                    self.text("记录和临时文件已移除。", "Record and temporary files removed.")
-                } else {
-                    self.text("记录已移除，文件已保留。", "Record removed; files were kept.")
-                }.into());
-            }
-            Err(_) => {
-                self.notice = Some(self.text(
-                    "无法移除任务，请先暂停并检查临时目录和文件权限。",
-                    "Could not remove the task. Pause it and check the temporary folder and file permissions.",
-                ).into())
+    fn confirm_delete(&mut self, ids: Vec<TaskId>, cx: &mut Context<Self>) {
+        if self.deleting || ids.is_empty() {
+            return;
+        }
+        if let Some(handle) = self.delete_dialog
+            && handle
+                .update(cx, |_, window, _| window.activate_window())
+                .is_ok()
+        {
+            return;
+        }
+        let ids: Vec<_> = ids
+            .into_iter()
+            .filter(|id| {
+                self.tasks
+                    .iter()
+                    .any(|task| task.id == *id && task.state != TaskState::Prepared)
+            })
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        let name = (ids.len() == 1)
+            .then(|| {
+                self.tasks
+                    .iter()
+                    .find(|task| task.id == ids[0])
+                    .and_then(crate::filenames::display_name)
+            })
+            .flatten();
+        match crate::confirm_delete::open(
+            ids,
+            name,
+            self.preferences.language,
+            cx.entity().downgrade(),
+            cx,
+        ) {
+            Ok(handle) => self.delete_dialog = Some(handle),
+            Err(()) => {
+                self.notice = Some(
+                    self.text(
+                        "无法打开删除确认窗口。",
+                        "Could not open the delete confirmation.",
+                    )
+                    .into(),
+                )
             }
         }
         cx.notify();
+    }
+
+    pub(crate) fn delete_tasks(
+        &mut self,
+        ids: Vec<TaskId>,
+        delete_files: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.deleting || ids.is_empty() {
+            return;
+        }
+        self.deleting = true;
+        self.notice = Some(self.text("正在删除任务…", "Deleting downloads…").into());
+        let store = self.store.clone();
+        let scheduler = self.scheduler.clone();
+        let runtime = self.runtime.clone();
+        cx.spawn(async move |view, cx| {
+            let result = runtime.spawn(crate::deletion::delete_many(store, scheduler, ids, delete_files)).await;
+            let _ = view.update(cx, |this, cx| {
+                this.deleting = false;
+                match result {
+                    Ok(report) => {
+                        for id in &report.removed {
+                            this.selected_tasks.remove(id);
+                            this.pending_host_keys.remove(id);
+                            if let Some((handle, _)) = this.progress_windows.remove(id) {
+                                let _ = handle.update(cx, |_, window, _| window.remove_window());
+                            }
+                            if this.editing_url == Some(*id) { this.editing_url = None; }
+                        }
+                        this.notice = Some(if report.failed.is_empty() {
+                            format!("{} {} {}", this.text("已删除", "Deleted"), report.removed.len(), this.text("个任务。", "downloads."))
+                        } else {
+                            format!("{} {} · {} {}. {}", this.text("已删除", "Deleted"), report.removed.len(),
+                                this.text("未完成", "Failed"), report.failed.len(),
+                                this.text("未删除的记录已保留；部分文件可能已删除。", "Unremoved records were kept; some files may already have been deleted."))
+                        });
+                    }
+                    Err(_) => this.notice = Some(this.text("删除失败，请检查文件和目录权限。", "Deletion failed; check file and folder permissions.").into()),
+                }
+                this.reload();
+                cx.notify();
+            });
+        }).detach();
+        cx.notify();
+    }
+
+    fn open_task_path(&mut self, id: TaskId, file: bool, cx: &mut Context<Self>) {
+        let result = self
+            .tasks
+            .iter()
+            .find(|task| task.id == id)
+            .ok_or_else(|| std::io::Error::other("task not found"))
+            .and_then(|task| {
+                if file {
+                    crate::files::open_file(task)
+                } else {
+                    crate::files::open_folder(task)
+                }
+            });
+        if result.is_err() {
+            self.notice = Some(
+                if file {
+                    self.text(
+                        "无法打开文件，请检查文件是否存在。",
+                        "Could not open the file. Check that it still exists.",
+                    )
+                } else {
+                    self.text(
+                        "无法打开下载文件夹。",
+                        "Could not open the download folder.",
+                    )
+                }
+                .into(),
+            );
+            cx.notify();
+        }
     }
     fn save_replacement_url(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(id) = self.editing_url else { return };
@@ -811,7 +1034,7 @@ impl Desktop {
     }
 }
 
-fn format_bytes(bytes: u64) -> String {
+pub(crate) fn format_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut size = bytes as f64;
     let mut unit = 0;
@@ -839,9 +1062,9 @@ impl Desktop {
             .min_w_0()
             .flex()
             .flex_col()
-            .gap_2()
-            .child(div().text_sm().text_color(rgb(muted)).child(label))
-            .child(Input::new(input).id(id).aria_label(label).w_full())
+            .gap_1()
+            .child(div().text_xs().text_color(rgb(muted)).child(label))
+            .child(Input::new(input).small().id(id).aria_label(label).w_full())
     }
     fn hls_options_panel(
         &self,
@@ -946,224 +1169,44 @@ impl Desktop {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let selected = self.section == section;
+        let icon = match section {
+            Section::All => IconName::LayoutDashboard,
+            Section::Active => IconName::ArrowDown,
+            Section::Completed => IconName::CircleCheck,
+            Section::Settings => IconName::Settings2,
+        };
         let dark = self.is_dark(cx);
-        let background = if selected {
-            if dark { 0x292b50 } else { 0xeceaff }
-        } else if dark {
-            0x111625
-        } else {
-            0xf8f9fd
-        };
-        let foreground = if selected {
-            0x8277ff
-        } else if dark {
-            0xaab7d0
-        } else {
-            0x5f6c84
-        };
-        div()
-            .id(("nav", section as usize))
-            .cursor_pointer()
-            .rounded_lg()
-            .px_4()
-            .py_3()
-            .bg(rgb(background))
-            .text_color(rgb(foreground))
-            .text_sm()
-            .font_weight(FontWeight::SEMIBOLD)
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.section = section;
-                cx.notify();
-            }))
-            .child(label)
-    }
-    fn task_row(&self, task: &Task, dark: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        let name = crate::filenames::display_name(task)
-            .unwrap_or_else(|| self.text("未命名下载", "Untitled download").into());
-        let status = match task.state {
-            TaskState::Prepared => self.text("等待确认", "Awaiting confirmation"),
-            TaskState::Queued => self.text("等待中", "Queued"),
-            TaskState::Running => self.text("下载中", "Downloading"),
-            TaskState::Paused => self.text("已暂停", "Paused"),
-            TaskState::Completed if task.size_verified == Some(false) => self.text(
-                "已完成 · 文件长度未校验",
-                "Completed · file length unverified",
-            ),
-            TaskState::Completed => self.text("已完成", "Completed"),
-            TaskState::Failed => self.text("失败", "Failed"),
-        };
-        let mut detail = match self.scheduler.progress(task.id) {
-            Some(progress) => {
-                let size = match progress.total {
-                    Some(total) => format!(
-                        "{} / {}",
-                        format_bytes(progress.downloaded),
-                        format_bytes(total)
-                    ),
-                    None => format_bytes(progress.downloaded),
-                };
-                format!(
-                    "{size}   ·   {}/s",
-                    format_bytes(self.speed.get(&task.id).copied().unwrap_or(0))
-                )
-            }
-            None => match task.error.as_deref() {
-                Some("hls_recovery_conflict") => self.text(
-                    "无法安全续传：媒体或临时文件已改变，已保留临时数据。",
-                    "Cannot resume safely: media or temporary data changed. The temporary data was kept.",
-                ).into(),
-                Some("hls_failed") => self.text(
-                    "无法下载或合并媒体，请检查链接和网络。",
-                    "Could not download or merge the media. Check the URL and network.",
-                ).into(),
-                Some(error) => error.to_owned(),
-                None => status.into(),
-            },
-        };
-        let id = task.id;
-        let state = task.state;
-        let is_hls = matches!(&task.options, TaskOptions::Hls(_))
-            || (matches!(&task.options, TaskOptions::Auto)
-                && reqwest::Url::parse(&task.request.url)
-                    .is_ok_and(|url| url.path().to_ascii_lowercase().ends_with(".m3u8")));
-        let can_edit_url = matches!(state, TaskState::Paused | TaskState::Failed)
-            && !matches!(&task.options, TaskOptions::Ftp(_) | TaskOptions::Sftp(_))
-            && reqwest::Url::parse(&task.request.url)
-                .is_ok_and(|url| matches!(url.scheme(), "http" | "https"));
-        let pending_key = self.pending_host_keys.get(&id);
-        if let Some(key) = pending_key {
-            let host = reqwest::Url::parse(&task.request.url)
-                .ok()
-                .and_then(|url| url.host_str().map(str::to_owned))
-                .unwrap_or_default();
-            detail = if let Some(expected) = &key.expected {
-                format!(
-                    "{} {host}\n{} {expected}\n{} {}",
-                    self.text("密钥已改变：", "Key changed:"),
-                    self.text("原指纹：", "Previous:"),
-                    self.text("新指纹：", "New:"),
-                    key.observed
-                )
-            } else {
-                format!(
-                    "{} {host}\n{} {}",
-                    self.text("首次连接：", "First connection:"),
-                    self.text("指纹：", "Fingerprint:"),
-                    key.observed
-                )
-            };
-        }
-        let action = match state {
-            TaskState::Queued | TaskState::Running => Some(self.text("暂停", "Pause")),
-            TaskState::Paused | TaskState::Failed => Some(self.text("继续", "Resume")),
-            _ => None,
-        };
-        let fg = if dark { 0xecf0ff } else { 0x1f2b42 };
-        let muted = if dark { 0x8897b3 } else { 0x72809b };
-        let card = if dark { 0x171f31 } else { 0xffffff };
-        let border = if dark { 0x28344b } else { 0xe6eaf2 };
-        div()
+        let row = div()
             .w_full()
             .flex()
             .items_center()
-            .gap_4()
-            .p_4()
-            .rounded_xl()
-            .bg(rgb(card))
-            .border_1()
-            .border_color(rgb(border))
-            .child(
-                div()
-                    .w(px(42.))
-                    .h(px(42.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_lg()
-                    .bg(rgb(if dark { 0x292b52 } else { 0xeeecff }))
-                    .text_color(rgb(0x8d82ff))
-                    .child("↓"),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_color(rgb(fg))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_sm()
-                            .child(name),
-                    )
-                    .child(div().text_color(rgb(muted)).text_xs().child(detail)),
-            )
-            .child(
-                div()
-                    .text_color(rgb(if state == TaskState::Completed {
-                        0x39bc8d
-                    } else {
-                        muted
-                    }))
-                    .text_xs()
-                    .child(status),
-            )
-            .when_some(action, |row, action| {
-                row.child(
-                    Button::new(SharedString::from(format!("action-{id}")))
-                        .label(action)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.task_action(id, state);
-                            cx.notify();
-                        })),
-                )
-            })
-            .when(state == TaskState::Running && is_hls, |row| row.child(
-                Button::new(SharedString::from(format!("stop-live-{id}"))).label(self.text("停止并保存", "Stop and save")).on_click(cx.listener(move |this, _, _, cx| {
-                    if this.scheduler.stop_live(id).is_err() { this.notice = Some(this.text("无法停止该媒体任务。", "Could not stop the media task.").into()); }
-                    cx.notify();
-                }))
-            ))
-            .when(can_edit_url, |row| row.child(
-                Button::new(SharedString::from(format!("edit-url-{id}")))
-                    .label(self.text("更换链接", "Change link"))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.replacement_input.update(cx, |input, cx| input.set_value("", window, cx));
-                        this.editing_url = Some(id);
-                        cx.notify();
-                    }))
-            ))
-            .when(pending_key.is_some(), |row| {
-                if self.confirming_host_key == Some(id) {
-                    row.child(Button::new(SharedString::from(format!("trust-confirm-{id}"))).label(self.text("确认信任", "Confirm trust")).on_click(cx.listener(move |this, _, _, cx| this.trust_host_key(id, cx))))
-                        .child(Button::new(SharedString::from(format!("trust-cancel-{id}"))).label(self.text("取消", "Cancel")).on_click(cx.listener(move |this, _, _, cx| { this.confirming_host_key = None; cx.notify(); })))
-                } else {
-                    row.child(Button::new(SharedString::from(format!("trust-review-{id}"))).label(self.text("核对密钥", "Review key")).on_click(cx.listener(move |this, _, _, cx| {
-                        this.confirming_host_key = Some(id);
-                        this.notice = Some(this.text("请通过可信渠道核对服务器指纹；确认后才会连接。", "Verify the fingerprint through a trusted channel before confirming.").into());
-                        cx.notify();
-                    })))
+            .gap_2()
+            .when(self.sidebar_collapsed, |row| row.justify_center())
+            .child(Icon::new(icon).with_size(px(15.)))
+            .when(!self.sidebar_collapsed, |row| row.child(label));
+        let button = Button::new(("nav", section as usize))
+            .small()
+            .w_full()
+            .h(px(30.))
+            .ghost()
+            .child(row)
+            .tooltip(label)
+            .accessibility_label(label)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if this.section != section {
+                    this.selected_tasks.clear();
+                    this.new_download_open = false;
                 }
-            })
-            .when(
-                !matches!(state, TaskState::Running | TaskState::Prepared),
-                |row| {
-                    row.child(
-                        Button::new(SharedString::from(format!("delete-{id}")))
-                            .label(self.text("移除", "Remove"))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if state == TaskState::Completed {
-                                    this.delete_record(id, false, cx);
-                                } else {
-                                    this.deleting_task = Some(id);
-                                    cx.notify();
-                                }
-                            })),
-                    )
-                },
-            )
+                this.section = section;
+                cx.notify();
+            }));
+        if selected {
+            button
+                .bg(rgb(if dark { 0x302b50 } else { 0xede9ff }))
+                .text_color(rgb(if dark { 0xd9d1ff } else { 0x523fa7 }))
+        } else {
+            button
+        }
     }
 }
 
@@ -1176,18 +1219,22 @@ impl Render for Desktop {
         let muted = if dark { 0x8999b4 } else { 0x6e7d98 };
         let border = if dark { 0x28344b } else { 0xe3e8f2 };
         let visible: Vec<_> = self
-            .tasks
+            .matching_tasks
             .iter()
-            .filter(|task| match self.section {
-                Section::All => true,
-                Section::Active => matches!(
-                    task.state,
-                    TaskState::Queued | TaskState::Running | TaskState::Paused
-                ),
-                Section::Completed => task.state == TaskState::Completed,
-                Section::Settings => false,
+            .copied()
+            .filter(|index| {
+                let task = &self.tasks[*index];
+                task.state != TaskState::Prepared
+                    && match self.section {
+                        Section::All => true,
+                        Section::Active => matches!(
+                            task.state,
+                            TaskState::Queued | TaskState::Running | TaskState::Paused
+                        ),
+                        Section::Completed => task.state == TaskState::Completed,
+                        Section::Settings => false,
+                    }
             })
-            .cloned()
             .collect();
         let count_active = self
             .tasks
@@ -1206,13 +1253,19 @@ impl Render for Desktop {
             .min_w_0()
             .flex()
             .flex_col()
-            .gap_5()
-            .p_8();
+            .gap_2()
+            .px_4()
+            .py_3();
+        let zh = self.preferences.language == Language::Chinese;
+        let current_category = self.category;
+        let current_sort = self.sort_order;
+        let category_view = cx.entity().downgrade();
+        let sort_view = cx.entity().downgrade();
         content = content.child(
             div()
                 .flex()
                 .items_center()
-                .justify_between()
+                .gap_3()
                 .child(
                     div()
                         .flex()
@@ -1220,401 +1273,251 @@ impl Render for Desktop {
                         .gap_1()
                         .child(
                             div()
-                                .text_2xl()
+                                .text_lg()
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(rgb(fg))
                                 .child(title),
                         )
-                        .child(div().text_sm().text_color(rgb(muted)).child(format!(
-                            "{}  ·  {} {}",
-                            self.text("掌控每一次下载", "Downloads, under control"),
+                        .child(div().text_xs().text_color(rgb(muted)).child(format!(
+                            "{} {}",
                             count_active,
                             self.text("个任务正在运行", "active")
                         ))),
                 )
-                .child(
-                    div()
-                        .rounded_full()
-                        .px_3()
-                        .py_1()
-                        .bg(rgb(if dark { 0x183b36 } else { 0xddf7ed }))
-                        .text_color(rgb(0x31b98a))
-                        .text_xs()
-                        .child(self.text("准备就绪", "Ready")),
-                ),
-        );
-        if let UpdateState::Available(version) = &self.update_state {
-            let url = updates::release_url(version);
-            content = content.child(
-                div()
-                    .rounded_xl()
-                    .border_1()
-                    .border_color(rgb(border))
-                    .bg(rgb(side))
-                    .p_4()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_3()
-                    .child(format!(
-                        "{} {version}",
-                        self.text("发现新版本", "Update available")
-                    ))
+                .when(self.section != Section::Settings, |row| {
+                    row.child(
+                        div().flex_1().min_w_0().child(
+                            Input::new(&self.search_input)
+                                .small()
+                                .id("search-downloads")
+                                .w_full()
+                                .prefix(Icon::new(IconName::Search).small())
+                                .aria_label(self.text(
+                                    "搜索文件名、来源或链接",
+                                    "Search filename, source or URL",
+                                )),
+                        ),
+                    )
                     .child(
-                        Button::new("open-update")
-                            .label(self.text("查看更新", "View release"))
-                            .on_click(cx.listener(move |_, _, _, cx| cx.open_url(&url))),
-                    ),
-            );
+                        Button::new("category-filter")
+                            .small()
+                            .icon(Icon::new(gpui_kit::assets::IconName::ListFilter))
+                            .label(current_category.label(zh))
+                            .dropdown_caret(true)
+                            .dropdown_menu(move |menu, _, _| {
+                                Category::ALL.iter().fold(menu, |menu, category| {
+                                    let category = *category;
+                                    let view = category_view.clone();
+                                    menu.item(
+                                        PopupMenuItem::new(category.label(zh))
+                                            .checked(category == current_category)
+                                            .on_click(move |_, _, cx| {
+                                                let _ = view.update(cx, |this, cx| {
+                                                    this.category = category;
+                                                    this.refilter();
+                                                    this.selected_tasks.clear();
+                                                    cx.notify();
+                                                });
+                                            }),
+                                    )
+                                })
+                            }),
+                    )
+                    .child(
+                        Button::new("sort-downloads")
+                            .small()
+                            .icon(IconName::ArrowDown)
+                            .tooltip(self.text("排序", "Sort"))
+                            .accessibility_label(self.text("排序", "Sort"))
+                            .dropdown_menu(move |menu, _, _| {
+                                SortOrder::ALL.iter().fold(menu, |menu, sort| {
+                                    let sort = *sort;
+                                    let view = sort_view.clone();
+                                    menu.item(
+                                        PopupMenuItem::new(sort.label(zh))
+                                            .checked(sort == current_sort)
+                                            .on_click(move |_, _, cx| {
+                                                let _ = view.update(cx, |this, cx| {
+                                                    this.sort_order = sort;
+                                                    this.refilter();
+                                                    cx.notify();
+                                                });
+                                            }),
+                                    )
+                                })
+                            }),
+                    )
+                    .child(
+                        Button::new("new-download-toggle")
+                            .small()
+                            .primary()
+                            .icon(if self.new_download_open {
+                                IconName::Close
+                            } else {
+                                IconName::Plus
+                            })
+                            .tooltip(if self.new_download_open {
+                                self.text("关闭新建下载", "Close new download")
+                            } else {
+                                self.text("新建下载", "New download")
+                            })
+                            .accessibility_label(self.text("新建下载", "New download"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if matches!(this.update_state, UpdateState::Installing) {
+                                    return;
+                                }
+                                this.new_download_open = !this.new_download_open;
+                                cx.notify();
+                            })),
+                    )
+                }),
+        );
+        if matches!(
+            self.update_state,
+            UpdateState::Available(_)
+                | UpdateState::Downloading
+                | UpdateState::Ready(_)
+                | UpdateState::Installing
+        ) {
+            content = content.child(self.update_banner(border, side, cx));
         }
         if self.section == Section::Settings {
-            content = content.overflow_y_scroll();
-            let language = self.preferences.language;
-            content = content.child(
-                div()
-                    .rounded_xl()
-                    .border_1()
-                    .border_color(rgb(border))
-                    .bg(rgb(side))
-                    .p_6()
-                    .flex()
-                    .flex_col()
-                    .gap_4()
-                    .child(
-                        div()
-                            .text_color(rgb(fg))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(self.text("外观和语言", "Appearance and language")),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(rgb(muted))
-                            .child(self.text("主题", "Theme")),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .gap_2()
-                            .child(
-                                Button::new("theme-system")
-                                    .label(self.text("跟随系统", "System"))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.set_theme(Theme::System, cx)
-                                    })),
-                            )
-                            .child(
-                                Button::new("theme-light")
-                                    .label(self.text("亮色", "Light"))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.set_theme(Theme::Light, cx)
-                                    })),
-                            )
-                            .child(
-                                Button::new("theme-dark")
-                                    .label(self.text("暗色", "Dark"))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.set_theme(Theme::Dark, cx)
-                                    })),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(rgb(muted))
-                            .child(self.text("语言", "Language")),
-                    )
-                    .child(
-                        Button::new("language")
-                            .label(if language == Language::Chinese {
-                                "切换至 English"
-                            } else {
-                                "Switch to 中文"
-                            })
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.preferences.language =
-                                    if this.preferences.language == Language::Chinese {
-                                        Language::English
-                                    } else {
-                                        Language::Chinese
-                                    };
-                                #[cfg(windows)]
-                                if let Some(tray) = &this.tray {
-                                    tray.set_language(this.preferences.language);
-                                }
-                                this.save_preferences();
-                                cx.notify();
-                            })),
-                    ),
-            );
-            content = content.child(
-                div()
-                    .rounded_xl()
-                    .border_1()
-                    .border_color(rgb(border))
-                    .bg(rgb(side))
-                    .p_6()
-                    .flex()
-                    .flex_col()
-                    .gap_4()
-                    .child(
-                        div()
-                            .text_color(rgb(fg))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(self.text("下载与网络", "Downloads and network")),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .gap_3()
-                            .child(self.settings_field(
-                                self.text("同时下载任务数", "Concurrent downloads"),
-                                "max-active",
-                                &self.active_input,
-                                muted,
-                            ))
-                            .child(self.settings_field(
-                                self.text("每个任务连接数", "Connections per download"),
-                                "max-connections",
-                                &self.connections_input,
-                                muted,
-                            ))
-                            .child(self.settings_field(
-                                self.text(
-                                    "每个任务限速 KiB/s（0 不限）",
-                                    "Limit per download KiB/s (0 unlimited)",
-                                ),
-                                "max-speed",
-                                &self.speed_input,
-                                muted,
-                            )),
-                    )
-                    .child(
-                        Button::new("auto-resume")
-                            .label(if self.pending_auto_resume {
-                                self.text("启动时恢复任务：开启", "Resume on startup: On")
-                            } else {
-                                self.text("启动时恢复任务：关闭", "Resume on startup: Off")
-                            })
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.pending_auto_resume = !this.pending_auto_resume;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        div()
-                            .text_color(rgb(fg))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(self.text("HTTP(S) 代理", "HTTP(S) proxy")),
-                    )
-                    .child(div().text_sm().text_color(rgb(muted)).child(self.text(
-                        "用于 HTTP 和 HLS；留空时使用系统代理设置。",
-                        "Used for HTTP and HLS; leave blank to use system proxy settings.",
-                    )))
-                    .child(self.settings_field(
-                        self.text("代理地址", "Proxy URL"),
-                        "proxy-url",
-                        &self.proxy_url_input,
-                        muted,
-                    ))
-                    .child(
-                        div()
-                            .flex()
-                            .gap_3()
-                            .child(self.settings_field(
-                                self.text("用户名（可选）", "Username (optional)"),
-                                "proxy-user",
-                                &self.proxy_user_input,
-                                muted,
-                            ))
-                            .child(self.settings_field(
-                                self.text("密码（可选）", "Password (optional)"),
-                                "proxy-password",
-                                &self.proxy_password_input,
-                                muted,
-                            )),
-                    )
-                    .child(div().text_xs().text_color(rgb(muted)).child(self.text(
-                        "代理凭据由 Windows 加密保存在本机。",
-                        "Proxy credentials are encrypted by Windows on this device.",
-                    )))
-                    .child(
-                        Button::new("save-download-settings")
-                            .primary()
-                            .label(self.text("保存设置", "Save settings"))
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.save_download_settings(cx)),
-                            ),
-                    ),
-            );
-            #[cfg(windows)]
+            content = content
+                .overflow_y_scroll()
+                .child(self.settings_panel(dark, cx));
+        } else {
+            if let Some(id) = self.confirming_host_key
+                && let Some(key) = self.pending_host_keys.get(&id)
             {
+                content = content.child(
+                    div()
+                        .rounded_lg()
+                        .border_1()
+                        .border_color(rgb(0x9b774a))
+                        .p_3()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(div().text_sm().child(self.text(
+                            "请通过可信渠道核对 SFTP 服务器指纹",
+                            "Verify the SFTP fingerprint through a trusted channel",
+                        )))
+                        .when_some(key.expected.clone(), |panel, expected| {
+                            panel.child(div().text_xs().child(format!(
+                                "{} {expected}",
+                                self.text("原指纹：", "Previous:")
+                            )))
+                        })
+                        .child(div().text_xs().child(format!(
+                            "{} {}",
+                            self.text("新指纹：", "Observed:"),
+                            key.observed
+                        )))
+                        .child(
+                            div()
+                                .flex()
+                                .gap_2()
+                                .child(
+                                    Button::new("confirm-sftp-key")
+                                        .small()
+                                        .label(self.text("确认信任", "Confirm trust"))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.trust_host_key(id, cx)
+                                        })),
+                                )
+                                .child(
+                                    Button::new("cancel-sftp-key")
+                                        .small()
+                                        .label(self.text("取消", "Cancel"))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.confirming_host_key = None;
+                                            cx.notify();
+                                        })),
+                                ),
+                        ),
+                );
+            }
+            if self.new_download_open || self.editing_url.is_some() {
+                content = content.overflow_y_scroll();
+            }
+            if self.new_download_open {
                 content = content.child(
                     div()
                         .rounded_xl()
                         .border_1()
                         .border_color(rgb(border))
                         .bg(rgb(side))
-                        .p_6()
+                        .p_3()
                         .flex()
                         .flex_col()
-                        .gap_3()
+                        .gap_2()
                         .child(
                             div()
+                                .text_color(rgb(fg))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .child(self.text("启动", "Startup")),
+                                .child(self.text("新建下载", "New download")),
                         )
-                        .child(div().text_sm().text_color(rgb(muted)).child(self.text(
-                            "开机后在托盘中运行，默认关闭。",
-                            "Start in the system tray when you sign in; off by default.",
-                        )))
                         .child(
-                            Button::new("startup-toggle")
-                                .label(if self.startup_enabled {
-                                    self.text("开机自启：开启", "Start on sign-in: On")
-                                } else {
-                                    self.text("开机自启：关闭", "Start on sign-in: Off")
-                                })
-                                .on_click(cx.listener(|this, _, _, cx| this.toggle_startup(cx))),
+                            div()
+                                .flex()
+                                .gap_3()
+                                .items_center()
+                                .child(
+                                    div().flex_1().child(
+                                        Input::new(&self.url_input)
+                                            .id("download-url")
+                                            .aria_label(self.text("下载链接", "Download URL"))
+                                            .w_full(),
+                                    ),
+                                )
+                                .child(
+                                    Button::new("advanced-auth")
+                                        .label(self.text("FTP/SFTP 认证", "FTP/SFTP auth"))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.auth_expanded = !this.auth_expanded;
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(
+                                    Button::new("inspect-hls")
+                                        .label(if self.inspecting_hls {
+                                            self.text("正在读取…", "Inspecting…")
+                                        } else {
+                                            self.text("媒体选项", "Media options")
+                                        })
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| this.inspect_media(cx)),
+                                        ),
+                                )
+                                .child(
+                                    Button::new("add-download")
+                                        .primary()
+                                        .label(self.text("添加下载", "Add download"))
+                                        .on_click(
+                                            cx.listener(|this, _, window, cx| this.add(window, cx)),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_3()
+                                .text_sm()
+                                .text_color(rgb(muted))
+                                .child(self.text("保存至", "Save to"))
+                                .child(
+                                    div().flex_1().child(
+                                        Input::new(&self.directory_input)
+                                            .id("destination")
+                                            .aria_label(self.text("保存位置", "Destination"))
+                                            .w_full(),
+                                    ),
+                                ),
                         ),
                 );
-            }
-            let update_description = match &self.update_state {
-                UpdateState::NotChecked => {
-                    self.text("尚未检查更新。", "Updates have not been checked.")
-                }
-                UpdateState::Checking => self.text("正在检查更新…", "Checking for updates…"),
-                UpdateState::Current => {
-                    self.text("没有发现新版本。", "No newer release was found.")
-                }
-                UpdateState::Available(_) => self.text(
-                    "新版本已发布，可在上方查看。",
-                    "A new release is available above.",
-                ),
-                UpdateState::Failed => self.text(
-                    "检查更新失败，请稍后重试。",
-                    "Could not check for updates; try again later.",
-                ),
-                UpdateState::StoreManaged => self.text(
-                    "此安装由 Microsoft Store 更新。",
-                    "Microsoft Store manages updates for this installation.",
-                ),
-            };
-            let mut update_card = div()
-                .rounded_xl()
-                .border_1()
-                .border_color(rgb(border))
-                .bg(rgb(side))
-                .p_6()
-                .flex()
-                .flex_col()
-                .gap_3()
-                .child(
-                    div()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(self.text("关于与更新", "About and updates")),
-                )
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(rgb(muted))
-                        .child(format!("NDM Next {}", env!("CARGO_PKG_VERSION"))),
-                )
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(rgb(muted))
-                        .child(update_description),
-                );
-            if self.update_state != UpdateState::StoreManaged {
-                update_card = update_card
-                    .child(div().text_xs().text_color(rgb(muted)).child(self.text(
-                        "启动后会向 GitHub 检查桌面版更新。",
-                        "Checks GitHub for desktop updates after startup.",
-                    )))
-                    .child(
-                        Button::new("check-updates")
-                            .label(self.text("检查更新", "Check for updates"))
-                            .on_click(cx.listener(|this, _, _, cx| this.check_for_update(cx))),
-                    );
-            }
-            content = content.child(update_card);
-        } else {
-            content = content.child(
-                div()
-                    .rounded_xl()
-                    .border_1()
-                    .border_color(rgb(border))
-                    .bg(rgb(side))
-                    .p_5()
-                    .flex()
-                    .flex_col()
-                    .gap_3()
-                    .child(
-                        div()
-                            .text_color(rgb(fg))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(self.text("新建下载", "New download")),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .gap_3()
-                            .items_center()
-                            .child(
-                                div().flex_1().child(
-                                    Input::new(&self.url_input)
-                                        .id("download-url")
-                                        .aria_label(self.text("下载链接", "Download URL"))
-                                        .w_full(),
-                                ),
-                            )
-                            .child(
-                                Button::new("advanced-auth")
-                                    .label(self.text("FTP/SFTP 认证", "FTP/SFTP auth"))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.auth_expanded = !this.auth_expanded;
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
-                                Button::new("inspect-hls")
-                                    .label(if self.inspecting_hls {
-                                        self.text("正在读取…", "Inspecting…")
-                                    } else {
-                                        self.text("媒体选项", "Media options")
-                                    })
-                                    .on_click(cx.listener(|this, _, _, cx| this.inspect_hls(cx))),
-                            )
-                            .child(
-                                Button::new("add-download")
-                                    .primary()
-                                    .label(self.text("添加下载", "Add download"))
-                                    .on_click(
-                                        cx.listener(|this, _, window, cx| this.add(window, cx)),
-                                    ),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_3()
-                            .text_sm()
-                            .text_color(rgb(muted))
-                            .child(self.text("保存至", "Save to"))
-                            .child(
-                                div().flex_1().child(
-                                    Input::new(&self.directory_input)
-                                        .id("destination")
-                                        .aria_label(self.text("保存位置", "Destination"))
-                                        .w_full(),
-                                ),
-                            ),
-                    ),
-            );
-            if self.auth_expanded {
-                content = content.child(div().rounded_xl().border_1().border_color(rgb(border)).bg(rgb(side)).p_4().flex().flex_col().gap_3()
+                if self.auth_expanded {
+                    content = content.child(div().rounded_xl().border_1().border_color(rgb(border)).bg(rgb(side)).p_4().flex().flex_col().gap_3()
                     .child(div().font_weight(FontWeight::SEMIBOLD).child(self.text("FTP / SFTP 认证", "FTP / SFTP authentication")))
                     .child(div().flex().gap_3()
                         .child(self.settings_field(self.text("用户名", "Username"), "auth-user", &self.auth_user_input, muted))
@@ -1628,11 +1531,17 @@ impl Render for Desktop {
                         FtpSecurity::ImplicitTls => self.text("FTP 安全：隐式 TLS", "FTP security: Implicit TLS"),
                     }).on_click(cx.listener(|this, _, _, cx| { this.ftp_security = match this.ftp_security { FtpSecurity::Auto | FtpSecurity::Plain => FtpSecurity::ExplicitTls, FtpSecurity::ExplicitTls => FtpSecurity::ImplicitTls, FtpSecurity::ImplicitTls => FtpSecurity::Auto }; cx.notify(); })))
                     .child(div().text_xs().text_color(rgb(muted)).child(self.text("密码和私钥口令会加密保存在本机。使用私钥时无需填写密码。", "Passwords and key passphrases are encrypted on this device. Leave password empty when using a private key."))));
-            }
-            if let Some((url, catalog)) = &self.hls_catalog
-                && self.url_input.read(cx).value().as_ref().trim() == url
-            {
-                content = content.child(self.hls_options_panel(catalog, dark, cx));
+                }
+                if let Some((url, catalog)) = &self.hls_catalog
+                    && self.url_input.read(cx).value().as_ref().trim() == url
+                {
+                    content = content.child(self.hls_options_panel(catalog, dark, cx));
+                }
+                if let Some((url, catalog)) = &self.dash_catalog
+                    && self.url_input.read(cx).value().as_ref().trim() == url
+                {
+                    content = content.child(self.dash_options_panel(catalog, dark, cx));
+                }
             }
             if self.editing_url.is_some() {
                 content = content.child(
@@ -1656,147 +1565,211 @@ impl Render for Desktop {
                                 })))),
                 );
             }
-            if let Some(id) = self.deleting_task {
-                let name = self
-                    .tasks
-                    .iter()
-                    .find(|task| task.id == id)
-                    .and_then(crate::filenames::display_name)
-                    .unwrap_or_else(|| self.text("未命名下载", "Untitled download").into());
+            let selectable: Vec<_> = visible
+                .iter()
+                .map(|index| &self.tasks[*index])
+                .filter(|task| task.state != TaskState::Prepared)
+                .map(|task| task.id)
+                .collect();
+            if !selectable.is_empty() {
+                let all_selected = selectable.iter().all(|id| self.selected_tasks.contains(id));
+                let selected_count = self.selected_tasks.len();
+                let selected_ids: Vec<_> = self.selected_tasks.iter().copied().collect();
                 content = content.child(
                     div()
-                        .rounded_xl()
-                        .border_1()
-                        .border_color(rgb(border))
-                        .bg(rgb(side))
-                        .p_4()
                         .flex()
-                        .flex_col()
-                        .gap_3()
+                        .items_center()
+                        .gap_2()
                         .child(
-                            div()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(self.text("移除下载任务", "Remove download")),
+                            Button::new("select-all")
+                                .small()
+                                .ghost()
+                                .icon(if all_selected {
+                                    IconName::CircleCheck
+                                } else {
+                                    IconName::Square
+                                })
+                                .label(if all_selected {
+                                    self.text("取消全选", "Deselect all")
+                                } else {
+                                    self.text("全选", "Select all")
+                                })
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    for id in &selectable {
+                                        if all_selected {
+                                            this.selected_tasks.remove(id);
+                                        } else {
+                                            this.selected_tasks.insert(*id);
+                                        }
+                                    }
+                                    cx.notify();
+                                })),
                         )
-                        .child(div().text_xs().text_color(rgb(muted)).child(format!(
-                            "{} {name}",
-                            self.text(
-                                "是否同时删除此任务的临时文件？",
-                                "Also delete temporary files for:"
+                        .when(selected_count > 0, |row| {
+                            row.child(div().text_xs().text_color(rgb(muted)).child(format!(
+                                "{} {}",
+                                selected_count,
+                                self.text("已选择", "selected")
+                            )))
+                            .child(
+                                Button::new("delete-selected")
+                                    .small()
+                                    .danger()
+                                    .label(self.text("删除", "Delete"))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.confirm_delete(selected_ids.clone(), cx)
+                                    })),
                             )
-                        )))
-                        .child(
-                            div()
-                                .flex()
-                                .gap_3()
-                                .items_center()
-                                .child(
-                                    Button::new("remove-keep-partial")
-                                        .label(self.text("保留临时文件", "Keep temporary files"))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.delete_record(id, false, cx)
-                                        })),
-                                )
-                                .child(
-                                    Button::new("remove-delete-partial")
-                                        .label(self.text("删除临时文件", "Delete temporary files"))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.delete_record(id, true, cx)
-                                        })),
-                                )
-                                .child(
-                                    Button::new("cancel-remove")
-                                        .label(self.text("取消", "Cancel"))
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.deleting_task = None;
-                                            cx.notify();
-                                        })),
-                                ),
-                        ),
+                        }),
                 );
             }
-            let mut list = div()
-                .id("task-list")
-                .flex_1()
-                .overflow_y_scroll()
-                .flex()
-                .flex_col()
-                .gap_3();
             if visible.is_empty() {
-                list = list.child(
+                content = content.child(
                     div()
                         .flex_1()
-                        .min_h(px(160.))
+                        .min_h(px(100.))
                         .flex()
                         .items_center()
                         .justify_center()
                         .text_sm()
                         .text_color(rgb(muted))
-                        .child(self.text("这里还没有下载任务", "No downloads here yet")),
+                        .child(
+                            if self.search_query.is_empty() && self.category == Category::All {
+                                self.text("这里还没有下载任务", "No downloads here yet")
+                            } else {
+                                self.text("没有符合条件的下载", "No matching downloads")
+                            },
+                        ),
                 );
             } else {
-                for task in &visible {
-                    list = list.child(self.task_row(task, dark, cx));
-                }
+                content = content.child(
+                    uniform_list(
+                        "task-list",
+                        visible.len(),
+                        cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
+                            range
+                                .map(|index| {
+                                    this.task_row(&this.tasks[visible[index]], dark, cx)
+                                        .into_any_element()
+                                })
+                                .collect()
+                        }),
+                    )
+                    .flex_1()
+                    .min_h(px(if self.new_download_open { 120. } else { 0. })),
+                );
             }
-            content = content.child(list);
         }
         if let Some(notice) = &self.notice {
             content = content.child(div().text_sm().text_color(rgb(muted)).child(notice.clone()));
         }
         div()
             .size_full()
+            .key_context("NDMNext")
+            .on_action(cx.listener(|this, _: &FocusSearch, window, cx| {
+                if this.section == Section::Settings {
+                    this.section = Section::All;
+                }
+                this.search_input
+                    .read(cx)
+                    .focus_handle(cx)
+                    .focus(window, cx);
+                cx.notify();
+            }))
             .flex()
+            .flex_col()
             .bg(rgb(page))
             .text_color(rgb(fg))
+            .child(crate::chrome::title_bar("NDM Next", dark))
             .child(
                 div()
-                    .w(px(220.))
-                    .h_full()
+                    .flex_1()
+                    .min_h_0()
                     .flex()
-                    .flex_col()
-                    .gap_2()
-                    .p_5()
-                    .bg(rgb(side))
-                    .border_r_1()
-                    .border_color(rgb(border))
                     .child(
                         div()
+                            .w(px(if self.sidebar_collapsed { 60. } else { 180. }))
                             .flex()
-                            .gap_3()
-                            .items_center()
-                            .mb_8()
+                            .flex_col()
+                            .gap_1()
+                            .p_2()
+                            .bg(rgb(side))
+                            .border_r_1()
+                            .border_color(rgb(border))
                             .child(
                                 div()
-                                    .size(px(40.))
-                                    .rounded_lg()
-                                    .bg(rgb(0x7465ef))
+                                    .w_full()
                                     .flex()
+                                    .gap_2()
                                     .items_center()
-                                    .justify_center()
-                                    .text_color(rgb(0xffffff))
-                                    .font_weight(FontWeight::BOLD)
-                                    .child("N"),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .child(div().font_weight(FontWeight::BOLD).child("NDM Next"))
+                                    .h(px(36.))
+                                    .mb_3()
+                                    .when(self.sidebar_collapsed, |row| row.justify_center())
+                                    .when(!self.sidebar_collapsed, |row| {
+                                        row.child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap_2()
+                                                .text_sm()
+                                                .font_weight(FontWeight::BOLD)
+                                                .child(crate::branding::logo(px(24.)))
+                                                .child("NDM Next"),
+                                        )
+                                    })
+                                    .when(!self.sidebar_collapsed, |row| row.child(div().flex_1()))
                                     .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(rgb(muted))
-                                            .child(self.text("下载管理器", "Download manager")),
+                                        Button::new("sidebar-toggle")
+                                            .small()
+                                            .ghost()
+                                            .w(px(28.))
+                                            .h(px(28.))
+                                            .flex_shrink_0()
+                                            .icon(if self.sidebar_collapsed {
+                                                IconName::PanelLeftOpen
+                                            } else {
+                                                IconName::PanelLeftClose
+                                            })
+                                            .tooltip(if self.sidebar_collapsed {
+                                                self.text("展开侧边栏", "Expand sidebar")
+                                            } else {
+                                                self.text("收起侧边栏", "Collapse sidebar")
+                                            })
+                                            .accessibility_label(
+                                                self.text("切换侧边栏", "Toggle sidebar"),
+                                            )
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.sidebar_collapsed = !this.sidebar_collapsed;
+                                                this.preferences.sidebar_collapsed =
+                                                    this.sidebar_collapsed;
+                                                this.save_preferences();
+                                                cx.notify();
+                                            })),
                                     ),
-                            ),
+                            )
+                            .child(self.nav_item(
+                                self.text("全部任务", "All downloads"),
+                                Section::All,
+                                cx,
+                            ))
+                            .child(self.nav_item(
+                                self.text("进行中", "In progress"),
+                                Section::Active,
+                                cx,
+                            ))
+                            .child(self.nav_item(
+                                self.text("已完成", "Completed"),
+                                Section::Completed,
+                                cx,
+                            ))
+                            .child(div().flex_1())
+                            .child(self.nav_item(
+                                self.text("设置", "Settings"),
+                                Section::Settings,
+                                cx,
+                            )),
                     )
-                    .child(self.nav_item(self.text("全部任务", "All downloads"), Section::All, cx))
-                    .child(self.nav_item(self.text("进行中", "In progress"), Section::Active, cx))
-                    .child(self.nav_item(self.text("已完成", "Completed"), Section::Completed, cx))
-                    .child(div().flex_1())
-                    .child(self.nav_item(self.text("设置", "Settings"), Section::Settings, cx)),
+                    .child(content),
             )
-            .child(content)
     }
 }

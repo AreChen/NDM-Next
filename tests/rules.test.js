@@ -7,3 +7,17 @@ test('domains match boundary and subdomains', () => { assert.equal(domainMatches
 test('skip page or destination domain, types, and known small files', () => { for (const item of [{url:'https://example.com/file.zip'}, {url:'https://other.org/f.zip',pageUrl:'https://a.example.com/'},{url:'https://other.org/a.data?x=1'},{url:'https://other.org/a.zip',size:100}]) assert.equal(shouldSkip(item, defaults), true); });
 test('unknown size and threshold boundary are eligible', () => { assert.equal(shouldSkip({url:'https://other.org/a.zip'}, defaults), false); assert.equal(shouldSkip({url:'https://other.org/a.zip',size:1048576}, defaults), false); });
 test('protocol encodes safe request headers and context', () => { let task=encodeTask({url:'https://x.test/a',pageUrl:'https://x.test/p',cookie:'a=b',size:12}); assert.match(task,/1:GET\r\n2:https:\/\/x.test\/a\r\n/); assert.match(task,/Cookie: a=b\r\n/); assert.match(task,/7:12\r\n/); assert.throws(()=>encodeTask({url:'https://x.test/\r\nCookie: injected'})); });
+test('media manifest size is not the final media size and still respects exclusion rules', () => {
+  for (const item of [
+    {url:'https://other.org/video.mpd?token=public',size:800},
+    {url:'https://other.org/manifest',type:'application/dash+xml; charset=utf-8',size:800},
+    {url:'https://other.org/video.m3u8',size:800},
+  ]) {
+    assert.equal(shouldSkip(item,defaults),false);
+    assert.doesNotMatch(encodeTask(item),/7:800/);
+    assert.equal(shouldSkip({...item,pageUrl:'https://example.com/'},defaults),true);
+  }
+});
+test('malformed percent escapes do not crash filtering', () => {
+  assert.equal(shouldSkip({url:'https://other.org/%ZZ.zip'},defaults),false);
+});

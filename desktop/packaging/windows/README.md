@@ -6,18 +6,21 @@ Run `build.ps1 -MediaToolDir <output-directory>` on Windows with the Rust 1.100.
 
 The build verifies the media files and configuration, checks dependency licenses, and creates an installer under `desktop/dist/` with the relevant source and license notices. The per-user installer registers the Chrome and Edge native messaging hosts. Uninstalling offers to retain or remove settings and download records; completed downloads are kept. Silent uninstall retains the records.
 
-The installer is unsigned until a release signing process is configured. This script does not create an MSIX or submit an app to the Microsoft Store.
+Desktop releases are distributed through GitHub as `desktop-v{version}`. The Windows asset is `NDM-Next-Setup-{version}-x64.exe`; the updater verifies its GitHub SHA-256 asset digest and length, then runs it silently once transfers are idle. Automatic updates can be disabled in Settings. Setup closes the running installation before replacing its files and defaults to opening the app afterward. Silent `/UPDATE` installs also reopen it.
 
-## Try the unreleased browser integration
+## Browser extension
 
-The current store extension does not yet contain the new desktop backend. To test locally, load the repository's `extension/` directory as an unpacked extension in developer mode, then allow its displayed extension ID in the installed host:
+Download the companion extension ZIP from the desktop GitHub release and extract it. Load the extracted folder as an unpacked extension in the browser's developer mode. The repository's `extension/` directory works too. Allow its displayed extension ID in the installed host:
 
 ```powershell
-pwsh -File desktop/packaging/windows/enable-dev-extension.ps1 -ExtensionId <extension-id>
+pwsh -File .\enable-dev-extension.ps1 -ExtensionId <extension-id>
 ```
 
-The command adds that one local extension to the native messaging manifest. Reload the extension and select **NDM Next** as its backend. Re-run the command after reinstalling the desktop app, since installation resets the list to the official store IDs.
+Download `enable-dev-extension.ps1` from the same release (or use `desktop/packaging/windows/enable-dev-extension.ps1` in a source checkout). The command adds that one local extension to the native messaging manifest. Reload the extension and select **NDM Next** as its backend. The installer preserves existing valid extension IDs for the same installation. The existing extension store release has a separate version stream.
 
-## Microsoft Store
+## Release checklist
 
-MSIX browser integration remains unresolved. Edge and Chrome discover a native host through a registry entry, while MSIX normally isolates registry writes from other applications. A packaged execution alias was verified to support Native Messaging, but it does not make that registry entry visible. Microsoft's [unvirtualized resources](https://learn.microsoft.com/en-us/windows/msix/desktop/flexible-virtualization) capability requires restricted-capability approval and leaves those writes behind after uninstall, so it is not included as a finished Store solution. An [unpackaged Store submission](https://learn.microsoft.com/en-us/windows/apps/distribute-through-store/how-to-distribute-your-win32-app-through-microsoft-store) is a different distribution option and requires publisher signing.
+- Run the Rust workspace suite, media integration tests, extension tests, formatting and clippy checks.
+- Build the installer with the audited media tools. Publish its corresponding source and licenses with the installer (the build includes them).
+- Publish the installer, companion extension, browser-integration helper and `SHA256SUMS` at a stable `desktop-v{version}` GitHub release. Keep incomplete uploads in a draft.
+- Verify the published installer size and SHA-256 digest against the local build before considering the release ready for automatic updates.

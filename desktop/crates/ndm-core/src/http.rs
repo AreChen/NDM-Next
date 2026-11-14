@@ -2,8 +2,8 @@ use std::{
     fmt,
     path::{Path, PathBuf},
     sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, RwLock,
+        atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -14,7 +14,12 @@ use reqwest::{
     header::{self, HeaderMap, HeaderName, HeaderValue},
 };
 use serde::{Deserialize, Serialize};
-use tokio::{fs, io::AsyncWriteExt, sync::Mutex, time::Instant};
+use tokio::{
+    fs,
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    sync::Mutex,
+    time::Instant,
+};
 use tokio_util::sync::CancellationToken;
 
 use crate::{Error, NewTask, Result, Store, TaskId, secrets};
@@ -66,28 +71,122 @@ impl ProxyOptions {
 #[derive(Default)]
 struct ProgressState {
     downloaded: AtomicU64,
+    transferred: AtomicU64,
+    merged: AtomicU64,
+    finalized_ms: AtomicU64,
+    finalization_total_ms: AtomicU64,
+    phase: AtomicU8,
     total: AtomicU64,
     total_known: AtomicBool,
+    segments: RwLock<Vec<Arc<SegmentState>>>,
+}
+
+struct SegmentState {
+    downloaded: AtomicU64,
+    total: Option<u64>,
+    active: AtomicBool,
+}
+
+struct ActiveSegment(Arc<SegmentState>);
+
+impl Drop for ActiveSegment {
+    fn drop(&mut self) {
+        self.0.active.store(false, Ordering::Relaxed);
+    }
+}
+
+impl SegmentState {
+    fn activate(segment: &Arc<Self>) -> ActiveSegment {
+        segment.active.store(true, Ordering::Relaxed);
+        ActiveSegment(segment.clone())
+    }
 }
 
 #[derive(Clone, Default)]
 pub struct DownloadProgress(Arc<ProgressState>);
 
-pub struct ProgressSnapshot {
+#[derive(Clone, Debug)]
+pub struct SegmentSnapshot {
     pub downloaded: u64,
     pub total: Option<u64>,
+    pub active: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct ProgressSnapshot {
+    pub downloaded: u64,
+    /// Bytes actually received during this attempt, excluding restored segments.
+    pub transferred: u64,
+    pub total: Option<u64>,
+    pub merged: u64,
+    /// Timestamp actually reported by the local media tool, in milliseconds.
+    pub finalized_ms: u64,
+    /// Known local media duration; absent when finalization cannot be measured.
+    pub finalization_total_ms: Option<u64>,
+    pub phase: ProgressPhase,
+    pub segments: Vec<SegmentSnapshot>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ProgressPhase {
+    #[default]
+    Downloading,
+    Merging,
+    Finalizing,
 }
 
 impl DownloadProgress {
     pub fn snapshot(&self) -> ProgressSnapshot {
         ProgressSnapshot {
             downloaded: self.0.downloaded.load(Ordering::Relaxed),
+            transferred: self.0.transferred.load(Ordering::Relaxed),
+            merged: self.0.merged.load(Ordering::Relaxed),
+            finalized_ms: self.0.finalized_ms.load(Ordering::Relaxed),
+            finalization_total_ms: match self.0.finalization_total_ms.load(Ordering::Relaxed) {
+                0 => None,
+                value => Some(value),
+            },
+            phase: match self.0.phase.load(Ordering::Acquire) {
+                1 => ProgressPhase::Merging,
+                2 => ProgressPhase::Finalizing,
+                _ => ProgressPhase::Downloading,
+            },
             total: self
                 .0
                 .total_known
                 .load(Ordering::Acquire)
                 .then(|| self.0.total.load(Ordering::Relaxed)),
+            segments: self
+                .0
+                .segments
+                .read()
+                .unwrap()
+                .iter()
+                .map(|segment| SegmentSnapshot {
+                    downloaded: segment.downloaded.load(Ordering::Relaxed),
+                    total: segment.total,
+                    active: segment.active.load(Ordering::Relaxed),
+                })
+                .collect(),
         }
+    }
+
+    fn replace_segments(
+        &self,
+        totals: impl IntoIterator<Item = Option<u64>>,
+    ) -> Vec<Arc<SegmentState>> {
+        let segments: Vec<_> = totals
+            .into_iter()
+            .map(|total| {
+                Arc::new(SegmentState {
+                    downloaded: AtomicU64::new(0),
+                    total,
+                    active: AtomicBool::new(false),
+                })
+            })
+            .collect();
+        *self.0.segments.write().unwrap() = segments.clone();
+        segments
     }
 
     pub(crate) fn set_total(&self, total: Option<u64>) {
@@ -101,6 +200,38 @@ impl DownloadProgress {
 
     pub(crate) fn add(&self, bytes: u64) {
         self.0.downloaded.fetch_add(bytes, Ordering::Relaxed);
+        self.0.transferred.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    pub(crate) fn add_existing(&self, bytes: u64) {
+        self.0.downloaded.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    fn begin_merge(&self) {
+        self.0.merged.store(0, Ordering::Relaxed);
+        self.0.phase.store(1, Ordering::Release);
+    }
+
+    pub(crate) fn finalize(&self) {
+        self.0.phase.store(2, Ordering::Release);
+    }
+
+    pub(crate) fn begin_finalization(&self, duration_ms: Option<u64>) {
+        self.0.finalized_ms.store(0, Ordering::Relaxed);
+        self.0
+            .finalization_total_ms
+            .store(duration_ms.unwrap_or(0), Ordering::Relaxed);
+        self.finalize();
+    }
+
+    pub(crate) fn set_finalized_ms(&self, timestamp_ms: u64) {
+        self.0
+            .finalized_ms
+            .fetch_max(timestamp_ms, Ordering::Relaxed);
+    }
+
+    pub(crate) fn resume_downloading(&self) {
+        self.0.phase.store(0, Ordering::Release);
     }
 }
 
@@ -190,6 +321,8 @@ async fn download_http_with_progress(
     progress: DownloadProgress,
 ) -> Result<PathBuf> {
     progress.0.downloaded.store(0, Ordering::Relaxed);
+    progress.0.transferred.store(0, Ordering::Relaxed);
+    progress.0.phase.store(0, Ordering::Release);
     progress.set_total(None);
     let client = network_client(options.proxy.as_ref())?;
     let headers = request_headers(request)?;
@@ -266,7 +399,12 @@ async fn download_http_with_progress(
         }
         let segment_cancel = cancel.child_token();
         let mut transfers = FuturesUnordered::new();
-        for index in 0..connections {
+        let segments = progress.replace_segments((0..connections).map(|index| {
+            let start = ((total as u128 * index as u128) / connections as u128) as u64;
+            let end = ((total as u128 * (index + 1) as u128) / connections as u128) as u64;
+            Some(end - start)
+        }));
+        for (index, segment) in segments.iter().enumerate() {
             let start = ((total as u128 * index as u128) / connections as u128) as u64;
             let end = ((total as u128 * (index + 1) as u128) / connections as u128) as u64 - 1;
             let part = work_dir.join(format!("segment-{index}.part"));
@@ -283,6 +421,7 @@ async fn download_http_with_progress(
                 limiter.clone(),
                 segment_cancel.clone(),
                 progress.clone(),
+                segment.clone(),
             ));
         }
         let mut first_error = None;
@@ -311,17 +450,15 @@ async fn download_http_with_progress(
             }
             Some(error) => return Err(error),
             None => {
-                let mut merged = fs::File::create(&assembled).await?;
-                for index in 0..connections {
-                    let mut part =
-                        fs::File::open(work_dir.join(format!("segment-{index}.part"))).await?;
-                    tokio::io::copy(&mut part, &mut merged).await?;
-                }
-                merged.flush().await?;
-                if merged.metadata().await?.len() != total {
-                    return Err(Error::InvalidHttpResponse);
-                }
-                merged.sync_all().await?;
+                assemble_segments(
+                    &work_dir,
+                    &assembled,
+                    connections,
+                    total,
+                    &cancel,
+                    &progress,
+                )
+                .await?;
             }
         }
     } else {
@@ -371,6 +508,52 @@ async fn download_http_with_progress(
     Ok(target)
 }
 
+async fn assemble_segments(
+    work_dir: &Path,
+    assembled: &Path,
+    connections: usize,
+    total: u64,
+    cancel: &CancellationToken,
+    progress: &DownloadProgress,
+) -> Result<()> {
+    progress.begin_merge();
+    let mut merged = fs::File::create(assembled).await?;
+    let mut buffer = vec![0_u8; 256 * 1024];
+    for index in 0..connections {
+        let mut part = fs::File::open(work_dir.join(format!("segment-{index}.part"))).await?;
+        copy_segment(&mut part, &mut merged, &mut buffer, cancel, progress).await?;
+    }
+    progress.finalize();
+    merged.flush().await?;
+    if merged.metadata().await?.len() != total {
+        return Err(Error::InvalidHttpResponse);
+    }
+    merged.sync_all().await?;
+    Ok(())
+}
+
+async fn copy_segment(
+    input: &mut (impl AsyncRead + Unpin),
+    output: &mut (impl AsyncWrite + Unpin),
+    buffer: &mut [u8],
+    cancel: &CancellationToken,
+    progress: &DownloadProgress,
+) -> Result<()> {
+    loop {
+        let count = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(Error::Cancelled),
+            count = input.read(buffer) => count?,
+        };
+        if count == 0 {
+            break;
+        }
+        output.write_all(&buffer[..count]).await?;
+        progress.0.merged.fetch_add(count as u64, Ordering::Relaxed);
+    }
+    Ok(())
+}
+
 async fn download_full(
     response: Response,
     assembled: &Path,
@@ -389,8 +572,24 @@ async fn download_full(
         (None, None) => None,
     };
     progress.set_total(expected);
+    let segment = progress
+        .replace_segments([expected.or(expected_size)])
+        .remove(0);
+    let _active = SegmentState::activate(&segment);
     let mut file = fs::File::create(assembled).await?;
-    let result = write_response(response, &mut file, limiter, cancel, progress, maximum).await;
+    let result = write_response(
+        response,
+        &mut file,
+        limiter,
+        cancel,
+        progress,
+        Some(&segment),
+        maximum,
+    )
+    .await;
+    if result.is_ok() {
+        progress.finalize();
+    }
     file.flush().await?;
     let written = result?;
     if expected.is_some_and(|expected| expected != written) {
@@ -559,6 +758,7 @@ async fn fetch_segment(
     limiter: Arc<RateLimiter>,
     cancel: CancellationToken,
     progress: DownloadProgress,
+    segment: Arc<SegmentState>,
 ) -> Result<()> {
     let length = end - start + 1;
     let mut file = fs::OpenOptions::new()
@@ -572,7 +772,13 @@ async fn fetch_segment(
         file.set_len(0).await?;
         present = 0;
     }
-    progress.add(present);
+    progress.add_existing(present);
+    segment.downloaded.store(present, Ordering::Relaxed);
+    if present == length {
+        file.sync_data().await?;
+        return Ok(());
+    }
+    let _active = SegmentState::activate(&segment);
     for attempt in 0..3 {
         if present == length {
             file.sync_data().await?;
@@ -613,6 +819,7 @@ async fn fetch_segment(
             &limiter,
             &cancel,
             &progress,
+            Some(&segment),
             Some(length - present),
         )
         .await;
@@ -647,6 +854,7 @@ async fn write_response(
     limiter: &RateLimiter,
     cancel: &CancellationToken,
     progress: &DownloadProgress,
+    segment: Option<&SegmentState>,
     maximum: Option<u64>,
 ) -> Result<u64> {
     let mut body = response.bytes_stream();
@@ -671,6 +879,11 @@ async fn write_response(
         limiter.wait(chunk.len(), cancel).await?;
         file.write_all(&chunk).await?;
         progress.add(chunk.len() as u64);
+        if let Some(segment) = segment {
+            segment
+                .downloaded
+                .fetch_add(chunk.len() as u64, Ordering::Relaxed);
+        }
         total = next;
     }
     Ok(total)
@@ -887,6 +1100,93 @@ async fn remove_if_present(path: PathBuf) -> Result<()> {
 #[cfg(test)]
 mod publication_tests {
     use super::*;
+
+    #[test]
+    fn restored_bytes_are_not_counted_as_network_traffic() {
+        let progress = DownloadProgress::default();
+        progress.add_existing(1_000);
+        progress.add(250);
+        let snapshot = progress.snapshot();
+        assert_eq!(snapshot.downloaded, 1_250);
+        assert_eq!(snapshot.transferred, 250);
+    }
+
+    #[tokio::test]
+    async fn assembly_reports_actual_bytes_and_preserves_segments() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("segment-0.part"), b"first ").unwrap();
+        std::fs::write(directory.path().join("segment-1.part"), b"second").unwrap();
+        let assembled = directory.path().join("assembled.part");
+        let progress = DownloadProgress::default();
+        assemble_segments(
+            directory.path(),
+            &assembled,
+            2,
+            12,
+            &CancellationToken::new(),
+            &progress,
+        )
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read(assembled).unwrap(), b"first second");
+        assert!(directory.path().join("segment-0.part").exists());
+        let snapshot = progress.snapshot();
+        assert_eq!(snapshot.merged, 12);
+        assert_eq!(snapshot.phase, ProgressPhase::Finalizing);
+    }
+
+    #[tokio::test]
+    async fn assembly_updates_progress_before_the_input_finishes() {
+        let (mut producer, mut reader) = tokio::io::duplex(64);
+        let progress = DownloadProgress::default();
+        progress.begin_merge();
+        let observed = progress.clone();
+        let copy = tokio::spawn(async move {
+            let mut output = tokio::io::sink();
+            let mut buffer = [0; 16];
+            copy_segment(
+                &mut reader,
+                &mut output,
+                &mut buffer,
+                &CancellationToken::new(),
+                &observed,
+            )
+            .await
+        });
+        producer.write_all(b"first").await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while progress.snapshot().merged != 5 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("merge should report bytes before the stream closes");
+        assert_eq!(progress.snapshot().phase, ProgressPhase::Merging);
+        producer.write_all(b"second").await.unwrap();
+        producer.shutdown().await.unwrap();
+        copy.await.unwrap().unwrap();
+        assert_eq!(progress.snapshot().merged, 11);
+    }
+
+    #[tokio::test]
+    async fn cancelled_assembly_keeps_reusable_segments() {
+        let directory = tempfile::tempdir().unwrap();
+        let part = directory.path().join("segment-0.part");
+        std::fs::write(&part, b"keep this part").unwrap();
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let result = assemble_segments(
+            directory.path(),
+            &directory.path().join("assembled.part"),
+            1,
+            14,
+            &cancel,
+            &DownloadProgress::default(),
+        )
+        .await;
+        assert!(matches!(result, Err(Error::Cancelled)));
+        assert_eq!(std::fs::read(part).unwrap(), b"keep this part");
+    }
 
     #[tokio::test]
     async fn missing_source_never_leaves_an_empty_published_target() {

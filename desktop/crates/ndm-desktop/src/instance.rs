@@ -12,7 +12,10 @@ mod platform {
     };
     use windows_sys::Win32::{
         Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, WAIT_OBJECT_0},
-        System::Threading::{CreateEventW, CreateMutexW, INFINITE, SetEvent, WaitForSingleObject},
+        System::Threading::{
+            CreateEventW, CreateMutexW, INFINITE, ReleaseMutex, ResetEvent, SetEvent,
+            WaitForSingleObject,
+        },
     };
 
     pub struct Instance {
@@ -20,9 +23,24 @@ mod platform {
         event: HANDLE,
         show_event: HANDLE,
         ready_event: HANDLE,
+        shutdown_event: HANDLE,
+        shutdown_requested: Arc<AtomicBool>,
         stopping: Arc<AtomicBool>,
         worker: Option<JoinHandle<()>>,
         show_worker: Option<JoinHandle<()>>,
+        shutdown_worker: Option<JoinHandle<()>>,
+    }
+
+    struct StartupGuard(HANDLE);
+
+    impl Drop for StartupGuard {
+        fn drop(&mut self) {
+            // SAFETY: Only a newly created, owned startup mutex reaches this type.
+            unsafe {
+                ReleaseMutex(self.0);
+                CloseHandle(self.0);
+            }
+        }
     }
 
     fn wide(value: &str) -> Vec<u16> {
@@ -32,6 +50,27 @@ mod platform {
     impl Instance {
         pub fn acquire(data_dir: &Path, show: bool) -> io::Result<Option<Self>> {
             let name = ndm_core::desktop_instance_namespace(data_dir);
+            // Serialize the short registration step with installer guard acquisition.
+            // Existing guards belong to an installer or another startup; never open storage.
+            let startup = unsafe {
+                let guard = CreateMutexW(
+                    ptr::null(),
+                    1,
+                    wide(&ndm_core::desktop_installation_namespace(data_dir)).as_ptr(),
+                );
+                if guard.is_null() {
+                    return Err(io::Error::last_os_error());
+                }
+                if GetLastError() == ERROR_ALREADY_EXISTS {
+                    CloseHandle(guard);
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "installation or startup is in progress",
+                    ));
+                }
+                StartupGuard(guard)
+            };
+            let _startup = startup;
             // SAFETY: Both names are NUL-terminated, security attributes are
             // null (the current user's default DACL), and handles are closed below.
             unsafe {
@@ -63,6 +102,20 @@ mod platform {
                     CloseHandle(mutex);
                     return Err(error);
                 }
+                let shutdown_event = CreateEventW(
+                    ptr::null(),
+                    0,
+                    0,
+                    wide(&format!("{name}-shutdown")).as_ptr(),
+                );
+                if shutdown_event.is_null() {
+                    let error = io::Error::last_os_error();
+                    CloseHandle(ready_event);
+                    CloseHandle(show_event);
+                    CloseHandle(event);
+                    CloseHandle(mutex);
+                    return Err(error);
+                }
                 if exists {
                     let result = SetEvent(event);
                     let error = if result == 0 || (show && SetEvent(show_event) == 0) {
@@ -71,6 +124,7 @@ mod platform {
                         None
                     };
                     CloseHandle(ready_event);
+                    CloseHandle(shutdown_event);
                     CloseHandle(show_event);
                     CloseHandle(event);
                     CloseHandle(mutex);
@@ -84,20 +138,53 @@ mod platform {
                     event,
                     show_event,
                     ready_event,
+                    shutdown_event,
+                    shutdown_requested: Arc::new(AtomicBool::new(false)),
                     stopping: Arc::new(AtomicBool::new(false)),
                     worker: None,
                     show_worker: None,
+                    shutdown_worker: None,
                 }))
             }
         }
 
         pub fn mark_ready(&self) -> io::Result<()> {
             // SAFETY: The instance owns the event until its Drop implementation.
-            if unsafe { SetEvent(self.ready_event) } == 0 {
+            let result = if self.shutdown_requested.load(Ordering::Acquire) {
+                unsafe { ResetEvent(self.ready_event) }
+            } else {
+                unsafe { SetEvent(self.ready_event) }
+            };
+            if result == 0 {
                 Err(io::Error::last_os_error())
             } else {
+                // A shutdown may race recovery's final SetEvent; it must remain unavailable.
+                if self.shutdown_requested.load(Ordering::Acquire) {
+                    unsafe {
+                        ResetEvent(self.ready_event);
+                    }
+                }
                 Ok(())
             }
+        }
+
+        pub fn on_shutdown(&mut self, notify: impl Fn() + Send + 'static) {
+            let event = self.shutdown_event as usize;
+            let ready = self.ready_event as usize;
+            let stopping = self.stopping.clone();
+            let requested = self.shutdown_requested.clone();
+            self.shutdown_worker = Some(thread::spawn(move || {
+                // SAFETY: Instance owns both handles until this worker has joined.
+                if unsafe { WaitForSingleObject(event as HANDLE, INFINITE) } == WAIT_OBJECT_0
+                    && !stopping.load(Ordering::Acquire)
+                {
+                    requested.store(true, Ordering::Release);
+                    unsafe {
+                        ResetEvent(ready as HANDLE);
+                    }
+                    notify();
+                }
+            }));
         }
 
         pub fn on_wake(&mut self, notify: impl Fn() + Send + 'static) {
@@ -141,6 +228,8 @@ mod platform {
             unsafe {
                 SetEvent(self.event);
                 SetEvent(self.show_event);
+                SetEvent(self.shutdown_event);
+                ResetEvent(self.ready_event);
             }
             if let Some(worker) = self.worker.take() {
                 let _ = worker.join();
@@ -148,7 +237,11 @@ mod platform {
             if let Some(worker) = self.show_worker.take() {
                 let _ = worker.join();
             }
+            if let Some(worker) = self.shutdown_worker.take() {
+                let _ = worker.join();
+            }
             unsafe {
+                CloseHandle(self.shutdown_event);
                 CloseHandle(self.ready_event);
                 CloseHandle(self.show_event);
                 CloseHandle(self.event);
@@ -207,6 +300,43 @@ mod platform {
             );
             first.mark_ready().unwrap();
             assert!(ndm_core::wait_for_desktop_ready(dir.path(), Duration::from_secs(1)).unwrap());
+        }
+
+        #[test]
+        fn installer_guard_rejects_new_desktop_instances() {
+            let dir = tempfile::tempdir().unwrap();
+            let name = format!(
+                "{}-installing",
+                ndm_core::desktop_instance_namespace(dir.path())
+            );
+            // SAFETY: This isolated profile owns the name and the handle is closed below.
+            let guard = unsafe { CreateMutexW(ptr::null(), 1, wide(&name).as_ptr()) };
+            assert!(!guard.is_null());
+            let result = Instance::acquire(dir.path(), false);
+            unsafe {
+                CloseHandle(guard);
+            }
+            assert!(
+                result.is_err(),
+                "desktop startup must defer while files are replaced"
+            );
+        }
+
+        #[test]
+        fn shutdown_clears_readiness_before_notifying_and_recovery_cannot_restore_it() {
+            let dir = tempfile::tempdir().unwrap();
+            let mut instance = Instance::acquire(dir.path(), false).unwrap().unwrap();
+            instance.mark_ready().unwrap();
+            let profile = dir.path().to_owned();
+            let (send, receive) = mpsc::channel();
+            instance.on_shutdown(move || {
+                send.send(ndm_core::wait_for_desktop_ready(&profile, Duration::ZERO).unwrap())
+                    .unwrap();
+            });
+            assert!(ndm_core::request_desktop_shutdown(dir.path()).unwrap());
+            assert!(!receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            instance.mark_ready().unwrap();
+            assert!(!ndm_core::wait_for_desktop_ready(dir.path(), Duration::ZERO).unwrap());
         }
     }
 }

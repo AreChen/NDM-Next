@@ -25,10 +25,12 @@ pub enum Theme {
 pub struct Preferences {
     pub language: Language,
     pub theme: Theme,
+    pub sidebar_collapsed: bool,
     pub download_dir: PathBuf,
     pub max_active_tasks: usize,
     pub max_connections: usize,
     pub auto_resume: bool,
+    pub auto_update: bool,
     pub max_kib_per_second: u64,
     #[serde(skip)]
     pub proxy: Option<ndm_core::ProxyOptions>,
@@ -43,10 +45,12 @@ impl Default for Preferences {
         Self {
             language: Language::Chinese,
             theme: Theme::System,
+            sidebar_collapsed: false,
             download_dir,
             max_active_tasks: 3,
             max_connections: 4,
             auto_resume: true,
+            auto_update: true,
             max_kib_per_second: 0,
             proxy: None,
         }
@@ -124,6 +128,7 @@ mod tests {
         let preferences = Preferences {
             theme: Theme::Dark,
             language: Language::English,
+            auto_update: false,
             ..Default::default()
         };
         preferences.save(&path).unwrap();
@@ -132,6 +137,7 @@ mod tests {
         let restored = Preferences::load(&path).unwrap();
         assert_eq!(restored.theme, Theme::Light);
         assert_eq!(restored.max_connections, 4);
+        assert!(restored.auto_update);
     }
 
     #[cfg(windows)]

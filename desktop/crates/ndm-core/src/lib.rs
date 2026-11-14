@@ -1,26 +1,40 @@
+mod continuation;
+mod dash;
 mod ftp;
 mod hls;
 mod http;
+#[cfg(windows)]
+mod installation;
 mod instance;
+mod media;
 mod model;
 mod scheduler;
 mod secrets;
 mod sftp;
 mod store;
 
+pub use dash::{
+    DashAudio, DashCatalog, DashOptions, DashOutcome, DashRepresentation, download_dash,
+    download_dash_with_media_tool, execute_dash, inspect_dash, inspect_dash_with_options,
+};
 pub use ftp::{FtpOptions, FtpSecurity, download_ftp, execute_ftp};
 pub use hls::{
     HlsAudio, HlsCatalog, HlsOptions, HlsOutcome, HlsVariant, download_hls,
     download_hls_with_media_tool, execute_hls, inspect_hls, inspect_hls_with_options,
 };
 pub use http::{
-    DownloadProgress, HttpOptions, ProgressSnapshot, ProxyOptions, download_http, execute_http,
+    DownloadProgress, HttpOptions, ProgressPhase, ProgressSnapshot, ProxyOptions, SegmentSnapshot,
+    download_http, execute_http,
 };
-pub use instance::desktop_instance_namespace;
+#[cfg(windows)]
+pub use installation::shutdown_desktop_installation;
 #[cfg(windows)]
 pub use instance::desktop_is_running;
+pub use instance::{
+    desktop_installation_active, desktop_installation_namespace, desktop_instance_namespace,
+};
 #[cfg(windows)]
-pub use instance::{wait_for_desktop_ready, wake_desktop};
+pub use instance::{request_desktop_shutdown, wait_for_desktop_ready, wake_desktop};
 pub use model::{NewTask, Task, TaskId, TaskOptions, TaskState};
 pub use scheduler::{Scheduler, SchedulerEvent, SchedulerOptions};
 pub use sftp::{SftpAuth, SftpOptions, download_sftp, execute_sftp};
@@ -64,7 +78,7 @@ pub enum Error {
     FtpTransfer,
     #[error("FTP authentication failed")]
     FtpAuthentication,
-    #[error("FTP server returned an inconsistent file size")]
+    #[error("FTP server returned an inconsistent or changed file")]
     InvalidFtpResponse,
     #[error("invalid SFTP address")]
     InvalidSftpAddress,
@@ -84,6 +98,18 @@ pub enum Error {
     HlsCodecUnsupported,
     #[error("HLS recovery data or media no longer matches")]
     HlsRecovery,
+    #[error("DASH manifest, media, or output is invalid")]
+    Dash,
+    #[error("DRM-protected DASH media is unsupported")]
+    DashDrmUnsupported,
+    #[error("dynamic or live DASH media is unsupported")]
+    DashDynamicUnsupported,
+    #[error("this DASH manifest layout or media format is unsupported")]
+    DashUnsupported,
+    #[error("DASH recovery data or media no longer matches")]
+    DashRecovery,
+    #[error("trusted local media tools are unavailable")]
+    MediaToolUnavailable,
     #[error("download was paused or cancelled")]
     Cancelled,
 }

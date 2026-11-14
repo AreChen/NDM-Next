@@ -6,10 +6,8 @@ function captureRequest(details) {
   let url;
   try { url = new URL(details.url); } catch { return null; }
   if (!['http:','https:'].includes(url.protocol) || url.username || url.password) return null;
-  // Signed and token-bearing links may be single-use; leave those to Chrome.
-  for (const key of url.searchParams.keys()) {
-    if (/(token|signature|(^|[-_])sig($|[-_])|credential|secret|password|(^|[-_])key($|[-_])|auth)/i.test(key)) return null;
-  }
+  // Signed and token-bearing links may be single-use. Immediate takeover can
+  // fail for those links; the user can choose verified takeover instead.
   const headers = {};
   let bytes = 0;
   for (const header of details.requestHeaders) {

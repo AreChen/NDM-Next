@@ -10,8 +10,9 @@ use std::{
 use futures_util::{StreamExt, future::try_join_all};
 use hls_engine::{
     ByteRange, CheckpointDurability, EmbeddedAudio, EngineCause, EngineEndReason, EngineError,
-    EngineErrorKind, EngineInput, EngineInputs, EngineMode, EngineOptions, EngineSession,
-    EngineWait, RecoveryOptions, Source, SourceLocation, TextResource, TrackMetadata,
+    EngineErrorKind, EngineEvent, EngineInput, EngineInputs, EngineMode, EngineOptions,
+    EngineSession, EngineState, EngineWait, RecoveryOptions, Source, SourceLocation, TextResource,
+    TrackMetadata,
     crypto::key::{
         AvailableKey, KeyClock, KeyFuture, KeyProvider, KeyRequest, KeyResolution, KeySession,
         KeySessionOptions, SecretKey,
@@ -580,9 +581,15 @@ async fn download_hls_with_progress(
     let terminal = checkpoint
         .as_ref()
         .is_some_and(|value| value.is_finalizing() || value.is_completed());
+    let phase_progress = source.progress.clone();
     let engine_options = EngineOptions::default()
         .with_mode(EngineMode::Open)
         .with_download_concurrency(4)
+        .with_on_event(Arc::new(move |event| {
+            if matches!(event, EngineEvent::State(EngineState::Finalizing)) {
+                phase_progress.finalize();
+            }
+        }))
         .with_waiter(Arc::new(Wait), Duration::from_secs(30));
     let engine = match checkpoint {
         Some(checkpoint) => EngineSession::restore(inputs, keys, engine_options, checkpoint),
@@ -658,6 +665,7 @@ async fn download_hls_with_progress(
     let report = match tokio::try_join!(producer, consumer) {
         Ok((_, report)) => report,
         Err(Error::HlsCodecUnsupported) => {
+            source.progress.resume_downloading();
             let installed_tools = std::env::current_exe()
                 .ok()
                 .and_then(|path| path.parent().map(|parent| parent.join("ffmpeg")));

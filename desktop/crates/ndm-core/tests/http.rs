@@ -565,6 +565,71 @@ async fn queued_task_executes_and_persists_its_completed_output() {
 }
 
 #[tokio::test]
+async fn progress_reports_real_parallel_segment_bytes_and_completion() {
+    let dir = TempDir::new().unwrap();
+    let expected = data(10);
+    let (_, url) = fixture(Mode::Ranges, expected.clone(), true).await;
+    let id = TaskId::new_v4();
+    let store = Arc::new(Store::open(&dir.path().join("tasks.db")).unwrap());
+    store.prepare(id, &request(dir.path(), url)).unwrap();
+    store.commit(id).unwrap();
+    let progress = DownloadProgress::default();
+    let task = {
+        let store = store.clone();
+        let progress = progress.clone();
+        tokio::spawn(async move {
+            execute_http(
+                &store,
+                id,
+                &HttpOptions::default(),
+                CancellationToken::new(),
+                progress,
+            )
+            .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let snapshot = progress.snapshot();
+            if snapshot.segments.len() == 4
+                && snapshot
+                    .segments
+                    .iter()
+                    .filter(|segment| segment.active)
+                    .count()
+                    > 1
+                && snapshot
+                    .segments
+                    .iter()
+                    .any(|segment| segment.downloaded > 0)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("parallel segment progress should become visible");
+    task.await.unwrap().unwrap();
+    let snapshot = progress.snapshot();
+    assert_eq!(snapshot.segments.len(), 4);
+    assert_eq!(
+        snapshot
+            .segments
+            .iter()
+            .map(|segment| segment.downloaded)
+            .sum::<u64>(),
+        expected.len() as u64
+    );
+    assert!(
+        snapshot
+            .segments
+            .iter()
+            .all(|segment| !segment.active && Some(segment.downloaded) == segment.total)
+    );
+}
+
+#[tokio::test]
 async fn unknown_size_download_is_marked_unverified() {
     let dir = TempDir::new().unwrap();
     let (_, url) = fixture(Mode::IgnoreRangeUnknownLength, data(14), false).await;
@@ -584,6 +649,80 @@ async fn unknown_size_download_is_marked_unverified() {
     let task = store.get(id).unwrap().unwrap();
     assert_eq!(task.state, TaskState::Completed);
     assert_eq!(task.size_verified, Some(false));
+}
+
+#[tokio::test]
+async fn unknown_length_archive_can_follow_a_cross_origin_redirect() {
+    let dir = TempDir::new().unwrap();
+    let target_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target_address = target_listener.local_addr().unwrap();
+    let leaked_cookie = Arc::new(AtomicBool::new(false));
+    let observed = leaked_cookie.clone();
+    let target = Router::new().route(
+        "/archive",
+        get(move |headers: HeaderMap| {
+            let observed = observed.clone();
+            async move {
+                observed.store(headers.contains_key(header::COOKIE), Ordering::SeqCst);
+                let chunks = futures_util::stream::iter([Ok::<_, std::io::Error>(
+                    Bytes::from_static(b"archive contents"),
+                )]);
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header(
+                        header::CONTENT_DISPOSITION,
+                        "attachment; filename=\"repo-main.zip\"",
+                    )
+                    .body(Body::from_stream(chunks))
+                    .unwrap()
+            }
+        }),
+    );
+    tokio::spawn(async move {
+        axum::serve(target_listener, target).await.unwrap();
+    });
+    let origin_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin_address = origin_listener.local_addr().unwrap();
+    let location = format!("http://{target_address}/archive");
+    let origin = Router::new().route(
+        "/zip",
+        get(move || {
+            let location = location.clone();
+            async move {
+                Response::builder()
+                    .status(StatusCode::FOUND)
+                    .header(header::LOCATION, location)
+                    .body(Body::empty())
+                    .unwrap()
+            }
+        }),
+    );
+    tokio::spawn(async move {
+        axum::serve(origin_listener, origin).await.unwrap();
+    });
+    let store = Store::open(&dir.path().join("tasks.db")).unwrap();
+    let id = TaskId::new_v4();
+    let mut req = request(dir.path(), format!("http://{origin_address}/zip"));
+    req.suggested_filename = None;
+    req.headers
+        .insert("cookie".into(), "session=private".into());
+    store.prepare(id, &req).unwrap();
+    store.commit(id).unwrap();
+    let progress = DownloadProgress::default();
+    let output = execute_http(
+        &store,
+        id,
+        &HttpOptions::default(),
+        CancellationToken::new(),
+        progress.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(output.file_name().unwrap(), "repo-main.zip");
+    assert_eq!(std::fs::read(output).unwrap(), b"archive contents");
+    assert_eq!(progress.snapshot().total, None);
+    assert_eq!(store.get(id).unwrap().unwrap().size_verified, Some(false));
+    assert!(!leaked_cookie.load(Ordering::SeqCst));
 }
 
 #[tokio::test]

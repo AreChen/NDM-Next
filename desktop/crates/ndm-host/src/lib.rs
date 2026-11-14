@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use ndm_core::{HlsOptions, NewTask, Store, TaskId, TaskOptions, TaskState};
+use ndm_core::{DashOptions, HlsOptions, NewTask, Store, TaskId, TaskOptions, TaskState};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -168,8 +168,17 @@ impl BrowserTask {
                     | "audio/x-mpegurl"
             )
         });
+        let is_dash = self.media_type.as_deref().is_some_and(|mime| {
+            mime.split(';')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .eq_ignore_ascii_case("application/dash+xml")
+        });
         let options = if is_hls {
             TaskOptions::Hls(HlsOptions::default())
+        } else if is_dash {
+            TaskOptions::Dash(DashOptions::default())
         } else {
             TaskOptions::Auto
         };
@@ -179,7 +188,11 @@ impl BrowserTask {
                 destination,
                 suggested_filename: self.suggested_filename,
                 source_url: self.source_url,
-                expected_size: if is_hls { None } else { self.expected_size },
+                expected_size: if is_hls || is_dash {
+                    None
+                } else {
+                    self.expected_size
+                },
                 headers,
             },
             options,

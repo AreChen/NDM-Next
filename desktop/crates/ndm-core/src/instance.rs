@@ -10,17 +10,35 @@ pub fn desktop_instance_namespace(data_dir: &Path) -> String {
     format!("Global\\NDMNext-{:016x}", hasher.finish())
 }
 
+/// Per-profile replacement guard shared by the installer and application startup.
+pub fn desktop_installation_namespace(data_dir: &Path) -> String {
+    format!("{}-installing", desktop_instance_namespace(data_dir))
+}
+
+/// Check without creating the installation guard or taking ownership of it.
+#[cfg(windows)]
+pub fn desktop_installation_active(data_dir: &Path) -> std::io::Result<bool> {
+    named_mutex_exists(&desktop_installation_namespace(data_dir))
+}
+
+#[cfg(not(windows))]
+pub fn desktop_installation_active(_data_dir: &Path) -> std::io::Result<bool> {
+    Ok(false)
+}
+
 /// Check without creating or signalling the singleton object.
 #[cfg(windows)]
 pub fn desktop_is_running(data_dir: &Path) -> std::io::Result<bool> {
+    named_mutex_exists(&format!("{}-mutex", desktop_instance_namespace(data_dir)))
+}
+
+#[cfg(windows)]
+fn named_mutex_exists(name: &str) -> std::io::Result<bool> {
     use windows_sys::Win32::{
         Foundation::{CloseHandle, ERROR_FILE_NOT_FOUND, GetLastError},
         System::Threading::{MUTEX_MODIFY_STATE, OpenMutexW},
     };
-    let name: Vec<u16> = format!("{}-mutex", desktop_instance_namespace(data_dir))
-        .encode_utf16()
-        .chain(Some(0))
-        .collect();
+    let name: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
     // SAFETY: The name is NUL-terminated and the returned handle is closed.
     unsafe {
         let mutex = OpenMutexW(MUTEX_MODIFY_STATE, 0, name.as_ptr());
@@ -32,6 +50,38 @@ pub fn desktop_is_running(data_dir: &Path) -> std::io::Result<bool> {
         }
         CloseHandle(mutex);
         Ok(true)
+    }
+}
+
+/// Request the desktop's regular graceful Quit path. False means an older desktop
+/// has no shutdown event; callers must keep any legacy fallback scoped to its image.
+#[cfg(windows)]
+pub fn request_desktop_shutdown(data_dir: &Path) -> std::io::Result<bool> {
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, ERROR_FILE_NOT_FOUND, GetLastError},
+        System::Threading::{EVENT_MODIFY_STATE, OpenEventW, SetEvent},
+    };
+    let name: Vec<u16> = format!("{}-shutdown", desktop_instance_namespace(data_dir))
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
+    // SAFETY: The name is terminated and every successfully opened handle is closed.
+    unsafe {
+        let event = OpenEventW(EVENT_MODIFY_STATE, 0, name.as_ptr());
+        if event.is_null() {
+            return match GetLastError() {
+                ERROR_FILE_NOT_FOUND => Ok(false),
+                error => Err(std::io::Error::from_raw_os_error(error as i32)),
+            };
+        }
+        let result = SetEvent(event);
+        let error = if result == 0 {
+            Some(std::io::Error::last_os_error())
+        } else {
+            None
+        };
+        CloseHandle(event);
+        error.map_or(Ok(true), Err)
     }
 }
 

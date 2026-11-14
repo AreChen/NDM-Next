@@ -3,39 +3,103 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const fs = require('node:fs');
 
-function setup({capture=true,method='GET',referrer='https://page.test/',config={},prepareOk=true,backendAbsent=false,sharedSession={}}={}) {
+function setup({capture=true,method='GET',url='https://files.test/file.zip',finalUrl=url,finalCapture,size=2097152,mime='application/zip',referrer='https://page.test/',config={},prepareOk=true,backendAbsent=false,sharedSession={},delayInitialSettings=false}={}) {
   const listeners={}, calls=[], saved={backend:'next',transferPolicy:'immediate',...config};
+  let preparedTask;
   if (backendAbsent) delete saved.backend;
   let state='in_progress', error;
+  let releaseInitialSettings;
+  let firstSettings=true;
   const storage={
-    get:async key=>key===null?{...saved}:typeof key==='string'?{[key]:saved[key]}:{...key,...saved},
+    get:async key=>{
+      if (firstSettings && key && typeof key==='object') {
+        firstSettings=false;
+        if (delayInitialSettings) await new Promise(resolve=>{releaseInitialSettings=resolve});
+      }
+      return key===null?{...saved}:typeof key==='string'?{[key]:saved[key]}:{...key,...saved};
+    },
     set:async value=>Object.assign(saved,value), remove:async key=>delete saved[key],
   };
   const chrome={
     storage:{local:storage,session:{get:async key=>({[key]:sharedSession[key]}),set:async value=>Object.assign(sharedSession,value),remove:async key=>delete sharedSession[key]}}, cookies:{getAll:async()=>[]},
     downloads:{onCreated:{addListener:f=>listeners.download=f},
-      search:async()=>[{id:5,state,error,totalBytes:2097152,finalUrl:'https://files.test/file.zip'}],
+      search:async()=>[{id:5,state,error,totalBytes:size,url,finalUrl}],
       cancel:async()=>{calls.push('cancel');state='interrupted';error='USER_CANCELED'},
       erase:async()=>calls.push('erase')},
     webRequest:{onBeforeSendHeaders:{addListener:f=>listeners.headers=f},onHeadersReceived:{addListener:f=>listeners.media=f}},
     tabs:{onUpdated:{addListener(){}},onRemoved:{addListener(){}},get:async()=>({url:referrer})},
     runtime:{onInstalled:{addListener:f=>listeners.installed=f},onMessage:{addListener(){}},
-      sendNativeMessage:async (_name,message)=>{ calls.push(message.type); if(message.type==='prepare'){ assert.equal(message.task.headers.cookie,'session=private');return {ok:prepareOk,state:'prepared'} } if(message.type==='commit')return {ok:true,state:'queued'};return {ok:true} }},
+      sendNativeMessage:async (_name,message)=>{ calls.push(message.type); if(message.type==='prepare'){ preparedTask=message.task;assert.equal(message.task.headers.cookie,'session=private');return {ok:prepareOk,state:'prepared'} } if(message.type==='commit')return {ok:true,state:'queued'};return {ok:true} }},
     alarms:{create(){},onAlarm:{addListener(){}}},
     notifications:{create:async()=>{calls.push('notification')},clear:async()=>{},onButtonClicked:{addListener:f=>listeners.approve=f},onClosed:{addListener(){}}},
     i18n:{getUILanguage:()=> 'en-US'},
   };
   const ctx={chrome,URL,AbortSignal,crypto:{randomUUID:()=> '00000000-0000-4000-8000-000000000001'},setTimeout,clearTimeout,console,fetch:async()=>({ok:true,headers:{get:()=>null}}),importScripts(...files){for(const file of files)vm.runInContext(fs.readFileSync('extension/'+file,'utf8'),ctx)}};
   vm.createContext(ctx);vm.runInContext(fs.readFileSync('extension/background.js','utf8'),ctx);
-  return {calls,saved,install:reason=>listeners.installed({reason}),approve:()=>listeners.approve('ndm-next-confirm:5',0),run:async()=>{
+  return {calls,saved,task:()=>preparedTask,install:reason=>listeners.installed({reason}),approve:()=>listeners.approve('ndm-next-confirm:5',0),runCold:async()=>{
+    listeners.headers({requestId:'abc',method,url,tabId:1,requestHeaders:[{name:'Cookie',value:'session=private'}]});
+    const result=listeners.download({id:5,url,finalUrl,referrer,totalBytes:size,mime});
+    releaseInitialSettings();
+    return result;
+  },run:async()=>{
     await new Promise(resolve=>setTimeout(resolve,0));
-    if(capture)listeners.headers({requestId:'abc',method,url:'https://files.test/file.zip',tabId:1,requestHeaders:[{name:'Cookie',value:'session=private'}]});
-    return listeners.download({id:5,url:'https://files.test/file.zip',referrer,totalBytes:2097152,mime:'application/zip'});
+    if(capture)listeners.headers({requestId:'abc',method,url,tabId:1,requestHeaders:[{name:'Cookie',value:'session=private'}]});
+    if(finalCapture)listeners.headers({requestId:'redirect',method,url:finalUrl,tabId:1,requestHeaders:finalCapture==='unsafe'?[{name:'X-Private',value:'secret'}]:[{name:'Cookie',value:'session=private'}]});
+    return listeners.download({id:5,url,finalUrl,referrer,totalBytes:size,mime});
   }};
 }
 
 test('new backend stores request before cancel and commits after cancel',async()=>{
   const t=setup();await t.run();assert.deepEqual(t.calls,['prepare','cancel','commit','erase']);
+});
+test('small DASH/HLS manifests hand off without using the XML or playlist length as media size',async()=>{
+  for(const item of [
+    {url:'https://files.test/video.mpd',mime:'application/dash+xml'},
+    {url:'https://files.test/manifest',mime:'application/dash+xml; charset=UTF-8'},
+    {url:'https://files.test/video.m3u8',mime:'application/vnd.apple.mpegurl'},
+  ]) {
+    const t=setup({...item,size:512});await t.run();
+    assert.deepEqual(t.calls,['prepare','cancel','commit','erase']);
+    assert.equal(t.task().expected_size,null);
+    assert.equal(t.task().media_type,item.mime);
+  }
+});
+test('unknown download lengths are captured without passing a fabricated expected size',async()=>{
+  for (const size of [-1,0]) {
+    const t=setup({size});await t.run();
+    assert.deepEqual(t.calls,['prepare','cancel','commit','erase']);
+    assert.equal(t.task().expected_size,null);
+  }
+});
+test('GitHub archive redirects can use the captured original request when the final request is unavailable',async()=>{
+  const url='https://github.com/owner/repo/archive/refs/heads/main.zip';
+  const finalUrl='https://codeload.github.com/owner/repo/zip/refs/heads/main';
+  const t=setup({url,finalUrl,size:-1,referrer:'https://github.com/owner/repo'});await t.run();
+  assert.deepEqual(t.calls,['prepare','cancel','commit','erase']);
+  assert.equal(t.task().url,url);
+  assert.equal(t.task().expected_size,null);
+});
+test('redirect handoff respects unsafe target requests, blocked sites, and known small files',async()=>{
+  const url='https://github.com/owner/repo/archive/refs/heads/main.zip';
+  const finalUrl='https://codeload.github.com/owner/repo/zip/refs/heads/main';
+  for (const options of [
+    {finalCapture:'unsafe'},
+    {config:{blockedDomains:['codeload.github.com']}},
+    {size:42},
+  ]) {
+    const t=setup({url,finalUrl,size:-1,...options});await t.run();
+    assert.deepEqual(t.calls,[]);
+  }
+  const observed=setup({url,finalUrl,size:-1,finalCapture:'safe'});await observed.run();
+  assert.equal(observed.task().url,finalUrl);
+});
+test('signed download links follow the configured immediate handoff',async()=>{
+  const t=setup({url:'https://files.test/file.zip?X-Amz-Signature=signed'});
+  await t.run();assert.deepEqual(t.calls,['prepare','cancel','commit','erase']);
+});
+test('a download that wakes the extension is captured while settings load',async()=>{
+  const t=setup({delayInitialSettings:true});
+  await t.runCold();assert.deepEqual(t.calls,['prepare','cancel','commit','erase']);
 });
 test('missing capture, non-GET and missing page with a blacklist stay in browser',async()=>{
   for(const options of [{capture:false},{method:'POST'},{referrer:'',config:{blockedDomains:['example.com']}}]){

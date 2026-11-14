@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const fs = require('node:fs');
 
-function setup() {
+function setup(type) {
   const listeners={}, prepared=[];
   const storage={get:async key=>key===null?{}:{...key,backend:'next'},set:async()=>{},remove:async()=>{}};
   const chrome={
@@ -22,12 +22,12 @@ function setup() {
   return {prepared,send,observe:async (tabId,requestId,cookie)=>{
     const url='https://video.test/playlist?id=42';
     listeners.headers({requestId,tabId,url,method:'GET',requestHeaders:[{name:'Cookie',value:cookie}]});
-    await listeners.media({requestId,tabId,url,method:'GET',responseHeaders:[{name:'Content-Type',value:'application/vnd.apple.mpegurl'},{name:'Content-Length',value:'512'}]});
+    await listeners.media({requestId,tabId,url,method:'GET',responseHeaders:[{name:'Content-Type',value:type},{name:'Content-Length',value:'512'}]});
   }};
 }
 
-test('small HLS playlists remain selectable and use the latest capture from the correct tab',async()=>{
-  const t=setup(); await new Promise(resolve=>setTimeout(resolve,0));
+for (const type of ['application/vnd.apple.mpegurl','application/dash+xml']) test(`small ${type} manifests remain selectable and use the latest capture from the correct tab`,async()=>{
+  const t=setup(type); await new Promise(resolve=>setTimeout(resolve,0));
   await t.observe(1,'1','first=1');
   await t.observe(2,'2','other=2');
   await t.observe(1,'3','latest=3');
@@ -37,7 +37,7 @@ test('small HLS playlists remain selectable and use the latest capture from the 
   assert.equal((await t.send({action:'send',tabId:1,item:items[0]})).ok,true);
   assert.equal(t.prepared[0].headers.cookie,'latest=3');
   assert.equal(t.prepared[0].expected_size,null);
-  assert.equal(t.prepared[0].media_type,'application/vnd.apple.mpegurl');
+  assert.equal(t.prepared[0].media_type,type);
   const other=await t.send({action:'media',tabId:2});
   assert.equal((await t.send({action:'send',tabId:2,item:other.items[0]})).ok,true);
   assert.equal(t.prepared[1].headers.cookie,'other=2');

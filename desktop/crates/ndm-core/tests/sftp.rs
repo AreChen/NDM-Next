@@ -28,6 +28,8 @@ struct SshFixture {
     accepted_key: Option<PublicKey>,
     slow: bool,
     truncate: bool,
+    reads: Arc<std::sync::Mutex<Vec<(usize, u64)>>>,
+    generation: usize,
 }
 
 impl russh::server::Handler for SshFixture {
@@ -81,6 +83,8 @@ impl russh::server::Handler for SshFixture {
             data: self.data.clone(),
             slow: self.slow,
             truncate: self.truncate,
+            reads: self.reads.clone(),
+            generation: self.generation,
         };
         session.channel_success(channel_id)?;
         tokio::spawn(async move {
@@ -94,6 +98,8 @@ struct FileFixture {
     data: Arc<Vec<u8>>,
     slow: bool,
     truncate: bool,
+    reads: Arc<std::sync::Mutex<Vec<(usize, u64)>>>,
+    generation: usize,
 }
 
 impl russh_sftp::server::Handler for FileFixture {
@@ -136,6 +142,7 @@ impl russh_sftp::server::Handler for FileFixture {
         offset: u64,
         len: u32,
     ) -> Result<Data, Self::Error> {
+        self.reads.lock().unwrap().push((self.generation, offset));
         if self.slow {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
@@ -189,6 +196,8 @@ async fn server(
             accepted_key,
             slow,
             truncate,
+            reads: Arc::default(),
+            generation: 0,
         };
         if let Ok(session) = russh::server::run_stream(config, socket, fixture).await {
             let _ = session.await;
@@ -233,6 +242,8 @@ async fn sftp_trust_is_persistent_per_host_and_port_and_key_changes_require_conf
                     accepted_key: None,
                     slow: false,
                     truncate: false,
+                    reads: Arc::default(),
+                    generation: 0,
                 };
                 if let Ok(session) = russh::server::run_stream(config, socket, fixture).await {
                     let _ = session.await;
@@ -475,4 +486,220 @@ async fn sftp_cancel_does_not_publish_partial_output() {
     .await;
     assert!(matches!(result, Err(ndm_core::Error::Cancelled)));
     assert!(!dir.path().join("file.bin").exists());
+}
+
+struct ResumeSftpServer {
+    url: String,
+    fingerprint: String,
+    content: Arc<std::sync::RwLock<Vec<u8>>>,
+    reads: Arc<std::sync::Mutex<Vec<(usize, u64)>>>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for ResumeSftpServer {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+async fn resume_server(content: Vec<u8>) -> ResumeSftpServer {
+    let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+    let fingerprint = key.public_key().fingerprint(HashAlg::Sha256).to_string();
+    let config = Arc::new(russh::server::Config {
+        keys: vec![key],
+        auth_rejection_time: Duration::ZERO,
+        auth_rejection_time_initial: Some(Duration::ZERO),
+        ..Default::default()
+    });
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let content = Arc::new(std::sync::RwLock::new(content));
+    let reads = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let bytes = content.clone();
+    let positions = reads.clone();
+    let task = tokio::spawn(async move {
+        let mut generation = 0;
+        loop {
+            let (socket, _) = listener.accept().await.unwrap();
+            generation += 1;
+            let fixture = SshFixture {
+                channel: None,
+                data: Arc::new(bytes.read().unwrap().clone()),
+                accepted_key: None,
+                slow: true,
+                truncate: false,
+                reads: positions.clone(),
+                generation,
+            };
+            let config = config.clone();
+            tokio::spawn(async move {
+                if let Ok(session) = russh::server::run_stream(config, socket, fixture).await {
+                    let _ = session.await;
+                }
+            });
+        }
+    });
+    ResumeSftpServer {
+        url: format!("sftp://user:correct@{address}/file.bin"),
+        fingerprint,
+        content,
+        reads,
+        task,
+    }
+}
+
+async fn cancel_after_sftp_partial(
+    dir: &TempDir,
+    server: &ResumeSftpServer,
+    id: TaskId,
+) -> Vec<u8> {
+    let partial = dir.path().join(format!(".ndm-next-{id}/sftp.part"));
+    let cancel = CancellationToken::new();
+    let trigger = cancel.clone();
+    let watch = partial.clone();
+    tokio::spawn(async move {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if tokio::fs::metadata(&watch)
+                    .await
+                    .is_ok_and(|metadata| metadata.len() >= 128 * 1024)
+                {
+                    trigger.cancel();
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        })
+        .await
+        .unwrap();
+    });
+    let options = SftpOptions {
+        trusted_fingerprint: Some(server.fingerprint.clone()),
+        ..Default::default()
+    };
+    assert!(matches!(
+        download_sftp(
+            &request(dir.path(), server.url.clone()),
+            id,
+            &options,
+            cancel
+        )
+        .await,
+        Err(ndm_core::Error::Cancelled)
+    ));
+    assert!(!dir.path().join("file.bin").exists());
+    std::fs::read(partial).unwrap()
+}
+
+#[tokio::test]
+async fn sftp_preserves_persisted_partial_when_prefix_validation_is_cancelled() {
+    // Creating/truncating the saved partial on retry loses the already verified bytes.
+    let dir = TempDir::new().unwrap();
+    let expected: Vec<u8> = (0..512_000).map(|n| (n % 239) as u8).collect();
+    let server = resume_server(expected.clone()).await;
+    let options = SftpOptions {
+        trusted_fingerprint: Some(server.fingerprint.clone()),
+        ..Default::default()
+    };
+    let id = TaskId::new_v4();
+    let partial = cancel_after_sftp_partial(&dir, &server, id).await;
+    let reads = server.reads.clone();
+    reads.lock().unwrap().clear();
+    let cancel = CancellationToken::new();
+    let trigger = cancel.clone();
+    tokio::spawn(async move {
+        loop {
+            if reads
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(generation, _)| *generation == 2)
+            {
+                tokio::time::sleep(Duration::from_millis(3)).await;
+                trigger.cancel();
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    });
+    assert!(matches!(
+        download_sftp(
+            &request(dir.path(), server.url.clone()),
+            id,
+            &options,
+            cancel
+        )
+        .await,
+        Err(ndm_core::Error::Cancelled)
+    ));
+    assert!(
+        std::fs::read(dir.path().join(format!(".ndm-next-{id}/sftp.part"))).unwrap() == partial,
+        "saved partial was changed during prefix validation"
+    );
+    let path = download_sftp(
+        &request(dir.path(), server.url.clone()),
+        id,
+        &options,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), expected);
+}
+
+#[tokio::test]
+async fn sftp_same_size_and_timestamp_changes_do_not_mix_old_content() {
+    let dir = TempDir::new().unwrap();
+    let server = resume_server(vec![5; 512_000]).await;
+    let id = TaskId::new_v4();
+    cancel_after_sftp_partial(&dir, &server, id).await;
+    let mut expected = vec![5; 512_000];
+    expected[65_537] = 27;
+    expected[300_001] = 43;
+    *server.content.write().unwrap() = expected.clone();
+    let options = SftpOptions {
+        trusted_fingerprint: Some(server.fingerprint.clone()),
+        ..Default::default()
+    };
+    let path = download_sftp(
+        &request(dir.path(), server.url.clone()),
+        id,
+        &options,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), expected);
+}
+
+#[tokio::test]
+async fn sftp_corrupt_metadata_or_local_prefix_is_not_reused() {
+    for corrupt_metadata in [true, false] {
+        let dir = TempDir::new().unwrap();
+        let expected = vec![31; 512_000];
+        let server = resume_server(expected.clone()).await;
+        let id = TaskId::new_v4();
+        let mut partial = cancel_after_sftp_partial(&dir, &server, id).await;
+        let work = dir.path().join(format!(".ndm-next-{id}"));
+        assert!(work.join("protocol-resume.bin").exists());
+        if corrupt_metadata {
+            std::fs::write(work.join("protocol-resume.bin"), b"corrupt").unwrap();
+        } else {
+            partial[65_539] = 99;
+            std::fs::write(work.join("sftp.part"), partial).unwrap();
+        }
+        let options = SftpOptions {
+            trusted_fingerprint: Some(server.fingerprint.clone()),
+            ..Default::default()
+        };
+        let path = download_sftp(
+            &request(dir.path(), server.url.clone()),
+            id,
+            &options,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), expected);
+    }
 }

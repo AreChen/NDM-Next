@@ -14,14 +14,20 @@ test('captures only safe replay headers from an observed GET', () => {
   assert.equal(capture.headers['sec-fetch-site'],undefined);
 });
 
-test('rejects non-GET, unknown headers, byte ranges, signed URLs and missing metadata', () => {
+test('rejects non-GET, unknown headers, byte ranges and missing metadata', () => {
   for (const input of [
     details({method:'POST'}), details({requestHeaders:undefined}),
     details({requestHeaders:[{name:'Range',value:'bytes=1-'}]}),
     details({requestHeaders:[{name:'X-Csrf-Token',value:'private'}]}),
-    details({url:'https://files.test/file?token=single-use'}),
     details({url:'https://user:password@files.test/file'}),
   ]) assert.equal(captureRequest(input),null);
+});
+
+test('captures signed and token-bearing download URLs', () => {
+  for (const url of [
+    'https://files.test/file?token=single-use',
+    'https://files.test/file?X-Amz-Signature=signed',
+  ]) assert.equal(captureRequest(details({url})).url, url);
 });
 
 test('matches an unambiguous recent final URL only', () => {

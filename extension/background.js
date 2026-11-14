@@ -15,7 +15,7 @@ function setCaptureEnabled(config) {
   captureEnabled = config.backend === 'next' && config.enabled;
   if (!captureEnabled) { requests.clear(); mediaByTab.clear(); }
 }
-settings().then(setCaptureEnabled).catch(() => {});
+const captureReady = settings().then(setCaptureEnabled).catch(() => {});
 chrome.storage.onChanged?.addListener((changes,area) => {
   if (area === 'local' && (changes.backend || changes.enabled)) settings().then(setCaptureEnabled).catch(() => {});
 });
@@ -42,18 +42,20 @@ chrome.alarms?.onAlarm.addListener(alarm => {
 handoff.recover().catch(() => {});
 
 chrome.webRequest.onBeforeSendHeaders?.addListener(details => {
-  if (!captureEnabled) return;
-  const now = Date.now();
-  for (const [id,entry] of requests) if (now-entry.when > 120000) requests.delete(id);
-  // Keep unsafe requests as markers so a simultaneous safe request for the
-  // same URL cannot be mistaken for a POST or a request with custom headers.
-  const entry = captureRequest(details) || {requestId:details.requestId,url:details.url,headers:null};
-  requests.set(details.requestId,{...entry,when:now});
-  if (requests.size > 256) requests.delete(requests.keys().next().value);
-  if (!expiryTimer) {
-    expiryTimer = setTimeout(() => { requests.clear(); expiryTimer = undefined; },120000);
-    expiryTimer?.unref?.();
-  }
+  captureReady.then(() => {
+    if (!captureEnabled) return;
+    const now = Date.now();
+    for (const [id,entry] of requests) if (now-entry.when > 120000) requests.delete(id);
+    // Keep unsafe requests as markers so a simultaneous safe request for the
+    // same URL cannot be mistaken for a POST or a request with custom headers.
+    const entry = captureRequest(details) || {requestId:details.requestId,url:details.url,headers:null};
+    requests.set(details.requestId,{...entry,when:now});
+    if (requests.size > 256) requests.delete(requests.keys().next().value);
+    if (!expiryTimer) {
+      expiryTimer = setTimeout(() => { requests.clear(); expiryTimer = undefined; },120000);
+      expiryTimer?.unref?.();
+    }
+  });
 }, {urls:['http://*/*','https://*/*']}, ['requestHeaders','extraHeaders']);
 
 function reliablePage(value) {
@@ -63,13 +65,21 @@ function reliablePage(value) {
   } catch { return null; }
 }
 
-function browserTask(item, download, mediaCapture) {
-  const capture = mediaCapture || findCapture([...requests.values()],item.url);
+function browserTask(item, download, mediaCapture, originalUrl) {
+  const captures = [...requests.values()];
+  let capture = mediaCapture || findCapture(captures,item.url);
+  // Redirect targets can lack an observable request capture. Replay the
+  // original URL only when there is no target capture (including unsafe ones).
+  // The desktop strips credentials on cross-origin redirects.
+  const now = Date.now();
+  if (!capture && !mediaCapture && originalUrl && originalUrl !== item.url && !captures.some(entry => entry.url === item.url && now >= entry.when && now-entry.when <= 120000)) {
+    capture = findCapture(captures,originalUrl);
+  }
   if (!capture) return null;
   const filename = typeof download?.filename === 'string' ? download.filename.split(/[\\/]/).pop() : undefined;
   return {
-    url:item.url, source_url:reliablePage(item.pageUrl), suggested_filename:filename || null,
-    expected_size:!isHls(item) && Number.isSafeInteger(item.size) && item.size >= 0 ? item.size : null,
+    url:capture.url, source_url:reliablePage(item.pageUrl), suggested_filename:filename || null,
+    expected_size:!isMediaManifest(item) && Number.isSafeInteger(item.size) && item.size > 0 ? item.size : null,
     media_type:item.type || null,
     headers:capture.headers,
   };
@@ -131,10 +141,16 @@ chrome.notifications?.onButtonClicked.addListener((id,button) => {
 });
 chrome.notifications?.onClosed.addListener(id => { forgetApproval(id).catch(() => {}); });
 
+function knownDownloadSize(value) {
+  // Chromium may expose zero before the actual length is known.
+  return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
 chrome.downloads.onCreated.addListener(async download => {
   try {
+    await captureReady;
     const config = await settings();
-    const item = { url:download.finalUrl || download.url, pageUrl:download.referrer, size:download.totalBytes >= 0 ? download.totalBytes : undefined, type:download.mime };
+    const item = { url:download.finalUrl || download.url, pageUrl:download.referrer, size:knownDownloadSize(download.totalBytes), type:download.mime };
     if ((config.blockedDomains || []).length && !reliablePage(item.pageUrl)) return;
     if (shouldSkip(item,config) || shouldSkip({ ...item, url:download.url },config)) return;
     // Do not issue an extra probe for the new backend: it might consume a
@@ -148,11 +164,12 @@ chrome.downloads.onCreated.addListener(async download => {
     }
     const [current] = await chrome.downloads.search({id:download.id});
     if (!current || current.state !== 'in_progress') return;
-    if (current.totalBytes >= 0) item.size = current.totalBytes;
+    const currentSize = knownDownloadSize(current.totalBytes);
+    if (currentSize !== undefined) item.size = currentSize;
     item.url = current.finalUrl || item.url;
     if (shouldSkip(item,config)) return;
     if (config.backend === 'next') {
-      const task = browserTask(item,current);
+      const task = browserTask(item,current,undefined,download.url);
       if (!task) return;
       if (config.captureMode === 'confirm') await askToTakeOver(current,task,config);
       else await handoff.transfer(download.id,task,config.transferPolicy);
@@ -167,6 +184,7 @@ chrome.downloads.onChanged?.addListener(delta => { if (delta.state || delta.erro
 chrome.webRequest.onHeadersReceived.addListener(async details => {
   if (details.tabId < 0 || details.method !== 'GET') return;
   const sequence = ++mediaSequence;
+  await captureReady;
   const captured = requests.get(details.requestId);
   const capture = captured?.url === details.url && captured?.tabId === details.tabId && captured?.headers ? captured : null;
   try {
@@ -176,7 +194,7 @@ chrome.webRequest.onHeadersReceived.addListener(async details => {
     const config = await settings(); if (!config.media) return;
     const tab = await chrome.tabs.get(details.tabId); const size = Number(headers['content-length']);
     const item = {url:details.url,pageUrl:tab.url,size:headers['content-length'] && Number.isFinite(size) ? size : undefined,type};
-    if (isHls(item)) item.size = undefined; // This is the playlist's size, not the media size.
+    if (isMediaManifest(item)) item.size = undefined; // Manifest length is not the resulting media length.
     if (shouldSkip(item,config) || ((config.blockedDomains || []).length && !reliablePage(item.pageUrl))) return;
     const previous = mediaByTab.get(details.tabId) || [];
     if (previous.some(entry => entry.item.url === item.url && entry.sequence > sequence)) return;

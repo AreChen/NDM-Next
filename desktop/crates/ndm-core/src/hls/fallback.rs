@@ -1,11 +1,11 @@
 //! Remux finite, validated HLS media using local, network-disabled media tools.
 
-use std::{path::Path, process::Stdio};
+use std::path::Path;
 
 use hls_engine::crypto::resource::{
     ClearContainer, ResourceOptions, ResourceRequest, ResourceSession,
 };
-use tokio::{io::AsyncWriteExt, process::Command};
+use tokio::io::AsyncWriteExt;
 
 use super::*;
 
@@ -123,93 +123,9 @@ async fn stage_track(
     Ok(())
 }
 
-fn command(tool: &Path) -> Command {
-    let mut cmd = Command::new(tool);
-    cmd.stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
-    #[cfg(windows)]
-    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    cmd
-}
-
-async fn run(
-    cmd: &mut Command,
-    source: &NetworkSource,
-    stop: &CancellationToken,
-) -> Result<std::process::Output> {
-    stopped(source, stop)?;
-    tokio::select! {
-        _ = source.cancel.cancelled() => Err(Error::Cancelled),
-        _ = stop.cancelled() => Err(Error::Cancelled),
-        result = cmd.output() => result.map_err(|_| Error::Hls),
-    }
-}
-
-#[derive(Deserialize)]
-struct ProbeResult {
-    streams: Vec<ProbeStream>,
-}
-
-#[derive(Deserialize)]
-struct ProbeStream {
-    codec_name: Option<String>,
-    codec_type: Option<String>,
-}
-
 pub(super) struct Selection<'a> {
     pub inputs: &'a [(InputId, SourceLocation)],
     pub audio: &'a [m3u8_rs::AlternativeMedia],
-}
-
-fn media_language(language: &str) -> &'static str {
-    let primary = language
-        .split(['-', '_'])
-        .next()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    isolang::Language::from_639_1(&primary)
-        .or_else(|| isolang::Language::from_639_3(&primary))
-        .map(|language| language.to_639_3())
-        .unwrap_or("und")
-}
-
-async fn probe(
-    tool: &Path,
-    output: &Path,
-    source: &NetworkSource,
-    stop: &CancellationToken,
-) -> Result<Vec<(String, String)>> {
-    let mut cmd = command(tool);
-    cmd.args([
-        "-v",
-        "error",
-        "-max_streams",
-        "256",
-        "-show_entries",
-        "stream=codec_type,codec_name",
-        "-of",
-        "json",
-    ])
-    .arg(output);
-    let result = run(&mut cmd, source, stop).await?;
-    if !result.status.success() || result.stdout.len() > 16 * 1024 {
-        return Err(Error::Hls);
-    }
-    let parsed: ProbeResult = serde_json::from_slice(&result.stdout).map_err(|_| Error::Hls)?;
-    if parsed.streams.is_empty() || parsed.streams.len() > 256 {
-        return Err(Error::Hls);
-    }
-    Ok(parsed
-        .streams
-        .into_iter()
-        .map(|stream| {
-            (
-                stream.codec_type.unwrap_or_default(),
-                stream.codec_name.unwrap_or_default(),
-            )
-        })
-        .collect())
 }
 
 pub(super) async fn remux(
@@ -221,22 +137,9 @@ pub(super) async fn remux(
     tool_dir: &Path,
     stop: CancellationToken,
 ) -> Result<HlsOutcome> {
-    let executable = if cfg!(windows) {
-        "ffmpeg.exe"
-    } else {
-        "ffmpeg"
-    };
-    let probe_name = if cfg!(windows) {
-        "ffprobe.exe"
-    } else {
-        "ffprobe"
-    };
-    let ffmpeg = fs::canonicalize(tool_dir.join(executable))
-        .await
-        .map_err(|_| Error::Hls)?;
-    let ffprobe = fs::canonicalize(tool_dir.join(probe_name))
-        .await
-        .map_err(|_| Error::Hls)?;
+    use crate::media::{LocalInput, LocalTools, remux_local};
+
+    let tools = LocalTools::new(tool_dir).await?;
     let keys = KeySession::new(
         id.to_string(),
         "hls-fallback",
@@ -259,105 +162,144 @@ pub(super) async fn remux(
     for (index, selected_input) in selected.inputs.iter().enumerate() {
         let path = staged.file(&format!("track-{index}.bin"));
         stage_track(source.clone(), &session, selected_input, &path, &stop).await?;
-        inputs.push(path);
-    }
-    let mut expected = Vec::new();
-    for (index, input) in inputs.iter().enumerate() {
-        for (kind, codec) in probe(&ffprobe, input, &source, &stop).await? {
-            let keep = if inputs.len() == 1 {
-                matches!(kind.as_str(), "video" | "audio")
+        let audio = index
+            .checked_sub(1)
+            .and_then(|index| selected.audio.get(index));
+        inputs.push(LocalInput {
+            path,
+            kind: if selected.inputs.len() == 1 {
+                None
             } else if index == 0 {
-                kind == "video"
+                Some("video")
             } else {
-                kind == "audio"
-            };
-            if keep {
-                if codec.is_empty() || codec == "unknown" {
-                    return Err(Error::Hls);
-                }
-                expected.push((kind, codec));
-            }
-        }
-    }
-    if expected.is_empty() || expected.len() > 256 {
-        return Err(Error::Hls);
-    }
-    expected.sort_unstable();
-
-    for extension in ["mp4", "mkv"] {
-        let output = staged.file(&format!("output.{extension}"));
-        let mut cmd = command(&ffmpeg);
-        cmd.args(["-hide_banner", "-loglevel", "error", "-xerror", "-nostdin"]);
-        for input in &inputs {
-            cmd.args(["-max_streams", "256", "-i"]).arg(input);
-        }
-        if inputs.len() == 1 {
-            cmd.args(["-map", "0:v?", "-map", "0:a?"]);
-        } else {
-            cmd.args(["-map", "0:v?"]);
-            for index in 1..inputs.len() {
-                cmd.args(["-map", &format!("{index}:a")]);
-            }
-            for (index, audio) in selected.audio.iter().enumerate() {
-                if let Some(language) = &audio.language {
-                    cmd.args([
-                        &format!("-metadata:s:a:{index}"),
-                        &format!("language={}", media_language(language)),
-                    ]);
-                }
-                cmd.args([
-                    &format!("-metadata:s:a:{index}"),
-                    &format!("title={}", audio.name),
-                ]);
-                cmd.arg(format!("-disposition:a:{index}"))
-                    .arg(if audio.default { "default" } else { "0" });
-            }
-        }
-        cmd.args(["-c", "copy", "-n"]).arg(&output);
-        if !run(&mut cmd, &source, &stop).await?.status.success() {
-            continue;
-        }
-        let mut actual = match probe(&ffprobe, &output, &source, &stop).await {
-            Ok(tracks) => tracks,
-            Err(Error::Cancelled) => return Err(Error::Cancelled),
-            Err(_) => continue,
-        };
-        actual.sort_unstable();
-        if actual != expected {
-            continue;
-        }
-        let tracks = actual.len();
-        let mut file = fs::File::open(&output).await?;
-        let mut header = [0u8; 8];
-        file.read_exact(&mut header).await?;
-        let valid = if extension == "mp4" {
-            &header[4..8] == b"ftyp"
-        } else {
-            header[..4] == [0x1a, 0x45, 0xdf, 0xa3]
-        };
-        if !valid {
-            continue;
-        }
-        drop(file);
-        let suggested = safe_filename(request.suggested_filename.as_deref().unwrap_or("video.mp4"));
-        let stem = Path::new(&suggested)
-            .file_stem()
-            .and_then(|name| name.to_str())
-            .unwrap_or("video");
-        let target = publish_no_overwrite(
-            &output,
-            &request.destination,
-            &format!("{stem}.{extension}"),
-        )
-        .await?;
-        super::recovery::remove_files(work_dir).await;
-        drop(staged);
-        let _ = fs::remove_dir(work_dir).await;
-        return Ok(HlsOutcome {
-            path: target,
-            tracks,
-            stopped: false,
+                Some("audio")
+            },
+            language: audio.and_then(|audio| audio.language.clone()),
+            title: audio.map(|audio| audio.name.clone()),
+            default: audio.is_some_and(|audio| audio.default),
         });
     }
-    Err(Error::Hls)
+    source.progress.finalize();
+    staged.file("output.mp4");
+    staged.file("output.mkv");
+    let prefix = staged.root.join("output");
+    let remux_cancel = source.cancel.child_token();
+    let remux = remux_local(
+        &tools,
+        &inputs,
+        &prefix,
+        None,
+        &remux_cancel,
+        &source.progress,
+    );
+    tokio::pin!(remux);
+    let result = tokio::select! {
+        biased;
+        _ = stop.cancelled() => { remux_cancel.cancel(); remux.await }
+        result = &mut remux => result,
+    };
+    let (output, tracks) = result.map_err(|error| {
+        if matches!(error, Error::Cancelled | Error::MediaToolUnavailable) {
+            error
+        } else {
+            Error::Hls
+        }
+    })?;
+    stopped(&source, &stop)?;
+    let suggested = safe_filename(request.suggested_filename.as_deref().unwrap_or("video.mp4"));
+    let stem = Path::new(&suggested)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("video");
+    let extension = output
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .ok_or(Error::Hls)?;
+    let target = publish_no_overwrite(
+        &output,
+        &request.destination,
+        &format!("{stem}.{extension}"),
+    )
+    .await?;
+    super::recovery::remove_files(work_dir).await;
+    drop(staged);
+    let _ = fs::remove_dir(work_dir).await;
+    Ok(HlsOutcome {
+        path: target,
+        tracks,
+        stopped: false,
+    })
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{Router, extract::Path as WebPath, routing::get};
+
+    #[tokio::test]
+    #[ignore = "requires NDM_TEST_FFMPEG_DIR containing the audited media tools"]
+    async fn local_remux_reports_observed_time_against_local_duration() {
+        let tools =
+            std::env::var_os("NDM_TEST_FFMPEG_DIR").expect("NDM_TEST_FFMPEG_DIR is required");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().route(
+                    "/{*path}",
+                    get(|WebPath(path): WebPath<String>| async move {
+                        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hls");
+                        tokio::fs::read(root.join(path)).await.unwrap()
+                    }),
+                ),
+            )
+            .await
+            .unwrap();
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let work = directory.path().join("work");
+        fs::create_dir(&work).await.unwrap();
+        let progress = DownloadProgress::default();
+        let request = NewTask {
+            url: format!("http://{address}/mpeg2/index.m3u8"),
+            destination: directory.path().to_owned(),
+            suggested_filename: Some("video.mp4".into()),
+            source_url: None,
+            expected_size: None,
+            headers: Default::default(),
+        };
+        let (source, url) = network_source(
+            &request,
+            CancellationToken::new(),
+            None,
+            None,
+            progress.clone(),
+        )
+        .unwrap();
+        let inputs = vec![(InputId::new("primary").unwrap(), SourceLocation::Url(url))];
+        remux(
+            &request,
+            TaskId::new_v4(),
+            source,
+            Selection {
+                inputs: &inputs,
+                audio: &[],
+            },
+            &work,
+            Path::new(&tools),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        let snapshot = progress.snapshot();
+        assert!(
+            snapshot.finalized_ms >= 2000,
+            "must report the tool's observed media time"
+        );
+        assert!(
+            snapshot
+                .finalization_total_ms
+                .is_some_and(|duration| (2000..=4000).contains(&duration))
+        );
+    }
 }
