@@ -1,3 +1,6 @@
+#[path = "../../packaging/windows/version-resource.rs"]
+mod version_resource;
+
 fn main() {
     println!("cargo:rerun-if-changed=../../packaging/windows/ndm-next.ico");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
@@ -10,5 +13,6 @@ fn main() {
         embed_resource::compile("icon.rc", embed_resource::NONE)
             .manifest_optional()
             .expect("embed the application icon");
+        version_resource::embed("ndm-desktop", "NDM Next desktop application");
     }
 }

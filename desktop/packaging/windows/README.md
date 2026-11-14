@@ -2,7 +2,7 @@
 
 Build the media tools on Linux or WSL using `../ffmpeg/build.sh` and an empty output directory. The script verifies the FFmpeg source and produces a network-disabled, shared LGPL build with its corresponding source and licenses. Its dependencies are listed at the top of the script.
 
-Run `build.ps1 -MediaToolDir <output-directory>` on Windows with the Rust 1.100.0 x64 MSVC toolchain, NSIS 3 and `cargo-about` installed. `-Nsis` and `-CargoAbout` can point to executables outside `PATH`.
+Run `build.ps1 -MediaToolDir <output-directory>` on Windows with the Rust 1.100.0 x64 MSVC toolchain, NSIS 3 and `cargo-about` installed. `-Nsis` and `-CargoAbout` can point to executables outside `PATH`; use `-OutputDirectory` to keep a verification build separate from existing release files.
 
 The build verifies the media files and configuration, checks dependency licenses, and creates an installer under `desktop/dist/` with the relevant source and license notices. The per-user installer registers the Chrome and Edge native messaging hosts. Uninstalling offers to retain or remove settings and download records; completed downloads are kept. Silent uninstall retains the records.
 
@@ -39,3 +39,5 @@ The current GitHub installer is unsigned. Windows may show “Windows protected 
 For public releases, obtain a publicly trusted code-signing certificate or an eligible signing service. Integrate signing and verification of the desktop executable and native host after release compilation but before NSIS packages them; then sign, timestamp, and verify the finished installer before computing release checksums and uploading assets. Keep the same publisher identity across releases. The current build script does not perform these signing steps.
 
 Signing establishes the publisher's identity; new signed downloads can still trigger SmartScreen until reputation builds. See Microsoft's [code signing options](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options), including the SignPath Foundation option for eligible open-source projects.
+
+The GitHub Actions installer workflow builds from source on GitHub-hosted runners and uploads an unsigned artifact for build verification. It does not publish a release or submit a signing request.

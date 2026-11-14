@@ -2,12 +2,13 @@ param(
     [string]$Nsis = 'makensis.exe',
     [string]$CargoAbout = 'cargo-about.exe',
     [Parameter(Mandatory = $true)]
-    [string]$MediaToolDir
+    [string]$MediaToolDir,
+    [string]$OutputDirectory
 )
 
 $ErrorActionPreference = 'Stop'
 $workspace = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
-$distribution = Join-Path $workspace 'dist'
+$distribution = if ($OutputDirectory) { [IO.Path]::GetFullPath($OutputDirectory) } else { Join-Path $workspace 'dist' }
 New-Item -ItemType Directory -Force $distribution | Out-Null
 $mediaRoot = (Resolve-Path -LiteralPath $MediaToolDir).Path
 $mediaFiles = @(
@@ -69,11 +70,22 @@ try {
     & cargo +1.100.0 build --locked --release
     if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
 
+    foreach ($binary in @('ndm-desktop.exe', 'ndm-host.exe')) {
+        $details = (Get-Item -LiteralPath (Join-Path $binaryDirectory $binary)).VersionInfo
+        if ($details.ProductName -cne 'NDM Next' -or $details.ProductVersion -cne $version) {
+            throw "Invalid Windows product metadata in $binary."
+        }
+    }
+
     & $CargoAbout generate --frozen --workspace --target x86_64-pc-windows-msvc --fail --output-file $notices about.hbs
     if ($LASTEXITCODE -ne 0) { throw 'Third-party license generation failed.' }
 
     & $Nsis "/DNDM_BIN_DIR=$binaryDirectory" "/DNDM_OUTPUT=$output" "/DNDM_NOTICES=$notices" "/DNDM_FFMPEG_DIR=$mediaRoot" "/DNDM_VERSION=$version" "/DNDM_VERSION_QUAD=$versionQuad" (Join-Path $PSScriptRoot 'ndm-next.nsi')
     if ($LASTEXITCODE -ne 0) { throw 'Installer build failed.' }
+    $installerDetails = (Get-Item -LiteralPath $output).VersionInfo
+    if ($installerDetails.ProductName -cne 'NDM Next' -or $installerDetails.ProductVersion -cne $version) {
+        throw 'Invalid Windows product metadata in installer.'
+    }
     Write-Output "Installer: $output"
 } finally {
     Pop-Location
