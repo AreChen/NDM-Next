@@ -61,6 +61,16 @@ jobs:
           if (-not (Test-Path -LiteralPath "${env:ProgramFiles(x86)}\NSIS\makensis.exe" -PathType Leaf)) {
             throw 'NSIS executable is missing.'
           }
+      - name: Fetch locked dependencies and validate licenses
+        shell: pwsh
+        working-directory: desktop
+        run: |
+          cargo +1.100.0 fetch --locked
+          if ($LASTEXITCODE -ne 0) { throw 'Dependency fetch failed.' }
+          & "$env:RUNNER_TEMP/ndm-packaging-tools/bin/cargo-about.exe" generate `
+            --frozen --workspace --target x86_64-pc-windows-msvc --fail `
+            --output-file "$env:RUNNER_TEMP/ndm-licenses.html" about.hbs
+          if ($LASTEXITCODE -ne 0) { throw 'License verification failed.' }
       - name: Retrieve media tools from this build
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
