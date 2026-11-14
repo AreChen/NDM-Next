@@ -113,6 +113,111 @@ fn helper_data_directory(arguments: &[String]) -> io::Result<PathBuf> {
     }
 }
 
+fn preserve_manifest_origins(
+    path: &std::path::Path,
+    name: &str,
+    expected_host: &std::path::Path,
+    ids: &mut Vec<String>,
+) {
+    use std::io::Read;
+    let Ok(metadata) = fs::metadata(path) else {
+        return;
+    };
+    if !metadata.is_file() || metadata.len() > 1024 * 1024 {
+        return;
+    }
+    let Ok(expected) = fs::canonicalize(expected_host) else {
+        return;
+    };
+    let Ok(manifest_path) = fs::canonicalize(path) else {
+        return;
+    };
+    if manifest_path.parent() != expected.parent() {
+        return;
+    }
+    let Ok(file) = fs::File::open(path) else {
+        return;
+    };
+    let mut contents = Vec::new();
+    if file
+        .take(1024 * 1024 + 1)
+        .read_to_end(&mut contents)
+        .is_err()
+        || contents.len() > 1024 * 1024
+    {
+        return;
+    }
+    let Ok(existing) = serde_json::from_slice::<Value>(&contents) else {
+        return;
+    };
+    let owner = existing
+        .get("path")
+        .and_then(Value::as_str)
+        .map(std::path::Path::new);
+    if existing.get("name").and_then(Value::as_str) != Some(name)
+        || existing.get("type").and_then(Value::as_str) != Some("stdio")
+        || !owner
+            .filter(|path| path.is_absolute())
+            .is_some_and(|path| fs::canonicalize(path).is_ok_and(|path| path == expected))
+    {
+        return;
+    }
+    let Some(origins) = existing.get("allowed_origins").and_then(Value::as_array) else {
+        return;
+    };
+    for origin in origins {
+        let Some(id) = origin
+            .as_str()
+            .and_then(|value| value.strip_prefix("chrome-extension://"))
+            .and_then(|value| value.strip_suffix('/'))
+        else {
+            continue;
+        };
+        if ids.len() < 16
+            && id.len() == 32
+            && id.bytes().all(|value| (b'a'..=b'p').contains(&value))
+            && !ids.iter().any(|known| known == id)
+        {
+            ids.push(id.to_owned());
+        }
+    }
+}
+
+fn old_installation_host(desktop: &std::path::Path) -> io::Result<Option<PathBuf>> {
+    if !desktop.is_absolute()
+        || !desktop
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case("ndm-desktop.exe"))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid previous installation image",
+        ));
+    }
+    if !desktop.is_file() {
+        return Ok(None);
+    }
+    let desktop = fs::canonicalize(desktop)?;
+    let host = desktop.with_file_name("ndm-host.exe");
+    if !host.is_file() {
+        return Ok(None);
+    }
+    let canonical_host = fs::canonicalize(&host)?;
+    if canonical_host.parent() != desktop.parent()
+        || !canonical_host
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case("ndm-host.exe"))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "previous native host is outside its installation",
+        ));
+    }
+    Ok(Some(host))
+}
+
 fn main() {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
     #[cfg(windows)]
@@ -178,36 +283,46 @@ fn main() {
                 .get(1)
                 .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing host name"))?;
             let destination = executable.with_file_name("native-messaging-host.json");
+            let mut index = 2;
             let preserve = arguments
-                .get(2)
+                .get(index)
                 .is_some_and(|arg| arg == "--preserve-origins");
-            let mut ids = arguments[if preserve { 3 } else { 2 }..].to_vec();
+            if preserve {
+                index += 1;
+            }
+            let migrated_host = if arguments
+                .get(index)
+                .is_some_and(|arg| arg == "--migrate-origins-from")
+            {
+                if !preserve {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "migration requires preserved origins",
+                    ));
+                }
+                let desktop = arguments.get(index + 1).ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "missing previous installation image",
+                    )
+                })?;
+                index += 2;
+                old_installation_host(std::path::Path::new(desktop))?
+            } else {
+                None
+            };
+            let mut ids = arguments[index..].to_vec();
             // Validate the requested configuration even if an existing file is present.
             ndm_host::native_manifest(name, &executable, &ids)?;
-            if preserve
-                && fs::metadata(&destination).is_ok_and(|metadata| metadata.len() <= 1024 * 1024)
-                && let Ok(contents) = fs::read(&destination)
-                && let Ok(existing) = serde_json::from_slice::<Value>(&contents)
-                && existing.get("name").and_then(Value::as_str) == Some(name.as_str())
-                && existing.get("path").and_then(Value::as_str) == executable.to_str()
-                && existing.get("type").and_then(Value::as_str) == Some("stdio")
-                && let Some(origins) = existing.get("allowed_origins").and_then(Value::as_array)
-            {
-                for origin in origins {
-                    let Some(id) = origin
-                        .as_str()
-                        .and_then(|origin| origin.strip_prefix("chrome-extension://"))
-                        .and_then(|origin| origin.strip_suffix('/'))
-                    else {
-                        continue;
-                    };
-                    if ids.len() < 16
-                        && id.len() == 32
-                        && id.bytes().all(|b| (b'a'..=b'p').contains(&b))
-                        && !ids.iter().any(|known| known == id)
-                    {
-                        ids.push(id.to_owned());
-                    }
+            if preserve {
+                preserve_manifest_origins(&destination, name, &executable, &mut ids);
+                if let Some(host) = migrated_host {
+                    preserve_manifest_origins(
+                        &host.with_file_name("native-messaging-host.json"),
+                        name,
+                        &host,
+                        &mut ids,
+                    );
                 }
             }
             let manifest = ndm_host::native_manifest(name, &executable, &ids)?;

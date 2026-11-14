@@ -38,7 +38,7 @@ fn toggle_dash_audio(
 
 impl Desktop {
     pub(super) fn inspect_media(&mut self, cx: &mut Context<Self>) {
-        if self.inspecting_hls {
+        if matches!(self.update_state, UpdateState::Installing) || self.inspecting_hls {
             return;
         }
         let url = self.url_input.read(cx).value().trim().to_owned();

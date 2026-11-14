@@ -31,7 +31,8 @@ pub use installation::shutdown_desktop_installation;
 #[cfg(windows)]
 pub use instance::desktop_is_running;
 pub use instance::{
-    desktop_installation_active, desktop_installation_namespace, desktop_instance_namespace,
+    DesktopUpdateGuard, desktop_installation_active, desktop_installation_namespace,
+    desktop_instance_namespace, with_desktop_startup,
 };
 #[cfg(windows)]
 pub use instance::{request_desktop_shutdown, wait_for_desktop_ready, wake_desktop};

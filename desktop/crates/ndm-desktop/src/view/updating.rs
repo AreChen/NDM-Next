@@ -105,6 +105,11 @@ impl Desktop {
         let UpdateState::Ready(ready) = &self.update_state else {
             return;
         };
+        // Atomically stop new browser commits/resumes before the final idle
+        // snapshot. The reservation survives asynchronous hashing and startup.
+        let Ok(Some(reservation)) = self.store.reserve_update_if_idle() else {
+            return;
+        };
         let Ok(tasks) = self.store.list() else {
             return;
         };
@@ -124,7 +129,12 @@ impl Desktop {
         cx.spawn(async move |view, cx| {
             // The installer requests the existing graceful shutdown path. Its
             // process survives this app exiting, and relaunches the installed app.
-            let outcome = runtime.spawn(updates::install(ready)).await;
+            let outcome = runtime
+                .spawn(async move {
+                    let _reservation = reservation;
+                    updates::install(ready).await
+                })
+                .await;
             let _ = view.update(cx, |this, cx| {
                 this.update_state = if matches!(outcome, Ok(Ok(()))) {
                     UpdateState::Current

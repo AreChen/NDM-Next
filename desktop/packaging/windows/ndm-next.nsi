@@ -256,11 +256,22 @@ Section "Install"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
   ; The host writes UTF-8 JSON, including escaped non-ASCII install paths.
+  StrCmp $OldDesktop "" manifest_without_migration
+  StrCmp $OldDesktop "$INSTDIR\ndm-desktop.exe" manifest_without_migration
+  ; Migration is explicitly tied to the registered previous desktop image.
+  !ifdef NDM_EDGE_ID
+    nsExec::ExecToStack '"$INSTDIR\ndm-host.exe" --write-manifest "${NDM_HOST_NAME}" --preserve-origins --migrate-origins-from "$OldDesktop" "${NDM_CHROME_ID}" "${NDM_EDGE_ID}"'
+  !else
+    nsExec::ExecToStack '"$INSTDIR\ndm-host.exe" --write-manifest "${NDM_HOST_NAME}" --preserve-origins --migrate-origins-from "$OldDesktop" "${NDM_CHROME_ID}"'
+  !endif
+  Goto manifest_result
+  manifest_without_migration:
   !ifdef NDM_EDGE_ID
     nsExec::ExecToStack '"$INSTDIR\ndm-host.exe" --write-manifest "${NDM_HOST_NAME}" --preserve-origins "${NDM_CHROME_ID}" "${NDM_EDGE_ID}"'
   !else
     nsExec::ExecToStack '"$INSTDIR\ndm-host.exe" --write-manifest "${NDM_HOST_NAME}" --preserve-origins "${NDM_CHROME_ID}"'
   !endif
+  manifest_result:
   Pop $0
   Pop $1
   StrCmp $0 "0" 0 install_error

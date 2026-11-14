@@ -35,6 +35,43 @@ fn sftp_endpoint(url: &str) -> Result<(String, u16)> {
 }
 
 impl Store {
+    pub fn reserve_update_if_idle(&self) -> Result<Option<crate::instance::DesktopUpdateGuard>> {
+        let _admission = crate::instance::WorkAdmission::acquire(self.profile_directory())?;
+        if crate::desktop_installation_active(self.profile_directory())? {
+            return Ok(None);
+        }
+        let active: bool = self.connection()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tasks WHERE state IN ('queued','running'))",
+            [],
+            |row| row.get(0),
+        )?;
+        if active {
+            return Ok(None);
+        }
+        Ok(crate::instance::publish_update_reservation(
+            self.profile_directory(),
+        )?)
+    }
+
+    fn profile_directory(&self) -> &Path {
+        self.path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."))
+    }
+
+    fn admit_work(&self) -> Result<crate::instance::WorkAdmission> {
+        let admission = crate::instance::WorkAdmission::acquire(self.profile_directory())?;
+        if crate::desktop_installation_active(self.profile_directory())? {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "desktop update is in progress",
+            )
+            .into());
+        }
+        Ok(admission)
+    }
+
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent)?;
@@ -134,6 +171,7 @@ impl Store {
     }
 
     pub fn commit(&self, id: TaskId) -> Result<Task> {
+        let _admission = self.admit_work()?;
         let mut conn = self.connection()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute(
@@ -227,6 +265,7 @@ impl Store {
     }
 
     pub fn start(&self, id: TaskId) -> Result<()> {
+        let _admission = self.admit_work()?;
         self.transition(id, "queued", "running")
     }
 
@@ -257,6 +296,7 @@ impl Store {
     }
 
     pub fn recover_interrupted(&self) -> Result<()> {
+        let _admission = self.admit_work()?;
         self.connection()?.execute(
             "UPDATE tasks SET state = 'queued' WHERE state = 'running'",
             [],
@@ -273,6 +313,7 @@ impl Store {
     }
 
     pub fn resume(&self, id: TaskId) -> Result<()> {
+        let _admission = self.admit_work()?;
         let mut conn = self.connection()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let changed = tx.execute(

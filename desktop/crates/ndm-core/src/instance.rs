@@ -3,6 +3,166 @@ use std::{
     path::Path,
 };
 
+/// Lifetime reservation for an idle desktop update. Dropping it reopens admission.
+pub struct DesktopUpdateGuard {
+    #[cfg(windows)]
+    _marker: std::os::windows::io::OwnedHandle,
+    #[cfg(not(windows))]
+    namespace: String,
+}
+
+// Unlike the existing singleton protocol, these new names normalize aliases so
+// Store handles opening the same profile share one admission boundary. Keep the
+// legacy singleton/shutdown/installer namespace algorithm unchanged.
+fn coordination_namespace(data_dir: &Path) -> String {
+    let path = std::fs::canonicalize(data_dir)
+        .or_else(|_| std::path::absolute(data_dir))
+        .unwrap_or_else(|_| data_dir.to_owned());
+    let text = path.to_string_lossy();
+    #[cfg(windows)]
+    let text = if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{unc}")
+    } else {
+        text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned()
+    };
+    desktop_instance_namespace(Path::new(&*text))
+}
+
+fn update_namespace(data_dir: &Path) -> String {
+    format!("{}-updating", coordination_namespace(data_dir))
+}
+
+/// Register a desktop under the same boundary as work/update admission. The
+/// closure is synchronous; no thread-owned admission handle escapes this call.
+pub fn with_desktop_startup<T>(
+    data_dir: &Path,
+    startup: impl FnOnce() -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    let _admission = WorkAdmission::acquire(data_dir)?;
+    if desktop_installation_active(data_dir)? {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            "desktop update is in progress",
+        ));
+    }
+    startup()
+}
+
+pub(crate) struct WorkAdmission {
+    #[cfg(windows)]
+    handle: std::os::windows::io::OwnedHandle,
+    #[cfg(windows)]
+    _same_thread: std::marker::PhantomData<*mut ()>,
+    #[cfg(not(windows))]
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+impl WorkAdmission {
+    pub(crate) fn acquire(data_dir: &Path) -> std::io::Result<Self> {
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::FromRawHandle;
+            use windows_sys::Win32::{
+                Foundation::{WAIT_ABANDONED, WAIT_OBJECT_0, WAIT_TIMEOUT},
+                System::Threading::{CreateMutexW, WaitForSingleObject},
+            };
+            let name: Vec<_> = format!("{}-admission", coordination_namespace(data_dir))
+                .encode_utf16()
+                .chain(Some(0))
+                .collect();
+            // SAFETY: The name is terminated; the owned handle closes on all paths.
+            let raw = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+            if raw.is_null() {
+                return Err(std::io::Error::last_os_error());
+            }
+            let handle = unsafe { std::os::windows::io::OwnedHandle::from_raw_handle(raw) };
+            match unsafe { WaitForSingleObject(raw, 5_000) } {
+                WAIT_OBJECT_0 | WAIT_ABANDONED => Ok(Self {
+                    handle,
+                    _same_thread: std::marker::PhantomData,
+                }),
+                WAIT_TIMEOUT => Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "work admission is busy",
+                )),
+                _ => Err(std::io::Error::last_os_error()),
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = data_dir;
+            Ok(Self {
+                _lock: PORTABLE_ADMISSION
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner()),
+            })
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for WorkAdmission {
+    fn drop(&mut self) {
+        use std::os::windows::io::AsRawHandle;
+        // SAFETY: WorkAdmission cannot move across threads and acquired this mutex.
+        unsafe {
+            windows_sys::Win32::System::Threading::ReleaseMutex(self.handle.as_raw_handle());
+        }
+    }
+}
+
+#[cfg(not(windows))]
+static PORTABLE_ADMISSION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+#[cfg(not(windows))]
+static PORTABLE_RESERVATIONS: std::sync::Mutex<std::collections::BTreeSet<String>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+#[cfg(not(windows))]
+impl Drop for DesktopUpdateGuard {
+    fn drop(&mut self) {
+        PORTABLE_RESERVATIONS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&self.namespace);
+    }
+}
+
+/// Called only while the profile admission mutex is held.
+pub(crate) fn publish_update_reservation(
+    data_dir: &Path,
+) -> std::io::Result<Option<DesktopUpdateGuard>> {
+    let namespace = update_namespace(data_dir);
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::FromRawHandle;
+        use windows_sys::Win32::{
+            Foundation::{ERROR_ALREADY_EXISTS, GetLastError},
+            System::Threading::CreateMutexW,
+        };
+        let name: Vec<_> = namespace.encode_utf16().chain(Some(0)).collect();
+        // This is an existence marker, not an owned mutex: its Send guard may be
+        // dropped on another Tokio worker. Kernel handle lifetime clears crashes.
+        let raw = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+        if raw.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        let existed = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
+        let marker = unsafe { std::os::windows::io::OwnedHandle::from_raw_handle(raw) };
+        Ok((!existed).then_some(DesktopUpdateGuard { _marker: marker }))
+    }
+    #[cfg(not(windows))]
+    {
+        let mut reservations = PORTABLE_RESERVATIONS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if reservations.insert(namespace.clone()) {
+            Ok(Some(DesktopUpdateGuard { namespace }))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
 /// Shared namespace for the desktop singleton and its installer integration.
 pub fn desktop_instance_namespace(data_dir: &Path) -> String {
     let mut hasher = DefaultHasher::new();
@@ -18,12 +178,19 @@ pub fn desktop_installation_namespace(data_dir: &Path) -> String {
 /// Check without creating the installation guard or taking ownership of it.
 #[cfg(windows)]
 pub fn desktop_installation_active(data_dir: &Path) -> std::io::Result<bool> {
-    named_mutex_exists(&desktop_installation_namespace(data_dir))
+    Ok(
+        named_mutex_exists(&desktop_installation_namespace(data_dir))?
+            || named_mutex_exists(&format!("{}-installing", coordination_namespace(data_dir)))?
+            || named_mutex_exists(&update_namespace(data_dir))?,
+    )
 }
 
 #[cfg(not(windows))]
-pub fn desktop_installation_active(_data_dir: &Path) -> std::io::Result<bool> {
-    Ok(false)
+pub fn desktop_installation_active(data_dir: &Path) -> std::io::Result<bool> {
+    Ok(PORTABLE_RESERVATIONS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .contains(&update_namespace(data_dir)))
 }
 
 /// Check without creating or signalling the singleton object.

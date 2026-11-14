@@ -867,7 +867,7 @@ impl Desktop {
         cx.notify();
     }
     fn confirm_delete(&mut self, ids: Vec<TaskId>, cx: &mut Context<Self>) {
-        if self.deleting || ids.is_empty() {
+        if matches!(self.update_state, UpdateState::Installing) || self.deleting || ids.is_empty() {
             return;
         }
         if let Some(handle) = self.delete_dialog
@@ -923,7 +923,7 @@ impl Desktop {
         delete_files: bool,
         cx: &mut Context<Self>,
     ) {
-        if self.deleting || ids.is_empty() {
+        if matches!(self.update_state, UpdateState::Installing) || self.deleting || ids.is_empty() {
             return;
         }
         self.deleting = true;

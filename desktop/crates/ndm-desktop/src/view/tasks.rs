@@ -128,6 +128,9 @@ impl Desktop {
                         })
                         .on_click(move |_, window, cx| {
                             let _ = view.update(cx, |this, cx| {
+                                if matches!(this.update_state, UpdateState::Installing) {
+                                    return;
+                                }
                                 this.replacement_input
                                     .update(cx, |input, cx| input.set_value("", window, cx));
                                 this.editing_url = Some(id);
@@ -170,6 +173,9 @@ impl Desktop {
                         })
                         .on_click(move |_, _, cx| {
                             let _ = view.update(cx, |this, cx| {
+                                if matches!(this.update_state, UpdateState::Installing) {
+                                    return;
+                                }
                                 this.confirming_host_key = Some(id);
                                 cx.notify();
                             });

@@ -62,6 +62,10 @@ try {
     $old = Join-Path $testRoot 'legacy-custom-install'
     New-Item -ItemType Directory -Path $old -Force | Out-Null
     Copy-Item -LiteralPath "$bin\ndm-desktop.exe" -Destination "$old\ndm-desktop.exe"
+    Copy-Item -LiteralPath "$bin\ndm-host.exe" -Destination "$old\ndm-host.exe"
+    $unpackedId = 'abcdefghijklmnopabcdefghijklmnop'
+    & rtk proxy "$old\ndm-host.exe" --write-manifest $hostName $unpackedId
+    if ($LASTEXITCODE -ne 0) { throw 'Could not create previous integration fixture' }
     Set-ItemProperty -LiteralPath "HKCU:\$uninstallKey" -Name DisplayIcon -Value ('"' + $old + '\ndm-desktop.exe",0')
     $env:NDM_TEST_DESKTOP_WAIT = '1'
     $legacyProcess = Start-Process -FilePath (Get-Command rtk).Source -ArgumentList @('proxy', "$old\ndm-desktop.exe") -PassThru -WindowStyle Hidden
@@ -74,6 +78,9 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Update could not close registered custom installation' }
     if (-not $legacyProcess.WaitForExit(5000)) { throw 'Registered desktop did not exit' }
     if (-not (Test-Path -LiteralPath "$old\fixture.shutdown")) { throw 'Registered custom installation did not receive graceful shutdown' }
+    $relocatedManifest = Get-Content -LiteralPath "$install\native-messaging-host.json" -Raw | ConvertFrom-Json
+    if ($relocatedManifest.allowed_origins -notcontains "chrome-extension://$unpackedId/") { throw 'Relocation lost the previous unpacked extension ID' }
+    if ($relocatedManifest.allowed_origins -notcontains 'chrome-extension://caegebfdojcdlkkiaiokeoadefdooamd/') { throw 'Relocation lost the requested default extension ID' }
     if ((Get-Content -LiteralPath "$install\launches.log") -contains 'guard-held') { throw 'Relaunch saw active installer guard' }
     if ((Get-Content -LiteralPath "$data\preferences.json") -ne '{"keep":true}') { throw 'Installer changed preferences' }
     if ((Get-Content -LiteralPath "$data\tasks.db") -ne 'preserve existing task database') { throw 'Installer changed task database' }

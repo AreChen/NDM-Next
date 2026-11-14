@@ -49,6 +49,10 @@ mod platform {
 
     impl Instance {
         pub fn acquire(data_dir: &Path, show: bool) -> io::Result<Option<Self>> {
+            ndm_core::with_desktop_startup(data_dir, || Self::register(data_dir, show))
+        }
+
+        fn register(data_dir: &Path, show: bool) -> io::Result<Option<Self>> {
             let name = ndm_core::desktop_instance_namespace(data_dir);
             // Serialize the short registration step with installer guard acquisition.
             // Existing guards belong to an installer or another startup; never open storage.
@@ -320,6 +324,22 @@ mod platform {
                 result.is_err(),
                 "desktop startup must defer while files are replaced"
             );
+        }
+
+        #[test]
+        fn update_reservation_rejects_startup_until_it_is_released() {
+            let dir = tempfile::tempdir().unwrap();
+            let store = ndm_core::Store::open(&dir.path().join("tasks.db")).unwrap();
+            let reservation = store.reserve_update_if_idle().unwrap().unwrap();
+            assert!(
+                matches!(
+                    Instance::acquire(dir.path(), false),
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock
+                ),
+                "startup must wait for an idle update reservation"
+            );
+            drop(reservation);
+            assert!(Instance::acquire(dir.path(), false).unwrap().is_some());
         }
 
         #[test]

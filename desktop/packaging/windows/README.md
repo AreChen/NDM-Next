@@ -16,7 +16,7 @@ Download the companion extension ZIP from the desktop GitHub release and extract
 pwsh -File .\enable-dev-extension.ps1 -ExtensionId <extension-id>
 ```
 
-Download `enable-dev-extension.ps1` from the same release (or use `desktop/packaging/windows/enable-dev-extension.ps1` in a source checkout). The command adds that one local extension to the native messaging manifest. Reload the extension and select **NDM Next** as its backend. The installer preserves existing valid extension IDs for the same installation. The existing extension store release has a separate version stream.
+Download `enable-dev-extension.ps1` from the same release (or use `desktop/packaging/windows/enable-dev-extension.ps1` in a source checkout). The command adds that one local extension to the native messaging manifest. Reload the extension and select **NDM Next** as its backend. Setup preserves existing valid extension IDs across upgrades, including when changing the installation directory. The existing extension store release has a separate version stream.
 
 ## Release checklist
 
