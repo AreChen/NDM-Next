@@ -51,10 +51,16 @@ jobs:
         run: |
           rustup toolchain install 1.100.0 --profile minimal
           if ($LASTEXITCODE -ne 0) { throw 'Rust installation failed.' }
-          cargo +1.100.0 install cargo-about --version 0.9.3 --locked
+          cargo +1.100.0 install cargo-about --version 0.9.3 --features cli --locked `
+            --root "$env:RUNNER_TEMP/ndm-packaging-tools"
           if ($LASTEXITCODE -ne 0) { throw 'cargo-about installation failed.' }
+          $cargoAbout = Join-Path $env:RUNNER_TEMP 'ndm-packaging-tools/bin/cargo-about.exe'
+          if (-not (Test-Path -LiteralPath $cargoAbout -PathType Leaf)) { throw 'cargo-about executable is missing.' }
           choco install nsis --version=3.12.0 --yes --no-progress
           if ($LASTEXITCODE -ne 0) { throw 'NSIS installation failed.' }
+          if (-not (Test-Path -LiteralPath "${env:ProgramFiles(x86)}\NSIS\makensis.exe" -PathType Leaf)) {
+            throw 'NSIS executable is missing.'
+          }
       - name: Retrieve media tools from this build
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
@@ -65,6 +71,7 @@ jobs:
         run: |
           ./desktop/packaging/windows/build.ps1 `
             -Nsis "${env:ProgramFiles(x86)}\NSIS\makensis.exe" `
+            -CargoAbout "$env:RUNNER_TEMP/ndm-packaging-tools/bin/cargo-about.exe" `
             -MediaToolDir "$env:RUNNER_TEMP/ndm-media"
       - name: Upload unsigned installer
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
