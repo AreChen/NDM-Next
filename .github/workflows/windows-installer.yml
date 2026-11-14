@@ -1,0 +1,75 @@
+name: Windows installer build
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/windows-installer.yml'
+      - 'desktop/**'
+
+permissions:
+  contents: read
+
+jobs:
+  media-tools:
+    name: Build LGPL media tools
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install cross-compilation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-mingw-w64-x86-64-win32 gnupg make nasm xz-utils
+      - name: Build verified FFmpeg source
+        env:
+          NDM_GCC_COPYRIGHT: /usr/share/doc/gcc-13-base/copyright
+          NDM_BUILD_JOBS: 4
+        run: bash ./desktop/packaging/ffmpeg/build.sh "$RUNNER_TEMP/ndm-media"
+      - name: Upload media tools for this build
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-media-tools
+          path: ${{ runner.temp }}/ndm-media/
+          if-no-files-found: error
+          retention-days: 3
+
+  installer:
+    name: Build unsigned Windows installer
+    needs: media-tools
+    runs-on: windows-2025
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install Rust and packaging tools
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.100.0 --profile minimal
+          if ($LASTEXITCODE -ne 0) { throw 'Rust installation failed.' }
+          cargo +1.100.0 install cargo-about --version 0.9.3 --locked
+          if ($LASTEXITCODE -ne 0) { throw 'cargo-about installation failed.' }
+          choco install nsis --version=3.12.0 --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS installation failed.' }
+      - name: Retrieve media tools from this build
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: windows-media-tools
+          path: ${{ runner.temp }}/ndm-media
+      - name: Build installer
+        shell: pwsh
+        run: |
+          ./desktop/packaging/windows/build.ps1 `
+            -Nsis "${env:ProgramFiles(x86)}\NSIS\makensis.exe" `
+            -MediaToolDir "$env:RUNNER_TEMP/ndm-media"
+      - name: Upload unsigned installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ndm-next-windows-installer-unsigned
+          path: desktop/dist/NDM-Next-Setup-*-x64.exe
+          if-no-files-found: error
+          retention-days: 3
