@@ -33,7 +33,14 @@ The installer lifecycle tests used unique temporary profiles, registry keys and 
 | `NDM-Next-Setup-0.1.0-x64.exe` | 28,980,846 | `9048fd466ba850779d951dab8d6ac760aa7a5781d19f73296e2f42f260209716` |
 | `NDM-Next-Extension-Desktop-0.1.0.zip` | 48,852 | `5ced8c5ad088204a6d9512b6f6d4d468baa38060d11e4c69b277e2362d2485e4` |
 
-The release also includes `enable-dev-extension.ps1` and `SHA256SUMS`. Public asset digest checks and a download-only updater smoke follow publication; the smoke never executes the installer.
+The release also includes `enable-dev-extension.ps1` and `SHA256SUMS`.
+
+## Published release verification
+
+- [Desktop 0.1.0](https://github.com/AreChen/NDM-Next/releases/tag/desktop-v0.1.0) is public, stable and marked latest. The existing extension `v1.0.0` release is retained.
+- The release tag resolves to tested source commit `5a3092fb77be18975ff91ac927a2b540cc3e155a`. The fast-forwarded main tree matched the feature tree, and the merged checkout again passed all 187 Rust and 42 extension tests.
+- All four remote assets matched their local SHA-256 digests and byte lengths before publication.
+- The application's real updater discovered the published release, followed GitHub's download redirect, downloaded all 28,980,846 installer bytes, and verified SHA-256 `9048fd466ba850779d951dab8d6ac760aa7a5781d19f73296e2f42f260209716`. The dedicated public smoke passed without executing the installer.
 
 ## Coverage boundaries
 

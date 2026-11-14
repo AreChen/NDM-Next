@@ -23,7 +23,7 @@ The user explicitly authorizes fixing the compact UI, adding the existing projec
 - [x] GitHub release discovery/download/hash validation, periodic automatic updates and bilingual controls; behavioral and local-server tests.
 - [x] Graceful installer shutdown, installation guard and launch-after-install behavior; isolated process/installer tests.
 - [x] Fresh-context final review, full Rust/extension checks and optimized installer build.
-- [ ] Commit the desktop work, merge into main while preserving unrelated main-worktree files, verify the merged tree, push, publish release assets, and verify the public release/digests.
+- [x] Commit the desktop work, merge into main while preserving unrelated main-worktree files, verify the merged tree, push, publish release assets, and verify the public release/digests.
 
 ## Review focus
 
