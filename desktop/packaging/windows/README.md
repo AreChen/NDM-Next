@@ -10,6 +10,13 @@ Desktop releases are distributed through GitHub as `desktop-v{version}`. The Win
 
 ## Browser extension
 
+Find the store links in **Settings → Browser extension**:
+
+- [Chrome / Brave](https://chromewebstore.google.com/detail/ndm-next/caegebfdojcdlkkiaiokeoadefdooamd)
+- [Microsoft Edge](https://microsoftedge.microsoft.com/addons/detail/ndm-next/hiblommiheggidolemmnnlocmocebckp)
+
+The store pages may not be available yet; use manual installation below if needed. Store-installed extensions are already allowed by the desktop installer. Choose **NDM Next** in the extension settings when migrating from Neat Download Manager.
+
 Download the companion extension ZIP from the desktop GitHub release and extract it. Load the extracted folder as an unpacked extension in the browser's developer mode. The repository's `extension/` directory works too. Allow its displayed extension ID in the installed host:
 
 ```powershell
@@ -24,3 +31,11 @@ Download `enable-dev-extension.ps1` from the same release (or use `desktop/packa
 - Build the installer with the audited media tools. Publish its corresponding source and licenses with the installer (the build includes them).
 - Publish the installer, companion extension, browser-integration helper and `SHA256SUMS` at a stable `desktop-v{version}` GitHub release. Keep incomplete uploads in a draft.
 - Verify the published installer size and SHA-256 digest against the local build before considering the release ready for automatic updates.
+
+## Windows signing
+
+The current GitHub installer is unsigned. Windows may show “Windows protected your PC” or “Unknown publisher”. A Microsoft Store developer account does not sign an EXE distributed through GitHub, and a self-signed certificate only works on machines that explicitly trust it.
+
+For public releases, obtain a publicly trusted code-signing certificate or an eligible signing service. Integrate signing and verification of the desktop executable and native host after release compilation but before NSIS packages them; then sign, timestamp, and verify the finished installer before computing release checksums and uploading assets. Keep the same publisher identity across releases. The current build script does not perform these signing steps.
+
+Signing establishes the publisher's identity; new signed downloads can still trigger SmartScreen until reputation builds. See Microsoft's [code signing options](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options), including the SignPath Foundation option for eligible open-source projects.

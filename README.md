@@ -15,7 +15,7 @@ NDM Next combines a Rust desktop downloader with a browser extension that keeps 
 
 ## Install
 
-Download the Windows x64 installer and companion extension from [GitHub Releases](https://github.com/AreChen/NDM-Next/releases/tag/desktop-v0.1.0). Setup opens the app when finished. Follow the [browser integration instructions](desktop/packaging/windows/README.md#browser-extension), then select **NDM Next** in the extension settings.
+Download the Windows x64 installer from [GitHub Releases](https://github.com/AreChen/NDM-Next/releases/latest). Setup opens the app when finished. Find the Chrome / Brave and Edge extension links in **Settings → Browser extension**. While store review is pending, use the [manual installation instructions](desktop/packaging/windows/README.md#browser-extension).
 
 Desktop updates download automatically and install when transfers are idle. You can turn this off in **Settings → About and updates**.
 

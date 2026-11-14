@@ -1,6 +1,12 @@
 use super::*;
 use gpui_kit::component::Selectable;
 
+const CHROME_EXTENSION_URL: &str =
+    "https://chromewebstore.google.com/detail/ndm-next/caegebfdojcdlkkiaiokeoadefdooamd";
+const EDGE_EXTENSION_URL: &str =
+    "https://microsoftedge.microsoft.com/addons/detail/ndm-next/hiblommiheggidolemmnnlocmocebckp";
+const EXTENSION_GUIDE_URL: &str = "https://github.com/AreChen/NDM-Next/blob/main/desktop/packaging/windows/README.md#browser-extension";
+
 impl Desktop {
     fn settings_group(
         &self,
@@ -216,6 +222,43 @@ impl Desktop {
                     .label(self.text("保存", "Save"))
                     .on_click(cx.listener(|this, _, _, cx| this.save_download_settings(cx))),
             );
+        let extensions = div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(div().text_xs().text_color(rgb(muted)).child(self.text(
+                "安装扩展，让浏览器下载自动交给 NDM Next。商店审核期间可手动安装。",
+                "Capture browser downloads with the extension. Manual installation is available during store review.",
+            )))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        Button::new("chrome-extension")
+                            .small()
+                            .icon(IconName::Globe)
+                            .label("Chrome / Brave")
+                            .on_click(cx.listener(|_, _, _, cx| cx.open_url(CHROME_EXTENSION_URL))),
+                    )
+                    .child(
+                        Button::new("edge-extension")
+                            .small()
+                            .icon(IconName::Globe)
+                            .label("Microsoft Edge")
+                            .on_click(cx.listener(|_, _, _, cx| cx.open_url(EDGE_EXTENSION_URL))),
+                    )
+                    .child(
+                        Button::new("extension-guide")
+                            .small()
+                            .ghost()
+                            .icon(IconName::ExternalLink)
+                            .label(self.text("手动安装", "Manual install"))
+                            .on_click(cx.listener(|_, _, _, cx| cx.open_url(EXTENSION_GUIDE_URL))),
+                    ),
+            );
         let about = div()
             .flex()
             .flex_col()
@@ -335,9 +378,20 @@ impl Desktop {
                 cx,
             ));
         }
-        panel.child(self.settings_group(
+        panel = panel.child(self.settings_group(
             (
                 4,
+                IconName::Globe,
+                self.text("浏览器扩展", "Browser extension"),
+                "Chrome / Brave · Microsoft Edge",
+            ),
+            extensions,
+            dark,
+            cx,
+        ));
+        panel.child(self.settings_group(
+            (
+                5,
                 IconName::Info,
                 self.text("关于与更新", "About and updates"),
                 self.text("版本信息与更新检查", "Version and update checks"),

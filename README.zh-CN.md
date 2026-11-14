@@ -15,7 +15,7 @@ NDM Next 将 Rust 桌面下载器与浏览器扩展结合，过滤不需要的�
 
 ## 安装
 
-从 [GitHub Releases](https://github.com/AreChen/NDM-Next/releases/tag/desktop-v0.1.0) 下载 Windows x64 安装包和配套扩展，安装完成后默认打开程序。按[浏览器集成说明](desktop/packaging/windows/README.md#browser-extension)加载扩展，并在扩展设置中选择 **NDM Next**。
+从 [GitHub Releases](https://github.com/AreChen/NDM-Next/releases/latest) 下载 Windows x64 安装包，安装完成后默认打开程序。在「设置 → 浏览器扩展」打开 Chrome／Brave 或 Edge 商店入口；商店审核期间可按[手动安装说明](desktop/packaging/windows/README.md#browser-extension)加载扩展。
 
 桌面端会自动下载更新，等待下载任务空闲后安装并重启。可在「设置 → 关于与更新」关闭。
 
