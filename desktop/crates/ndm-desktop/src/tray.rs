@@ -1,11 +1,13 @@
 use crate::preferences::Language;
 use gpui_kit::Window;
+#[cfg(windows)]
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use tokio::sync::mpsc::UnboundedSender;
 use tray_icon::{
     Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent,
     menu::{Menu, MenuEvent, MenuItem},
 };
+#[cfg(windows)]
 use windows_sys::Win32::{
     Foundation::HWND,
     UI::WindowsAndMessaging::{SW_HIDE, SW_SHOW, SetForegroundWindow, ShowWindow},
@@ -89,6 +91,7 @@ impl Tray {
     }
 }
 
+#[cfg(windows)]
 fn hwnd(window: &Window) -> Option<HWND> {
     match HasWindowHandle::window_handle(window).ok()?.as_raw() {
         RawWindowHandle::Win32(handle) => Some(handle.hwnd.get() as HWND),
@@ -96,6 +99,7 @@ fn hwnd(window: &Window) -> Option<HWND> {
     }
 }
 
+#[cfg(windows)]
 pub fn hide(window: &Window) {
     if let Some(handle) = hwnd(window) {
         // SAFETY: the handle belongs to this live GPUI window on its UI thread.
@@ -105,6 +109,7 @@ pub fn hide(window: &Window) {
     }
 }
 
+#[cfg(windows)]
 pub fn show(window: &Window) {
     if let Some(handle) = hwnd(window) {
         // SAFETY: the handle belongs to this live GPUI window on its UI thread.
@@ -114,4 +119,13 @@ pub fn show(window: &Window) {
         }
         window.activate_window();
     }
+}
+
+#[cfg(target_os = "macos")]
+pub fn hide(window: &Window) {
+    window.minimize_window();
+}
+#[cfg(target_os = "macos")]
+pub fn show(window: &Window) {
+    window.activate_window();
 }

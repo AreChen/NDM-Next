@@ -1,11 +1,15 @@
 use std::path::{Path, PathBuf};
 
 fn legacy_download_directory() -> PathBuf {
-    std::env::var_os("USERPROFILE")
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .unwrap_or_else(std::env::temp_dir)
-        .join("Downloads")
+    std::env::var_os(if cfg!(target_os = "macos") {
+        "HOME"
+    } else {
+        "USERPROFILE"
+    })
+    .map(PathBuf::from)
+    .filter(|path| path.is_absolute())
+    .unwrap_or_else(std::env::temp_dir)
+    .join("Downloads")
 }
 
 /// Resolve the configured Windows known folder, including redirected Downloads.
@@ -85,7 +89,34 @@ fn resolve(
     }
 }
 
+/// Persistent application state shared by the desktop and browser host.
+pub fn application_data_directory() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        return macos_home().join("Library/Application Support/NDM Next");
+    }
+    #[cfg(not(target_os = "macos"))]
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(std::env::temp_dir)
+        .join("NDM Next")
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn macos_home() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .expect("macOS requires an absolute HOME directory")
+}
+
 pub fn default_cache_directory() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        return macos_home().join("Library/Caches/com.ndmnext.desktop");
+    }
+    #[cfg(not(target_os = "macos"))]
     std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())

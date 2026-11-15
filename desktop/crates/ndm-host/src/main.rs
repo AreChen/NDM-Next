@@ -39,7 +39,11 @@ fn run() -> io::Result<()> {
         ));
     }
     let store = Arc::new(Store::open(&data_dir.join("tasks.db")).map_err(io::Error::other)?);
-    let executable = std::env::current_exe()?.with_file_name("ndm-desktop.exe");
+    let executable = std::env::current_exe()?.with_file_name(if cfg!(windows) {
+        "ndm-desktop.exe"
+    } else {
+        "ndm-desktop"
+    });
     let mut input = io::stdin().lock();
     let mut output = io::stdout().lock();
     while let Some(message) = read_frame(&mut input)? {
@@ -56,7 +60,7 @@ fn run() -> io::Result<()> {
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn();
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             {
                 launched.is_ok()
                     && ndm_core::wait_for_desktop_ready(
@@ -65,7 +69,7 @@ fn run() -> io::Result<()> {
                     )
                     .unwrap_or(false)
             }
-            #[cfg(not(windows))]
+            #[cfg(not(any(windows, target_os = "macos")))]
             {
                 launched.is_ok()
             }
@@ -84,7 +88,7 @@ fn run() -> io::Result<()> {
         {
             // Commit only after startup recovery finishes, then wake the scheduler.
             // A retry is safe if the desktop exits between these two operations.
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             if ndm_core::wake_desktop(&data_dir).is_err() {
                 result = json!({"ok":false,"error":"desktop_unavailable"});
             }
@@ -96,10 +100,7 @@ fn run() -> io::Result<()> {
 }
 
 fn data_directory() -> PathBuf {
-    std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("NDM Next")
+    ndm_core::application_data_directory()
 }
 
 fn helper_data_directory(arguments: &[String]) -> io::Result<PathBuf> {
@@ -222,6 +223,18 @@ fn old_installation_host(desktop: &std::path::Path) -> io::Result<Option<PathBuf
 
 fn main() {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
+    #[cfg(target_os = "macos")]
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == "--register-browser-hosts")
+    {
+        let result = std::env::current_exe()
+            .and_then(|host| ndm_host::macos::register_browser_hosts(&host, &arguments[1..]));
+        if let Err(error) = &result {
+            eprintln!("{error}");
+        }
+        std::process::exit(if result.is_ok() { 0 } else { 1 });
+    }
     #[cfg(windows)]
     if arguments
         .first()

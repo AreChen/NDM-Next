@@ -2,7 +2,8 @@ mod cache;
 mod directories;
 pub use cache::CacheReport;
 pub use directories::{
-    default_cache_directory, resolve_download_directory, system_download_directory,
+    application_data_directory, default_cache_directory, resolve_download_directory,
+    system_download_directory,
 };
 mod continuation;
 mod dash;
@@ -35,13 +36,13 @@ pub use http::{
 };
 #[cfg(windows)]
 pub use installation::shutdown_desktop_installation;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 pub use instance::desktop_is_running;
 pub use instance::{
     DesktopUpdateGuard, desktop_installation_active, desktop_installation_namespace,
     desktop_instance_namespace, with_desktop_startup,
 };
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 pub use instance::{request_desktop_shutdown, wait_for_desktop_ready, wake_desktop};
 pub use model::{NewTask, Task, TaskId, TaskOptions, TaskState};
 pub use scheduler::{Scheduler, SchedulerEvent, SchedulerOptions};
@@ -133,3 +134,6 @@ pub fn protect_user_data(data: &[u8]) -> Result<Vec<u8>> {
 pub fn unprotect_user_data(data: &[u8]) -> Result<Vec<u8>> {
     secrets::unprotect(data)
 }
+
+#[cfg(target_os = "macos")]
+pub mod macos_instance;

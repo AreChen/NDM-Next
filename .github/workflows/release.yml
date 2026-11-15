@@ -1,0 +1,62 @@
+name: Desktop release
+
+on:
+  push:
+    tags:
+      - 'desktop-v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    uses: ./.github/workflows/windows-installer.yml
+    secrets: inherit
+
+  macos:
+    uses: ./.github/workflows/macos-build.yml
+    secrets: inherit
+
+  publish:
+    name: Publish GitHub release
+    needs: [windows, macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: ndm-next-windows-installer-unsigned
+          path: release-assets
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: ndm-next-macos-*
+          path: release-assets
+          merge-multiple: true
+      - name: Validate release version and checksums
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#desktop-v}"
+          [[ "$RELEASE_TAG" == desktop-v* && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ -n "$(find release-assets -type f -name 'NDM-Next-Setup-*-x64.exe' -print -quit)" ]]
+          mapfile -t dmgs < <(find release-assets -type f -name 'NDM-Next-*-macos-*.dmg' -print)
+          [[ "${#dmgs[@]}" -eq 2 ]]
+          for digest in release-assets/**/*.sha256; do
+            [[ -f "$digest" ]] || continue
+            (cd "$(dirname "$digest")" && shasum -a 256 --check "$(basename "$digest")")
+          done
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mapfile -t assets < <(find release-assets -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.sha256' \) -print)
+          gh release create "$RELEASE_TAG" "${assets[@]}" \
+            --title "NDM Next ${RELEASE_TAG#desktop-v}" \
+            --generate-notes

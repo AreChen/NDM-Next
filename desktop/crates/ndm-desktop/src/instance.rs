@@ -363,3 +363,9 @@ mod platform {
 
 #[cfg(windows)]
 pub use platform::Instance;
+
+#[cfg(target_os = "macos")]
+#[path = "instance_macos.rs"]
+mod macos;
+#[cfg(target_os = "macos")]
+pub use macos::Instance;

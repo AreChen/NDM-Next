@@ -5,7 +5,11 @@ const CHROME_EXTENSION_URL: &str =
     "https://chromewebstore.google.com/detail/ndm-next/caegebfdojcdlkkiaiokeoadefdooamd";
 const EDGE_EXTENSION_URL: &str =
     "https://microsoftedge.microsoft.com/addons/detail/ndm-next/hiblommiheggidolemmnnlocmocebckp";
+#[cfg(not(target_os = "macos"))]
 const EXTENSION_GUIDE_URL: &str = "https://github.com/AreChen/NDM-Next/blob/main/desktop/packaging/windows/README.md#browser-extension";
+
+#[cfg(target_os = "macos")]
+const EXTENSION_GUIDE_URL: &str = "https://github.com/AreChen/NDM-Next/blob/main/desktop/packaging/macos/README.md#browser-extension";
 
 impl Desktop {
     fn settings_group(
@@ -125,7 +129,7 @@ impl Desktop {
                             } else {
                                 Language::Chinese
                             };
-                        #[cfg(windows)]
+                        #[cfg(any(windows, target_os = "macos"))]
                         if let Some(tray) = &this.tray {
                             tray.set_language(this.preferences.language);
                         }
@@ -392,7 +396,7 @@ impl Desktop {
                 dark,
                 cx,
             ));
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         {
             let startup = Button::new("startup-toggle")
                 .small()

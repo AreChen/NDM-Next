@@ -4904,9 +4904,11 @@ dependencies = [
 name = "ndm-core"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "axum",
  "bytes",
  "futures-util",
+ "getrandom 0.3.4",
  "hls-engine",
  "isolang",
  "m3u8-rs",
@@ -4933,7 +4935,7 @@ dependencies = [
 
 [[package]]
 name = "ndm-desktop"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "caseless",
  "embed-resource",
@@ -4941,6 +4943,8 @@ dependencies = [
  "gpui-pre",
  "image",
  "ndm-core",
+ "ndm-host",
+ "objc2-foundation 0.3.2",
  "percent-encoding",
  "raw-window-handle",
  "reqwest",
@@ -4959,7 +4963,7 @@ dependencies = [
 
 [[package]]
 name = "ndm-host"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "embed-resource",
  "ndm-core",

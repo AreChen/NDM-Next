@@ -2,7 +2,7 @@ use super::*;
 use serde_json::{Value, json};
 
 fn release(version: &str) -> Value {
-    let name = format!("NDM-Next-Setup-{version}-x64.exe");
+    let name = asset_name(&Version::parse(version).unwrap());
     json!({"tag_name": format!("desktop-v{version}"), "draft": false, "prerelease": false,
         "assets": [{"name": name, "size": 9, "digest": format!("sha256:{}", "ab".repeat(32)),
         "browser_download_url": format!("https://github.com/AreChen/NDM-Next/releases/download/desktop-v{version}/{name}")}]})

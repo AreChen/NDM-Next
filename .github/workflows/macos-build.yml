@@ -1,0 +1,66 @@
+name: macOS build
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  push:
+    tags-ignore:
+      - 'desktop-v*'
+    paths:
+      - '.github/workflows/macos-build.yml'
+      - 'desktop/**'
+      - 'extension/**'
+      - 'assets/**'
+      - 'README*'
+      - 'LICENSE'
+      - 'PRIVACY.md'
+
+permissions:
+  contents: read
+
+env:
+  RUST_VERSION: 1.100.0
+  MACOSX_DEPLOYMENT_TARGET: '12.0'
+
+jobs:
+  build:
+    name: macOS ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+            target: aarch64-apple-darwin
+          - arch: x64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Install build tools
+        run: brew install gnupg nasm cargo-about
+      - name: Install Rust
+        run: rustup toolchain install "$RUST_VERSION" --profile minimal --target "${{ matrix.target }}"
+      - name: Build verified media tools
+        env:
+          NDM_BUILD_JOBS: 3
+        run: bash ./desktop/packaging/macos/build-media.sh "$RUNNER_TEMP/ndm-media"
+      - name: Build signed app and DMG
+        run: bash ./desktop/packaging/macos/build.sh "$RUNNER_TEMP/ndm-media" "$RUNNER_TEMP/ndm-dist"
+      - name: Run workspace tests
+        working-directory: desktop
+        run: cargo +"$RUST_VERSION" test --locked --workspace
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ndm-next-macos-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/ndm-dist/NDM Next.app
+            ${{ runner.temp }}/ndm-dist/*.dmg
+            ${{ runner.temp }}/ndm-dist/*.sha256
+          if-no-files-found: error
+          retention-days: 3

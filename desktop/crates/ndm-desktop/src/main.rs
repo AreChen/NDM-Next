@@ -16,8 +16,11 @@ mod protocol_auth;
 mod speed;
 #[cfg(windows)]
 mod startup;
+#[cfg(target_os = "macos")]
+#[path = "startup_macos.rs"]
+mod startup;
 mod storage;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 mod tray;
 mod updates;
 mod view;
@@ -29,7 +32,7 @@ use gpui_kit::{
 };
 use ndm_core::{Scheduler, Store, TaskState};
 use preferences::{Preferences, Theme};
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 use view::Desktop;
 
 fn application_assets() -> impl AssetSource {
@@ -55,13 +58,17 @@ pub(crate) fn apply_theme(theme: Theme, cx: &mut App) {
 }
 
 fn main() {
-    let data_dir = std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("NDM Next");
-    #[cfg(windows)]
+    let data_dir = ndm_core::application_data_directory();
+    #[cfg(target_os = "macos")]
+    if let Ok(executable) = std::env::current_exe() {
+        let host = executable.with_file_name("ndm-host");
+        if let Err(error) = ndm_host::macos::register_browser_hosts(&host, &[]) {
+            eprintln!("Could not register browser integration: {error}");
+        }
+    }
+    #[cfg(any(windows, target_os = "macos"))]
     let show_existing = !std::env::args_os().any(|arg| arg == "--background" || arg == "--handoff");
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     let mut instance = match instance::Instance::acquire(&data_dir, show_existing) {
         Ok(Some(instance)) => instance,
         Ok(None) => return,
@@ -110,9 +117,9 @@ fn main() {
         let _guard = runtime.enter();
         Scheduler::start(store.clone(), preferences.scheduler_options()).expect("start scheduler")
     };
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     let (ui_sender, ui_commands) = tokio::sync::mpsc::unbounded_channel();
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     {
         let scheduler = scheduler.clone();
         let sender = ui_sender.clone();
@@ -130,44 +137,67 @@ fn main() {
         });
         instance.mark_ready().expect("signal desktop readiness");
     }
-    gpui_kit::application()
-        .with_assets(application_assets())
-        .run(move |cx| {
-            gpui_kit::init(cx);
-            apply_theme(preferences.theme, cx);
-            let bounds = Bounds::centered(None, size(px(1000.), px(500.)), cx);
-            gpui_kit::open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    window_min_size: Some(size(px(880.), px(400.))),
-                    ..gpui_kit::component::TitleBar::window_options()
-                },
-                cx,
-                |window, cx| {
-                    chrome::round_window(window);
-                    cx.new(|cx| {
-                        Desktop::new(
-                            view::DesktopServices {
-                                store,
-                                scheduler,
-                                runtime,
-                                preferences,
-                                preferences_path,
-                                prepared_at_launch,
-                                #[cfg(windows)]
-                                ui_sender,
-                                #[cfg(windows)]
-                                commands: ui_commands,
-                            },
-                            window,
-                            cx,
-                        )
-                    })
-                },
-            )
-            .expect("open NDM Next");
+    let application = gpui_kit::application().with_assets(application_assets());
+    #[cfg(target_os = "macos")]
+    application.on_reopen(|cx| {
+        cx.activate(true);
+        for handle in cx.windows() {
+            let _ = handle.update(cx, |_, window, _| window.activate_window());
+        }
+    });
+    application.run(move |cx| {
+        gpui_kit::init(cx);
+        #[cfg(target_os = "macos")]
+        {
+            let runtime = runtime.clone();
+            let scheduler = scheduler.clone();
+            cx.on_app_quit(move |_| {
+                let scheduler = scheduler.clone();
+                let runtime = runtime.clone();
+                async move {
+                    let _ = runtime
+                        .spawn(async move { scheduler.shutdown().await })
+                        .await;
+                }
+            })
+            .detach();
+        }
+        apply_theme(preferences.theme, cx);
+        let bounds = Bounds::centered(None, size(px(1000.), px(500.)), cx);
+        gpui_kit::open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                window_min_size: Some(size(px(880.), px(400.))),
+                ..gpui_kit::component::TitleBar::window_options()
+            },
+            cx,
+            |window, cx| {
+                chrome::round_window(window);
+                cx.new(|cx| {
+                    Desktop::new(
+                        view::DesktopServices {
+                            store,
+                            scheduler,
+                            runtime,
+                            preferences,
+                            preferences_path,
+                            prepared_at_launch,
+                            #[cfg(any(windows, target_os = "macos"))]
+                            ui_sender,
+                            #[cfg(any(windows, target_os = "macos"))]
+                            commands: ui_commands,
+                        },
+                        window,
+                        cx,
+                    )
+                })
+            },
+        )
+        .expect("open NDM Next");
+        if !std::env::args_os().any(|argument| argument == "--background") {
             cx.activate(true);
-        });
+        }
+    });
 }
 
 #[cfg(test)]

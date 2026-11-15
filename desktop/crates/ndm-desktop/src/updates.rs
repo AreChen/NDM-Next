@@ -91,6 +91,18 @@ fn parse_digest(value: &str) -> Option<[u8; 32]> {
     }
     Some(digest)
 }
+fn asset_name(version: &Version) -> String {
+    if cfg!(target_os = "macos") {
+        let arch = if cfg!(target_arch = "aarch64") {
+            "arm64"
+        } else {
+            "x64"
+        };
+        format!("NDM-Next-{version}-macos-{arch}.dmg")
+    } else {
+        format!("NDM-Next-Setup-{version}-x64.exe")
+    }
+}
 fn find_update(data: &[u8], current: &Version) -> Result<Option<UpdateRelease>, serde_json::Error> {
     let releases: Vec<Release> = serde_json::from_slice(data)?;
     Ok(releases
@@ -103,7 +115,7 @@ fn find_update(data: &[u8], current: &Version) -> Result<Option<UpdateRelease>, 
             if !version.pre.is_empty() || !version.build.is_empty() || &version <= current {
                 return None;
             }
-            let name = format!("NDM-Next-Setup-{version}-x64.exe");
+            let name = asset_name(&version);
             let url = format!(
                 "https://github.com/AreChen/NDM-Next/releases/download/desktop-v{version}/{name}"
             );
@@ -321,7 +333,17 @@ pub(crate) async fn install(update: ReadyUpdate) -> Result<(), ()> {
             .map_err(|_| ())?;
         if status.success() { Ok(()) } else { Err(()) }
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        let status = tokio::process::Command::new("/usr/bin/open")
+            .arg("--")
+            .arg(&update.path)
+            .status()
+            .await
+            .map_err(|_| ())?;
+        if status.success() { Ok(()) } else { Err(()) }
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         Err(())
     }

@@ -164,9 +164,18 @@ fn host_process_exchanges_framed_messages_and_reopens_durable_storage() {
     let host_exe = bin.join("ndm-host.exe");
     fs::copy(env!("CARGO_BIN_EXE_ndm-host"), &host_exe).unwrap();
     // This test only prepares and aborts: a sentinel stands in for the app.
-    fs::write(bin.join("ndm-desktop.exe"), b"sentinel").unwrap();
+    fs::write(
+        bin.join(if cfg!(windows) {
+            "ndm-desktop.exe"
+        } else {
+            "ndm-desktop"
+        }),
+        b"sentinel",
+    )
+    .unwrap();
     let mut child = Command::new(host_exe)
         .env("LOCALAPPDATA", dir.path().join("profile"))
+        .env("HOME", dir.path().join("home"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

@@ -80,7 +80,7 @@ fn open_path(path: &Path) -> io::Result<()> {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn open_path(_path: &Path) -> io::Result<()> {
     Err(io::Error::other(
         "opening files is only supported on Windows",
@@ -110,7 +110,7 @@ fn recycle(path: &Path) -> io::Result<()> {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn recycle(path: &Path) -> io::Result<()> {
     std::fs::remove_file(path)
 }
@@ -182,4 +182,26 @@ mod tests {
         );
         assert!(destination.path().is_dir());
     }
+}
+
+#[cfg(target_os = "macos")]
+fn open_path(path: &Path) -> io::Result<()> {
+    let status = std::process::Command::new("/usr/bin/open")
+        .arg("--")
+        .arg(path)
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other("macOS could not open the path"))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn recycle(path: &Path) -> io::Result<()> {
+    use objc2_foundation::{NSFileManager, NSURL};
+    let url = NSURL::from_file_path(path).ok_or_else(|| io::Error::other("invalid file URL"))?;
+    NSFileManager::defaultManager()
+        .trashItemAtURL_resultingItemURL_error(&url, None)
+        .map_err(|error| io::Error::other(error.to_string()))
 }

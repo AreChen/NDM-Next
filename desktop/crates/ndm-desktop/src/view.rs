@@ -108,9 +108,9 @@ pub(crate) struct Desktop {
     dash_variant: Option<usize>,
     dash_audio: Vec<usize>,
     inspecting_hls: bool,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     tray: Option<crate::tray::Tray>,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     startup_enabled: bool,
     section: Section,
     tasks: Vec<Task>,
@@ -134,9 +134,9 @@ pub(crate) struct DesktopServices {
     pub preferences: Preferences,
     pub preferences_path: PathBuf,
     pub prepared_at_launch: HashSet<TaskId>,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     pub ui_sender: tokio::sync::mpsc::UnboundedSender<crate::tray::Command>,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     pub commands: tokio::sync::mpsc::UnboundedReceiver<crate::tray::Command>,
 }
 
@@ -153,12 +153,20 @@ impl Desktop {
             preferences,
             preferences_path,
             prepared_at_launch,
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             ui_sender,
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             mut commands,
         } = services;
-        cx.bind_keys([KeyBinding::new("ctrl-k", FocusSearch, Some("NDMNext"))]);
+        cx.bind_keys([KeyBinding::new(
+            if cfg!(target_os = "macos") {
+                "cmd-k"
+            } else {
+                "ctrl-k"
+            },
+            FocusSearch,
+            Some("NDMNext"),
+        )]);
         let url_input = cx.new(|cx| InputState::new(window, cx).placeholder("https://…"));
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索 / Search"));
         cx.observe(&search_input, |this, input, cx| {
@@ -229,9 +237,9 @@ impl Desktop {
         let pending_auto_resume = preferences.auto_resume;
         let pending_proxy_enabled = preferences.proxy_enabled_by_default;
         let sidebar_collapsed = preferences.sidebar_collapsed;
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         let startup_enabled = crate::startup::enabled().unwrap_or(false);
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         let tray = {
             match crate::tray::Tray::create(ui_sender, preferences.language) {
                 Ok(tray) => {
@@ -247,7 +255,7 @@ impl Desktop {
                 Err(_) => None,
             }
         };
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         {
             let runtime = runtime.clone();
             let scheduler = scheduler.clone();
@@ -397,9 +405,9 @@ impl Desktop {
             dash_variant: None,
             dash_audio: Vec::new(),
             inspecting_hls: false,
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             tray,
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             startup_enabled,
             section: Section::All,
             tasks,
@@ -879,7 +887,7 @@ impl Desktop {
         }
         cx.notify();
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     fn toggle_startup(&mut self, cx: &mut Context<Self>) {
         let enabled = !self.startup_enabled;
         match crate::startup::set(enabled) {

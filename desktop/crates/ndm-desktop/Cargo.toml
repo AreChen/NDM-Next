@@ -10,7 +10,6 @@ caseless = "0.2"
 gpui-kit.workspace = true
 ndm-core = { path = "../ndm-core" }
 percent-encoding.workspace = true
-windows-sys.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -22,10 +21,17 @@ tempfile = "3"
 unicode-normalization = "0.1"
 
 [target.'cfg(windows)'.dependencies]
-image = { version = "0.25", default-features = false, features = ["png"] }
-raw-window-handle = "0.6"
-tray-icon = { version = "=0.26.1", default-features = false }
+windows-sys.workspace = true
 winreg = "0.56"
+raw-window-handle = "0.6"
+
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+tray-icon = { version = "=0.26.1", default-features = false }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+ndm-host = { path = "../ndm-host" }
+objc2-foundation = { version = "0.3", features = ["NSFileManager", "NSURL", "NSError"] }
 
 [build-dependencies]
 embed-resource = "3.0.12"

@@ -1,7 +1,7 @@
 <div align="center">
   <img src="extension/icons/icon-128.png" width="112" alt="NDM Next 图标">
   <h1>NDM Next</h1>
-  <p>使用 Rust 构建的 Windows 下载管理器，搭配浏览器扩展。</p>
+  <p>使用 Rust 构建的 macOS 与 Windows 下载管理器，搭配浏览器扩展。</p>
   <p><a href="https://github.com/AreChen/NDM-Next/releases/latest"><strong>下载</strong></a> · <a href="desktop/packaging/windows/README.md#browser-extension">浏览器扩展</a> · <a href="README.md">English</a></p>
   <img src="assets/ndm-next-screenshot.png" width="920" alt="显示下载任务的 NDM Next 桌面程序">
 </div>
@@ -18,6 +18,6 @@
 
 ## 安装
 
-从 [GitHub Releases](https://github.com/AreChen/NDM-Next/releases/latest) 下载 Windows x64 安装包。按照[扩展安装说明](desktop/packaging/windows/README.md#browser-extension)连接浏览器。
+从 [GitHub Releases](https://github.com/AreChen/NDM-Next/releases/latest) 下载 Windows x64 安装包或对应架构的 macOS DMG。按照[扩展安装说明](desktop/packaging/windows/README.md#browser-extension)连接浏览器。
 
 NDM Next 是独立项目，与 Neat Download Manager 官方无关联。[MIT 许可证](LICENSE)

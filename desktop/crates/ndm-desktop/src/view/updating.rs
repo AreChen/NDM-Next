@@ -189,6 +189,8 @@ impl Desktop {
             return;
         }
         let ready = ready.clone();
+        #[cfg(target_os = "macos")]
+        let macos_release = ready.release.clone();
         self.update_state = UpdateState::Installing;
         self.install_wait = None;
         let runtime = self.runtime.clone();
@@ -208,7 +210,16 @@ impl Desktop {
                 }
                 this.update_state = if matches!(outcome, Ok(Ok(()))) {
                     this.install_update_when_idle = false;
-                    UpdateState::Current
+                    #[cfg(target_os = "macos")]
+                    {
+                        this.set_notice(this.text(
+                            "更新磁盘镜像已打开。退出 NDM Next，然后将新版拖入 Applications 替换旧版。",
+                            "Update disk image opened. Quit NDM Next, then drag the new app into Applications to replace it.",
+                        ).into(), cx);
+                        UpdateState::Available(macos_release)
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    { UpdateState::Current }
                 } else {
                     UpdateState::Failed
                 };
