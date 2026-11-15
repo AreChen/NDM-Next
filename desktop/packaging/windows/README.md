@@ -17,13 +17,13 @@ Find the store links in **Settings → Browser extension**:
 
 The store pages may not be available yet; use manual installation below if needed. Store-installed extensions are already allowed by the desktop installer. Choose **NDM Next** in the extension settings when migrating from Neat Download Manager.
 
-Download the companion extension ZIP from the desktop GitHub release and extract it. Load the extracted folder as an unpacked extension in the browser's developer mode. The repository's `extension/` directory works too. Allow its displayed extension ID in the installed host:
+Download the source archive from the desktop GitHub release and extract it, or clone this repository. Load its `extension/` directory as an unpacked extension in the browser's developer mode. Allow its displayed extension ID in the installed host:
 
 ```powershell
-pwsh -File .\enable-dev-extension.ps1 -ExtensionId <extension-id>
+pwsh -File .\desktop\packaging\windows\enable-dev-extension.ps1 -ExtensionId <extension-id>
 ```
 
-Download `enable-dev-extension.ps1` from the same release (or use `desktop/packaging/windows/enable-dev-extension.ps1` in a source checkout). The command adds that one local extension to the native messaging manifest. Reload the extension and select **NDM Next** as its backend. Setup preserves existing valid extension IDs across upgrades, including when changing the installation directory. The existing extension store release has a separate version stream.
+Run `desktop/packaging/windows/enable-dev-extension.ps1` from the extracted source or checkout. The command adds that one local extension to the native messaging manifest. Reload the extension and select **NDM Next** as its backend. Setup preserves existing valid extension IDs across upgrades, including when changing the installation directory. The existing extension store release has a separate version stream.
 
 Update the companion extension as well as the desktop app to receive media-button fixes. Reload open webpages after updating the extension. Media buttons appear above the player where space allows, with a viewport-clamped fallback near its top edge. A non-modal top-layer host avoids ordinary page stacking and clipping; controls stay within their own iframe. **Settings → Buttons beside media** hides the page buttons immediately; detected media remains available in the popup. Complete file sizes appear when the server supplies them; playlist and segment lengths are not presented as a whole video's size.
 
@@ -36,10 +36,9 @@ Saving a proxy does not activate it. Enable **Proxy for new downloads** and save
 ## Release checklist
 
 - Run the Rust workspace suite, media integration tests, extension tests, formatting and clippy checks.
-- Build the installer with the audited media tools. Publish its corresponding source and licenses with the installer (the build includes them).
-- Publish the installer, companion extension, browser-integration helper and `SHA256SUMS` at a stable `desktop-v{version}` GitHub release. Keep incomplete uploads in a draft.
+- Update the workspace version and push a matching `desktop-v{version}` tag. The [release workflow](../../../.github/workflows/release.yml) builds the Windows installer and both macOS DMGs on GitHub, then publishes their artifacts after the builds succeed. The packages include the corresponding media source and license notices.
 - Write every release announcement in both **English and 简体中文**, with matching changes and installation instructions in each language.
-- Verify the published installer size and SHA-256 digest against the local build before considering the release ready for automatic updates.
+- Verify successful build runs and compare published package sizes and SHA-256 digests with their GitHub build artifacts before considering the release ready for automatic updates.
 
 ## Windows signing
 
@@ -49,4 +48,4 @@ For public releases, obtain a publicly trusted code-signing certificate or an el
 
 Signing establishes the publisher's identity; new signed downloads can still trigger SmartScreen until reputation builds. See Microsoft's [code signing options](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options), including the SignPath Foundation option for eligible open-source projects.
 
-The GitHub Actions installer workflow builds from source on GitHub-hosted runners and uploads an unsigned artifact for build verification. It does not publish a release or submit a signing request.
+The GitHub Actions installer workflow builds from source on GitHub-hosted runners and uploads an unsigned artifact. The desktop release workflow calls it together with the macOS workflow and publishes the resulting packages; it does not submit a signing request.

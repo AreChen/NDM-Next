@@ -1,23 +1,56 @@
 <div align="center">
-  <img src="extension/icons/icon-128.png" width="112" alt="NDM Next 图标">
+  <img src="extension/icons/icon-128.png" width="96" height="96" alt="NDM Next 标志">
   <h1>NDM Next</h1>
-  <p>使用 Rust 构建的 macOS 与 Windows 下载管理器，搭配浏览器扩展。</p>
-  <p><a href="https://github.com/AreChen/NDM-Next/releases/latest"><strong>下载</strong></a> · <a href="desktop/packaging/windows/README.md#browser-extension">浏览器扩展</a> · <a href="README.md">English</a></p>
-  <img src="assets/ndm-next-screenshot.png" width="920" alt="显示下载任务的 NDM Next 桌面程序">
+  <p><strong>高性能 · 内存安全 · 现代美观</strong></p>
+  <p>使用 Rust 与 GPUI 构建的 Windows、macOS 下载管理器，搭配精致的原生界面。</p>
+  <p>
+    <a href="https://github.com/AreChen/NDM-Next/releases/latest"><img src="https://img.shields.io/github/v/release/AreChen/NDM-Next?label=download&amp;color=7c61ff" alt="最新版本"></a>
+    <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-168aad" alt="支持 Windows 与 macOS">
+    <a href="https://github.com/AreChen/NDM-Next/actions/workflows/release.yml"><img src="https://github.com/AreChen/NDM-Next/actions/workflows/release.yml/badge.svg" alt="桌面端发布构建"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/github/license/AreChen/NDM-Next?color=34b8a3" alt="MIT 许可证"></a>
+  </p>
+  <p><a href="https://github.com/AreChen/NDM-Next/releases/latest"><strong>下载应用</strong></a> · <a href="#功能">功能</a> · <a href="#浏览器扩展">浏览器扩展</a> · <a href="README.md">English</a></p>
 </div>
+
+<p align="center">
+  <img src="assets/ndm-next-screenshot.png" width="1000" alt="NDM Next 桌面程序，展示紧凑侧边栏及下载任务">
+</p>
 
 ## 功能
 
-- 支持 HTTP(S)、FTP(S)、SFTP、HLS 和静态 DASH，HTTP(S) 支持多连接下载。
-- 浏览器下载接管，按文件类型、大小和域名过滤。
-- 独立媒体资源窗口，支持搜索、格式筛选和批量下载；网页媒体下载按钮可选开启。
-- 搜索和分类下载任务，支持亮暗主题与中英文切换。
-- 自定义下载与缓存目录，支持手动清理和缓存过期清理。
-- 通过 GitHub 自动更新桌面程序。
-- 浏览器扩展也可连接 Neat Download Manager。
+| 下载与资源 | 操作与体验 |
+| :--- | :--- |
+| **多协议下载** — 支持 HTTP(S)、FTP(S)、SFTP，HTTP(S) 支持多连接下载。 | **浏览器接管** — 按文件类型、大小及域名过滤下载，减少无用文件干扰。 |
+| **媒体下载** — 支持 HLS、静态 DASH，提供可搜索的媒体资源窗口和批量下载。 | **任务管理** — 多语言搜索、分类筛选，以及快捷打开文件和文件夹。 |
+| **存储与网络** — 自定义下载及缓存目录、清理缓存，为单个任务启用代理。 | **原生界面** — 紧凑的独立进度窗口、亮暗主题、中英文切换。 |
 
-## 安装
+## 下载
 
-从 [GitHub Releases](https://github.com/AreChen/NDM-Next/releases/latest) 下载 Windows x64 安装包或对应架构的 macOS DMG。按照[扩展安装说明](desktop/packaging/windows/README.md#browser-extension)连接浏览器。
+前往 [**GitHub Releases 获取安装包 →**](https://github.com/AreChen/NDM-Next/releases/latest)。
 
-NDM Next 是独立项目，与 Neat Download Manager 官方无关联。[MIT 许可证](LICENSE)
+| 平台 | 安装包 | 安装方式 |
+| :--- | :--- | :--- |
+| Windows · x64 | `NDM-Next-Setup-*-x64.exe` | 运行安装程序。 |
+| macOS 12+ · Apple Silicon | `NDM-Next-*-macos-arm64.dmg` | 将 **NDM Next** 拖入 **Applications**。 |
+| macOS 12+ · Intel | `NDM-Next-*-macos-x64.dmg` | 将 **NDM Next** 拖入 **Applications**。 |
+
+应用通过 GitHub 检查更新。点击**升级**下载并校验安装包：Windows 在空闲时安装，macOS 打开 DMG，由用户替换应用。
+
+## 浏览器扩展
+
+连接 **Chrome、Edge 或 Brave**，接管下载并嗅探网页媒体。可选开启媒体旁的下载按钮，也可打开独立媒体资源窗口，搜索、选择并批量下载。
+
+**安装说明：** [Windows](desktop/packaging/windows/README.md#browser-extension) · [macOS](desktop/packaging/macos/README.md#browser-extension)。扩展后端请选择 **NDM Next**；扩展也支持连接 Neat Download Manager。
+
+<details>
+<summary><strong>构建与发布</strong></summary>
+
+GitHub Actions 负责构建 Windows 安装包及 macOS 双架构 DMG。推送 `desktop-vX.Y.Z` 标签后，[发布工作流](.github/workflows/release.yml)会在构建成功后自动发布安装包。
+
+本地构建说明：[Windows](desktop/packaging/windows/README.md) · [macOS](desktop/packaging/macos/README.md)。
+
+</details>
+
+---
+
+[MIT 许可证](LICENSE) · [隐私说明](PRIVACY.md) · 独立项目，与 Neat Download Manager 官方无关联。
