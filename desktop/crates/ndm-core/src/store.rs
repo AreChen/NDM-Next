@@ -6,8 +6,8 @@ use std::{
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use crate::{
-    DashOptions, Error, HlsOptions, NewTask, Result, SftpOptions, Task, TaskId, TaskOptions,
-    TaskState, secrets,
+    DashOptions, Error, HlsOptions, NewTask, ProgressSnapshot, Result, SftpOptions, Task, TaskId,
+    TaskOptions, TaskState, secrets,
 };
 
 pub struct Store {
@@ -96,6 +96,7 @@ impl Store {
                 output BLOB,
                 error TEXT,
                 size_verified INTEGER,
+                progress BLOB,
                 created_at INTEGER NOT NULL DEFAULT (unixepoch())
             );
             CREATE TABLE IF NOT EXISTS discard_requests (id TEXT PRIMARY KEY NOT NULL);
@@ -118,6 +119,7 @@ impl Store {
             ("options", "BLOB"),
             ("error", "TEXT"),
             ("size_verified", "INTEGER"),
+            ("progress", "BLOB"),
         ] {
             if !columns.iter().any(|column| column == name) {
                 tx.execute(
@@ -238,7 +240,7 @@ impl Store {
     pub fn list(&self) -> Result<Vec<Task>> {
         let conn = self.connection()?;
         let mut statement = conn.prepare(
-            "SELECT id, request, state, output, error, size_verified, options FROM tasks ORDER BY rowid",
+            "SELECT id, request, state, output, error, size_verified, options, progress FROM tasks ORDER BY rowid",
         )?;
         let mut rows = statement.query([])?;
         let mut tasks = Vec::new();
@@ -251,6 +253,7 @@ impl Store {
             let error: Option<String> = row.get(4)?;
             let size_verified: Option<bool> = row.get(5)?;
             let options: Option<Vec<u8>> = row.get(6)?;
+            let progress: Option<Vec<u8>> = row.get(7)?;
             tasks.push(decode_task(
                 id,
                 &encrypted,
@@ -259,6 +262,7 @@ impl Store {
                 error,
                 size_verified,
                 options,
+                progress,
             )?);
         }
         Ok(tasks)
@@ -545,6 +549,15 @@ impl Store {
         }
     }
 
+    pub(crate) fn save_progress(&self, id: TaskId, progress: &ProgressSnapshot) -> Result<()> {
+        let encrypted = secrets::protect(&serde_json::to_vec(progress)?)?;
+        self.connection()?.execute(
+            "UPDATE tasks SET progress = ?1 WHERE id = ?2",
+            params![encrypted, id.to_string()],
+        )?;
+        Ok(())
+    }
+
     pub(crate) fn fail(&self, id: TaskId, reason: &'static str) -> Result<()> {
         let changed = self.connection()?.execute(
             "UPDATE tasks SET state = 'failed', error = ?1 WHERE id = ?2 AND state = 'running'",
@@ -569,7 +582,7 @@ impl Store {
 fn read_task(conn: &Connection, id: TaskId) -> Result<Option<Task>> {
     let row = conn
         .query_row(
-            "SELECT request, state, output, error, size_verified, options FROM tasks WHERE id = ?1",
+            "SELECT request, state, output, error, size_verified, options, progress FROM tasks WHERE id = ?1",
             [id.to_string()],
             |row| {
                 Ok((
@@ -579,12 +592,13 @@ fn read_task(conn: &Connection, id: TaskId) -> Result<Option<Task>> {
                     row.get::<_, Option<String>>(3)?,
                     row.get::<_, Option<bool>>(4)?,
                     row.get::<_, Option<Vec<u8>>>(5)?,
+                    row.get::<_, Option<Vec<u8>>>(6)?,
                 ))
             },
         )
         .optional()?;
     row.map(
-        |(encrypted, state, output, error, size_verified, options)| {
+        |(encrypted, state, output, error, size_verified, options, progress)| {
             decode_task(
                 id,
                 &encrypted,
@@ -593,12 +607,14 @@ fn read_task(conn: &Connection, id: TaskId) -> Result<Option<Task>> {
                 error,
                 size_verified,
                 options,
+                progress,
             )
         },
     )
     .transpose()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn decode_task(
     id: TaskId,
     encrypted: &[u8],
@@ -607,6 +623,7 @@ fn decode_task(
     error: Option<String>,
     size_verified: Option<bool>,
     options: Option<Vec<u8>>,
+    progress: Option<Vec<u8>>,
 ) -> Result<Task> {
     let request = serde_json::from_slice(&secrets::unprotect(encrypted)?)?;
     let output_path = output
@@ -619,6 +636,9 @@ fn decode_task(
         .map(|encrypted| Ok::<_, Error>(serde_json::from_slice(&secrets::unprotect(&encrypted)?)?))
         .transpose()?
         .unwrap_or_default();
+    let progress = progress
+        .map(|encrypted| Ok::<_, Error>(serde_json::from_slice(&secrets::unprotect(&encrypted)?)?))
+        .transpose()?;
     Ok(Task {
         id,
         request,
@@ -627,5 +647,6 @@ fn decode_task(
         output_path,
         error,
         size_verified,
+        progress,
     })
 }

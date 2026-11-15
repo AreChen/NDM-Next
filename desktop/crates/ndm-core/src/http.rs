@@ -105,18 +105,23 @@ impl SegmentState {
 #[derive(Clone, Default)]
 pub struct DownloadProgress(Arc<ProgressState>);
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SegmentSnapshot {
     pub downloaded: u64,
     pub total: Option<u64>,
     pub active: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ProgressSnapshot {
     pub downloaded: u64,
     /// Bytes actually received during this attempt, excluding restored segments.
     pub transferred: u64,
+    /// Active task time across attempts, including local processing but excluding pauses and queue time.
+    pub elapsed_ms: u64,
+    /// Bytes actually received across attempts, including rereads and excluding restored data.
+    pub transferred_total: u64,
     pub total: Option<u64>,
     pub merged: u64,
     /// Timestamp actually reported by the local media tool, in milliseconds.
@@ -127,7 +132,7 @@ pub struct ProgressSnapshot {
     pub segments: Vec<SegmentSnapshot>,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProgressPhase {
     #[default]
     Downloading,
@@ -135,11 +140,22 @@ pub enum ProgressPhase {
     Finalizing,
 }
 
+impl ProgressSnapshot {
+    pub fn average_bytes_per_second(&self) -> Option<u64> {
+        (self.elapsed_ms > 0).then(|| {
+            ((self.transferred_total as u128 * 1_000) / self.elapsed_ms as u128)
+                .min(u64::MAX as u128) as u64
+        })
+    }
+}
+
 impl DownloadProgress {
     pub fn snapshot(&self) -> ProgressSnapshot {
         ProgressSnapshot {
             downloaded: self.0.downloaded.load(Ordering::Relaxed),
             transferred: self.0.transferred.load(Ordering::Relaxed),
+            elapsed_ms: 0,
+            transferred_total: self.0.transferred.load(Ordering::Relaxed),
             merged: self.0.merged.load(Ordering::Relaxed),
             finalized_ms: self.0.finalized_ms.load(Ordering::Relaxed),
             finalization_total_ms: match self.0.finalization_total_ms.load(Ordering::Relaxed) {
@@ -200,6 +216,9 @@ impl DownloadProgress {
 
     pub(crate) fn add(&self, bytes: u64) {
         self.0.downloaded.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    pub(crate) fn received(&self, bytes: u64) {
         self.0.transferred.fetch_add(bytes, Ordering::Relaxed);
     }
 
@@ -870,6 +889,7 @@ async fn write_response(
         };
         let Some(chunk) = chunk else { break };
         let chunk = chunk.map_err(network)?;
+        progress.received(chunk.len() as u64);
         let next = total
             .checked_add(chunk.len() as u64)
             .ok_or(Error::InvalidHttpResponse)?;
@@ -1105,6 +1125,7 @@ mod publication_tests {
     fn restored_bytes_are_not_counted_as_network_traffic() {
         let progress = DownloadProgress::default();
         progress.add_existing(1_000);
+        progress.received(250);
         progress.add(250);
         let snapshot = progress.snapshot();
         assert_eq!(snapshot.downloaded, 1_250);

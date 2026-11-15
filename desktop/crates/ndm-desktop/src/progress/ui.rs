@@ -26,7 +26,7 @@ impl Render for ProgressWindow {
         } else if active {
             COMPACT_HEIGHT
         } else {
-            136.
+            FINISHED_HEIGHT
         };
         let target_height = target_height + if self.notice.is_some() { 22. } else { 0. };
         if self.layout_height != target_height {
@@ -56,32 +56,10 @@ impl Render for ProgressWindow {
             (TaskState::Running, ProgressPhase::Finalizing) => self.text("正在封装", "Finalizing"),
             (TaskState::Running, _) => self.text("下载中", "Downloading"),
             (TaskState::Paused, _) => self.text("已暂停", "Paused"),
-            (TaskState::Completed, _)
-                if task
-                    .as_ref()
-                    .is_some_and(|task| task.size_verified == Some(false)) =>
-            {
-                self.text("已完成 · 长度未校验", "Completed · length unverified")
-            }
             (TaskState::Completed, _) => self.text("下载完成", "Completed"),
             (TaskState::Failed, _) => self.text("下载失败", "Failed"),
         };
-        let downloaded = self
-            .snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.downloaded)
-            .unwrap_or_else(|| {
-                task.as_ref()
-                    .and_then(|task| task.output_path.as_ref())
-                    .and_then(|path| std::fs::metadata(path).ok())
-                    .map(|metadata| metadata.len())
-                    .unwrap_or(0)
-            });
-        let total = self
-            .snapshot
-            .as_ref()
-            .and_then(|snapshot| snapshot.total)
-            .or_else(|| task.as_ref().and_then(|task| task.request.expected_size));
+        let (downloaded, total) = progress_bytes(task.as_ref(), self.snapshot.as_ref());
         let shown_bytes = if state == TaskState::Running && phase == ProgressPhase::Merging {
             self.snapshot
                 .as_ref()
@@ -92,7 +70,7 @@ impl Render for ProgressWindow {
         };
         let ratio = if state == TaskState::Completed {
             Some(1.)
-        } else if phase == ProgressPhase::Finalizing {
+        } else if state == TaskState::Running && phase == ProgressPhase::Finalizing {
             self.snapshot.as_ref().and_then(|snapshot| {
                 snapshot
                     .finalization_total_ms
@@ -106,7 +84,13 @@ impl Render for ProgressWindow {
         };
         let percent = ratio
             .map(|value| format!("{:.1}%", value * 100.))
-            .unwrap_or_else(|| self.text("处理中", "Working").into());
+            .unwrap_or_else(|| {
+                if state == TaskState::Running {
+                    self.text("处理中", "Working").into()
+                } else {
+                    "—".into()
+                }
+            });
         let transferred = total
             .map(|total| format!("{} / {}", format_bytes(shown_bytes), format_bytes(total)))
             .unwrap_or_else(|| format_bytes(shown_bytes));
@@ -171,6 +155,10 @@ impl Render for ProgressWindow {
                 );
             }
         }
+        details = details.child(div().text_xs().text_color(rgb(muted)).child(self.text(
+            "耗时不含暂停与排队；平均速度按实际接收数据计算。",
+            "Elapsed excludes pauses and queue time; average uses bytes actually received.",
+        )));
         details = details.child(
             div()
                 .text_xs()
@@ -362,19 +350,52 @@ impl Render for ProgressWindow {
                     edge,
                     muted,
                 ));
-            let peak = self.history.iter().copied().max().unwrap_or(1).max(1);
-            let mut graph = div().ml_auto().h(px(20.)).flex().items_end().gap(px(2.));
+            content = content.child(chips);
+        }
+        let elapsed = format_elapsed(self.snapshot.as_ref().map(|snapshot| snapshot.elapsed_ms));
+        let average = self
+            .snapshot
+            .as_ref()
+            .and_then(ProgressSnapshot::average_bytes_per_second)
+            .map(|speed| format!("{}/s", format_bytes(speed)))
+            .unwrap_or_else(|| "—".into());
+        let peak = self.history.iter().copied().max().unwrap_or(1).max(1);
+        let mut graph = div().ml_auto().h(px(16.)).flex().items_end().gap(px(2.));
+        if state == TaskState::Running {
             for value in &self.history {
                 graph = graph.child(
                     div()
                         .w(px(2.))
-                        .h(px(2. + 16. * (*value as f32 / peak as f32)))
+                        .h(px(2. + 12. * (*value as f32 / peak as f32)))
                         .rounded_full()
                         .bg(rgb(accent)),
                 );
             }
-            content = content.child(chips.child(graph));
         }
+        content = content.child(
+            div()
+                .flex()
+                .items_center()
+                .h(px(18.))
+                .gap_3()
+                .text_xs()
+                .text_color(rgb(muted))
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(5.))
+                        .child(self.text("耗时", "Elapsed"))
+                        .child(div().text_color(rgb(fg)).child(elapsed)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(5.))
+                        .child(self.text("平均", "Average"))
+                        .child(div().text_color(rgb(fg)).child(average)),
+                )
+                .child(graph),
+        );
         content = content.child(
             div()
                 .flex()

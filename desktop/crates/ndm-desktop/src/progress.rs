@@ -12,7 +12,8 @@ use std::{
 };
 
 pub(crate) const WINDOW_WIDTH: f32 = 480.;
-pub(crate) const COMPACT_HEIGHT: f32 = 168.;
+pub(crate) const COMPACT_HEIGHT: f32 = 192.;
+pub(crate) const FINISHED_HEIGHT: f32 = 160.;
 pub(crate) const EXPANDED_HEIGHT: f32 = 430.;
 
 fn remaining_seconds(total: Option<u64>, downloaded: u64, speed: u64) -> Option<u64> {
@@ -39,6 +40,40 @@ fn format_remaining(seconds: Option<u64>) -> String {
         Some(seconds) => format!("{seconds}s"),
         None => "—".into(),
     }
+}
+
+fn format_elapsed(milliseconds: Option<u64>) -> String {
+    let Some(milliseconds) = milliseconds.filter(|value| *value > 0) else {
+        return "—".into();
+    };
+    let seconds = milliseconds / 1_000;
+    if seconds >= 3_600 {
+        format!(
+            "{}:{:02}:{:02}",
+            seconds / 3_600,
+            seconds / 60 % 60,
+            seconds % 60
+        )
+    } else {
+        format!("{:02}:{:02}", seconds / 60, seconds % 60)
+    }
+}
+
+fn progress_bytes(task: Option<&Task>, snapshot: Option<&ProgressSnapshot>) -> (u64, Option<u64>) {
+    if let Some(task) = task
+        && task.state == TaskState::Completed
+        && let Some(path) = &task.output_path
+        && let Ok(metadata) = std::fs::metadata(path)
+        && metadata.is_file()
+    {
+        return (metadata.len(), Some(metadata.len()));
+    }
+    (
+        snapshot.map_or(0, |value| value.downloaded),
+        snapshot
+            .and_then(|value| value.total)
+            .or_else(|| task.and_then(|task| task.request.expected_size)),
+    )
 }
 
 pub(crate) struct ProgressWindow {
@@ -72,7 +107,9 @@ impl ProgressWindow {
     ) -> Self {
         let mut events = scheduler.subscribe();
         let task = store.get(id).ok().flatten();
-        let snapshot = scheduler.progress(id);
+        let snapshot = scheduler
+            .progress(id)
+            .or_else(|| task.as_ref().and_then(ndm_core::recover_task_progress));
         window.set_window_title("NDM Next · Download");
         cx.observe_global::<ComponentTheme>(|_, cx| cx.notify())
             .detach();
@@ -132,7 +169,11 @@ impl ProgressWindow {
             notice: None,
             layout_height: COMPACT_HEIGHT,
         };
-        if this.snapshot.is_some() {
+        if this
+            .task
+            .as_ref()
+            .is_some_and(|task| task.state == TaskState::Running)
+        {
             this.begin_tracking(cx);
         }
         this
@@ -210,6 +251,10 @@ impl ProgressWindow {
                 .await;
             let _ = view.update(cx, |this, cx| {
                 this.task = this.store.get(id).ok().flatten();
+                this.snapshot = this
+                    .scheduler
+                    .progress(id)
+                    .or_else(|| this.task.as_ref().and_then(ndm_core::recover_task_progress));
                 if !matches!(result, Ok(Ok(()))) {
                     this.notice = Some(
                         this.text("操作失败，请重试。", "Could not change the download state.")
@@ -268,7 +313,55 @@ impl ProgressWindow {
 
 #[cfg(test)]
 mod tests {
-    use super::{media_remaining_seconds, remaining_seconds};
+    use super::{format_elapsed, media_remaining_seconds, progress_bytes, remaining_seconds};
+    use ndm_core::{NewTask, ProgressSnapshot, Task, TaskId, TaskOptions, TaskState};
+
+    #[test]
+    fn paused_window_preserves_saved_bytes_and_known_total() {
+        let snapshot = ProgressSnapshot {
+            downloaded: 42,
+            total: Some(100),
+            ..Default::default()
+        };
+        assert_eq!(progress_bytes(None, Some(&snapshot)), (42, Some(100)));
+        assert_eq!(format_elapsed(Some(65_999)), "01:05");
+        assert_eq!(format_elapsed(Some(3_661_000)), "1:01:01");
+        assert_eq!(format_elapsed(None), "—");
+    }
+
+    #[test]
+    fn completed_window_uses_actual_output_size_even_when_server_length_was_unknown() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("archive.zip");
+        std::fs::write(&output, [0; 123]).unwrap();
+        let task = Task {
+            id: TaskId::new_v4(),
+            request: NewTask {
+                url: "https://example.test/archive.zip".into(),
+                destination: directory.path().into(),
+                suggested_filename: None,
+                source_url: None,
+                expected_size: None,
+                headers: Default::default(),
+            },
+            options: TaskOptions::Auto,
+            state: TaskState::Completed,
+            output_path: Some(output),
+            error: None,
+            size_verified: Some(false),
+            progress: None,
+        };
+        let old_snapshot = ProgressSnapshot {
+            downloaded: 100,
+            ..Default::default()
+        };
+        assert_eq!(
+            progress_bytes(Some(&task), Some(&old_snapshot)),
+            (123, Some(123))
+        );
+        assert_eq!(task.size_verified, Some(false));
+        assert_eq!(old_snapshot.average_bytes_per_second(), None);
+    }
 
     #[test]
     fn remaining_time_uses_measured_bytes_and_speed() {

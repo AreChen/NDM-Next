@@ -79,4 +79,5 @@ pub struct Task {
     pub output_path: Option<PathBuf>,
     pub error: Option<String>,
     pub size_verified: Option<bool>,
+    pub progress: Option<crate::ProgressSnapshot>,
 }

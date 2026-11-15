@@ -222,6 +222,7 @@ async fn download_ftp_with_progress(
                 }
             };
             if count == 0 { break; }
+            progress.received(count as u64);
             if size.is_some_and(|expected| partial.received().saturating_add(count as u64) > expected) {
                 return Err(Error::InvalidFtpResponse);
             }

@@ -506,8 +506,22 @@ fn older_task_database_is_upgraded_without_losing_the_table() {
     );",
         )
         .unwrap();
+    let legacy_id = TaskId::new_v4();
+    let legacy_request = new_task(dir.path());
+    let encrypted =
+        ndm_core::protect_user_data(&serde_json::to_vec(&legacy_request).unwrap()).unwrap();
+    connection
+        .execute(
+            "INSERT INTO tasks (id, request, state) VALUES (?1, ?2, 'paused')",
+            rusqlite::params![legacy_id.to_string(), encrypted],
+        )
+        .unwrap();
     drop(connection);
     let store = Store::open(&database).unwrap();
+    let legacy = store.get(legacy_id).unwrap().unwrap();
+    assert_eq!(legacy.request, legacy_request);
+    assert_eq!(legacy.state, TaskState::Paused);
+    assert!(legacy.progress.is_none());
     let id = TaskId::new_v4();
     store.prepare(id, &new_task(dir.path())).unwrap();
     assert_eq!(store.get(id).unwrap().unwrap().state, TaskState::Prepared);

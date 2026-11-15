@@ -441,6 +441,7 @@ mod tests {
             output_path: None,
             error: None,
             size_verified: None,
+            progress: None,
         }
     }
 

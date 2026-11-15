@@ -4,12 +4,42 @@ const dict = {
 };
 Object.assign(dict.en,{transferPolicy:'Takeover safety',safeTransfer:'Verify before takeover',immediateTransfer:'Take over immediately',transferHint:'Verification can temporarily use extra traffic. Immediate takeover may fail for single-use links.'});
 Object.assign(dict.zh,{transferPolicy:'接管安全性',safeTransfer:'验证后接管',immediateTransfer:'立即接管',transferHint:'验证期间可能产生额外流量；立即接管可能导致一次性链接下载失败。'});
+Object.assign(dict.en,{inlineMedia:'Buttons beside media',inlineHint:'Show a compact download button on web pages.',download:'Download'});
+Object.assign(dict.zh,{inlineMedia:'网页媒体下载按钮',inlineHint:'在网页视频和音频旁显示精简下载按钮。',download:'下载'});
 const $ = id => document.getElementById(id); let config, tab, lang;
 function text(key) { return dict[lang][key]; }
 function translate() { lang = config.language === 'auto' ? (chrome.i18n.getUILanguage().toLowerCase().startsWith('zh') ? 'zh' : 'en') : config.language; document.documentElement.lang=lang; document.querySelectorAll('[data-i18n]').forEach(el => el.textContent=text(el.dataset.i18n)); $('status').title=text($('status').classList.contains('online')?'online':'offline'); }
 function renderSite() { const domain=normalizeDomain(tab?.url || ''); $('domain').textContent=domain || '—'; const blocked=config.blockedDomains.some(d=>domainMatches(domain,d)); $('siteState').textContent=text(blocked?'blocked':'allowed'); $('blockSite').textContent=text(blocked?'unblock':'block'); $('blockSite').disabled=!domain; }
-function renderMedia(items) { $('mediaCount').textContent=items.length; const list=$('mediaList'); list.replaceChildren(); if (!items.length) { const el=document.createElement('div'); el.className='empty'; el.textContent=text('empty'); list.append(el); return; } for (const item of items) { const row=document.createElement('div'); row.className='media-item'; const name=document.createElement('span'); name.className='media-name'; try { name.textContent=decodeURIComponent(new URL(item.url).pathname.split('/').pop()) || item.type; } catch { name.textContent=item.type; } name.title=item.url; const button=document.createElement('button'); button.className='secondary'; button.textContent=text('download'); button.onclick=async()=> { button.disabled=true; const result=await chrome.runtime.sendMessage({action:'send',tabId:tab?.id,item}); $('message').textContent=text(result.ok?'sent':'error'); button.disabled=false; }; row.append(name,button); list.append(row); } }
-async function start() { config={...DEFAULTS,...await chrome.storage.local.get(DEFAULTS)}; [tab]=await chrome.tabs.query({active:true,currentWindow:true}); translate(); $('enabled').checked=config.enabled; $('media').checked=config.media; $('backend').value=config.backend; $('captureMode').value=config.captureMode; $('transferPolicy').value=config.transferPolicy; $('minSize').value=config.minBytes/1048576; $('extensions').value=config.excludedExtensions.join(', '); $('domains').value=config.blockedDomains.join('\n'); $('language').value=config.language; renderSite(); const result=await chrome.runtime.sendMessage({action:'media',tabId:tab?.id}); renderMedia(result.items || []); const connection=await chrome.runtime.sendMessage({action:'status'}); $('status').classList.toggle('online',connection.connected); $('status').title=text(connection.connected?'online':'offline'); }
+function renderMedia(items) {
+  $('mediaCount').textContent=items.length;
+  const list=$('mediaList'); list.replaceChildren();
+  if (!items.length) { const el=document.createElement('div'); el.className='empty'; el.textContent=text('empty'); list.append(el); return; }
+  for (const item of items) {
+    const row=document.createElement('div'); row.className='media-item';
+    const info=document.createElement('div'); info.className='media-info';
+    const name=document.createElement('span'); name.className='media-name';
+    try { name.textContent=decodeURIComponent(new URL(item.url).pathname.split('/').pop()) || item.type; } catch { name.textContent=item.type; }
+    name.title=item.url;
+    const detail=document.createElement('span');detail.className='media-detail';
+    const format=isHls(item)?'HLS':isDash(item)?'DASH':(item.type || '').split('/').pop().toUpperCase();
+    detail.textContent=`${format} · ${mediaSizeLabel(item,lang)}`;
+    info.append(name,detail);
+    const button=document.createElement('button'); button.className='secondary'; button.textContent=text('download');
+    button.onclick=async()=> {
+      button.disabled=true;button.textContent=mediaMessage('sending',lang);$('message').textContent='';
+      try {
+        const result=await chrome.runtime.sendMessage({action:'send',tabId:tab?.id,id:item.id});
+        $('message').textContent=mediaMessage(result?.ok?'sent':result?.error,lang);
+        $('message').classList.toggle('error',!result?.ok);
+      } catch { $('message').textContent=mediaMessage('manager_unavailable',lang);$('message').classList.add('error'); }
+      finally {button.disabled=false;button.textContent=text('download');}
+    };
+    row.append(info,button); list.append(row);
+  }
+}
+async function start() { config={...DEFAULTS,...await chrome.storage.local.get(DEFAULTS)}; [tab]=await chrome.tabs.query({active:true,currentWindow:true}); translate(); $('enabled').checked=config.enabled; $('media').checked=config.media; $('inlineMedia').checked=config.inlineMedia; $('backend').value=config.backend; $('captureMode').value=config.captureMode; $('transferPolicy').value=config.transferPolicy; $('minSize').value=config.minBytes/1048576; $('extensions').value=config.excludedExtensions.join(', '); $('domains').value=config.blockedDomains.join('\n'); $('language').value=config.language; renderSite(); const result=await chrome.runtime.sendMessage({action:'media',tabId:tab?.id}); renderMedia(result.items || []); const connection=await chrome.runtime.sendMessage({action:'status'}); $('status').classList.toggle('online',connection.connected); $('status').title=text(connection.connected?'online':'offline'); }
+$('inlineMedia').onchange=async e=>{config.inlineMedia=e.target.checked;await chrome.storage.local.set({inlineMedia:config.inlineMedia});};
+chrome.runtime.onMessage.addListener(message=>{if(message.action==='mediaChanged' && tab) chrome.runtime.sendMessage({action:'media',tabId:tab.id}).then(result=>renderMedia(result.items||[])).catch(()=>{});});
 $('enabled').onchange=async e=>{config.enabled=e.target.checked; await chrome.storage.local.set({enabled:config.enabled});};
 $('blockSite').onclick=async()=>{ const domain=normalizeDomain(tab?.url || ''); if(!domain)return; const matched=config.blockedDomains.filter(d=>domainMatches(domain,d)); config.blockedDomains=matched.length?config.blockedDomains.filter(d=>!matched.includes(d)):[...config.blockedDomains,domain]; await chrome.storage.local.set({blockedDomains:config.blockedDomains}); $('domains').value=config.blockedDomains.join('\n'); renderSite(); };
 $('save').onclick=async()=>{ const raw=$('domains').value.split(/\n/).map(s=>s.trim()).filter(Boolean); const domains=raw.map(normalizeDomain); if(domains.some(d=>!d)){ $('message').textContent=text('invalid'); return; } config={...config,backend:$('backend').value,captureMode:$('captureMode').value,transferPolicy:$('transferPolicy').value,minBytes:Math.max(0,Number($('minSize').value)||0)*1048576,excludedExtensions:$('extensions').value.split(',').map(s=>s.trim().toLowerCase().replace(/^\./,'')).filter(Boolean),blockedDomains:[...new Set(domains)],language:$('language').value,media:$('media').checked}; await chrome.storage.local.set(config); translate(); renderSite(); const result=await chrome.runtime.sendMessage({action:'media',tabId:tab?.id}); renderMedia(result.items||[]); const connection=await chrome.runtime.sendMessage({action:'status'}); $('status').classList.toggle('online',connection.connected); $('status').title=text(connection.connected?'online':'offline'); $('message').textContent=text('saved'); };

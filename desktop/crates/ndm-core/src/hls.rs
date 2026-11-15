@@ -162,6 +162,7 @@ impl NetworkSource {
         } {
             let chunk =
                 chunk.map_err(|_| hls_engine::Error::Http("resource body failed".into()))?;
+            self.progress.received(chunk.len() as u64);
             if bytes.len().saturating_add(chunk.len()) > limit {
                 return Err(hls_engine::Error::invalid("resource exceeds size limit"));
             }

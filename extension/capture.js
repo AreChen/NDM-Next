@@ -1,7 +1,7 @@
 const REPLAY_HEADERS = new Set(['accept','accept-language','authorization','cookie','origin','referer','user-agent']);
 const IGNORED_HEADERS = new Set(['host','connection','accept-encoding','upgrade-insecure-requests','priority','cache-control','pragma','dnt']);
 
-function captureRequest(details) {
+function captureRequest(details, {media = false} = {}) {
   if (details.method !== 'GET' || !Array.isArray(details.requestHeaders)) return null;
   let url;
   try { url = new URL(details.url); } catch { return null; }
@@ -9,9 +9,17 @@ function captureRequest(details) {
   // Signed and token-bearing links may be single-use. Immediate takeover can
   // fail for those links; the user can choose verified takeover instead.
   const headers = {};
+  const seen = new Set();
   let bytes = 0;
   for (const header of details.requestHeaders) {
     const name = String(header.name || '').toLowerCase();
+    if (media && (name === 'range' || name === 'if-range')) {
+      if (seen.has(name) || typeof header.value !== 'string' || !header.value || /[\r\n\0]/.test(header.value)) return null;
+      seen.add(name);
+      if (name === 'range' && !/^bytes=(?:\d+-\d*|-\d+)$/.test(header.value)) return null;
+      // Replay the complete media resource; ordinary downloads retain the strict policy.
+      continue;
+    }
     if (REPLAY_HEADERS.has(name)) {
       if (typeof header.value !== 'string' || /[\r\n\0]/.test(header.value) || Object.hasOwn(headers,name)) return null;
       bytes += name.length + header.value.length;
@@ -22,7 +30,7 @@ function captureRequest(details) {
       return null;
     }
   }
-  return {requestId:details.requestId,url:details.url,tabId:details.tabId,headers};
+  return {requestId:details.requestId,url:details.url,tabId:details.tabId,frameId:details.frameId ?? 0,documentId:details.documentId,headers};
 }
 
 function findCapture(captures,url,now=Date.now()) {

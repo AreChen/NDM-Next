@@ -137,6 +137,7 @@ mod tests {
             output_path: Some(output),
             error: None,
             size_verified: Some(true),
+            progress: None,
         }
     }
 

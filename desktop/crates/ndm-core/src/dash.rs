@@ -189,6 +189,7 @@ impl Network {
             chunk = stream.next() => chunk,
         } {
             let chunk = chunk.map_err(|error| Error::Network(error.without_url()))?;
+            self.progress.received(chunk.len() as u64);
             if bytes.len().saturating_add(chunk.len()) > limit {
                 return Err(Error::Dash);
             }

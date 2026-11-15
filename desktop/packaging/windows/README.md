@@ -25,6 +25,8 @@ pwsh -File .\enable-dev-extension.ps1 -ExtensionId <extension-id>
 
 Download `enable-dev-extension.ps1` from the same release (or use `desktop/packaging/windows/enable-dev-extension.ps1` in a source checkout). The command adds that one local extension to the native messaging manifest. Reload the extension and select **NDM Next** as its backend. Setup preserves existing valid extension IDs across upgrades, including when changing the installation directory. The existing extension store release has a separate version stream.
 
+Update the companion extension as well as the desktop app to receive media-button fixes. Reload open webpages after updating the extension. **Settings → Buttons beside media** hides the page buttons immediately; detected media remains available in the popup. Complete file sizes appear when the server supplies them; playlist and segment lengths are not presented as a whole video's size.
+
 ## Release checklist
 
 - Run the Rust workspace suite, media integration tests, extension tests, formatting and clippy checks.

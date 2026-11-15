@@ -18,7 +18,8 @@ impl Desktop {
         let progress = self
             .scheduler
             .progress(id)
-            .or_else(|| self.retained_progress.get(&id).cloned());
+            .or_else(|| self.retained_progress.get(&id).cloned())
+            .or_else(|| task.progress.clone());
         let total = self.task_index.known_size(id).or_else(|| {
             progress
                 .as_ref()
@@ -28,7 +29,7 @@ impl Desktop {
         let done = progress
             .as_ref()
             .map(|value| {
-                if value.phase == ndm_core::ProgressPhase::Merging {
+                if state == TaskState::Running && value.phase == ndm_core::ProgressPhase::Merging {
                     value.merged
                 } else {
                     value.downloaded
@@ -37,9 +38,10 @@ impl Desktop {
             .unwrap_or(0);
         let ratio = if state == TaskState::Completed {
             Some(1.)
-        } else if progress
-            .as_ref()
-            .is_some_and(|value| value.phase == ndm_core::ProgressPhase::Finalizing)
+        } else if state == TaskState::Running
+            && progress
+                .as_ref()
+                .is_some_and(|value| value.phase == ndm_core::ProgressPhase::Finalizing)
         {
             progress.as_ref().and_then(|value| {
                 value
@@ -84,7 +86,6 @@ impl Desktop {
             .map(format_bytes)
             .unwrap_or_else(|| self.text("大小未知", "Unknown size").into());
         let speed = self.speed.get(&id).copied().unwrap_or(0);
-        let unverified = state == TaskState::Completed && task.size_verified == Some(false);
         let error = task.error.as_ref().map(|code| {
             crate::failure::description(code, self.preferences.language == Language::Chinese)
                 .to_owned()
@@ -105,16 +106,6 @@ impl Desktop {
             .tooltip(self.text("更多操作", "More actions"))
             .accessibility_label(self.text("更多操作", "More actions"))
             .dropdown_menu(move |mut menu, _, _| {
-                if unverified {
-                    menu = menu.item(
-                        PopupMenuItem::new(if zh {
-                            "文件长度未校验"
-                        } else {
-                            "File length unverified"
-                        })
-                        .disabled(true),
-                    );
-                }
                 if let Some(error) = &error {
                     menu = menu.item(PopupMenuItem::new(error.clone()).disabled(true));
                 }
@@ -251,18 +242,13 @@ impl Desktop {
                         ),
                 );
         } else {
-            metrics = metrics.child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(if unverified { muted } else { accent }))
-                    .child(if unverified {
-                        self.text("文件长度未校验", "Length unverified").into()
-                    } else if state == TaskState::Failed {
-                        self.text("可重试或更换链接", "Retry or change link").into()
-                    } else {
-                        size.clone()
-                    }),
-            );
+            metrics = metrics.child(div().text_xs().text_color(rgb(accent)).child(
+                if state == TaskState::Failed {
+                    self.text("可重试或更换链接", "Retry or change link").into()
+                } else {
+                    size.clone()
+                },
+            ));
         }
         div().h(px(58.)).pb(px(6.)).child(
             div()

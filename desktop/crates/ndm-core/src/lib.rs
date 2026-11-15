@@ -12,6 +12,7 @@ mod scheduler;
 mod secrets;
 mod sftp;
 mod store;
+mod task_progress;
 
 pub use dash::{
     DashAudio, DashCatalog, DashOptions, DashOutcome, DashRepresentation, download_dash,
@@ -40,6 +41,7 @@ pub use model::{NewTask, Task, TaskId, TaskOptions, TaskState};
 pub use scheduler::{Scheduler, SchedulerEvent, SchedulerOptions};
 pub use sftp::{SftpAuth, SftpOptions, download_sftp, execute_sftp};
 pub use store::{PendingSftpHost, Store};
+pub use task_progress::recover_task_progress;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

@@ -21,3 +21,10 @@ test('media manifest size is not the final media size and still respects exclusi
 test('malformed percent escapes do not crash filtering', () => {
   assert.equal(shouldSkip({url:'https://other.org/%ZZ.zip'},defaults),false);
 });
+
+test('legacy manual media replays observed credentials instead of inventing page headers',()=>{
+  const task=encodeTask({url:'https://media.test/video',pageUrl:'https://page.test/',replayHeaders:{cookie:'private=1',authorization:'Bearer token',referer:'https://frame.test/player'}});
+  assert.match(task,/cookie: private=1\r\n/);assert.match(task,/authorization: Bearer token\r\n/);assert.match(task,/referer: https:\/\/frame.test\/player\r\n/);
+  assert.doesNotMatch(task,/Origin:/);assert.throws(()=>encodeTask({url:'https://media.test/video',replayHeaders:{range:'bytes=10-'}}));
+  assert.doesNotMatch(encodeTask({url:'https://media.test/part.m4s',size:1000}),/7:1000/);
+});

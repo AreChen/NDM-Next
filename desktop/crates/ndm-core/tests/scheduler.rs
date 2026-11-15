@@ -75,6 +75,171 @@ async fn wait_for(store: &Store, id: TaskId, state: TaskState) {
     .unwrap();
 }
 
+async fn streaming_server(known_length: bool) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = Router::new().route(
+        "/stream",
+        get(move || async move {
+            let chunks = futures_util::stream::unfold(0, |index| async move {
+                if index == 16 {
+                    return None;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                Some((Ok::<_, std::io::Error>(vec![42; 4096]), index + 1))
+            });
+            let mut response = Response::builder().status(StatusCode::OK);
+            if known_length {
+                response = response.header(header::CONTENT_LENGTH, 65_536);
+            }
+            response.body(Body::from_stream(chunks)).unwrap()
+        }),
+    );
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://{address}/stream")
+}
+
+#[tokio::test]
+async fn saved_progress_survives_pause_reopen_and_resume_without_counting_pause_time() {
+    let dir = TempDir::new().unwrap();
+    let database = dir.path().join("tasks.db");
+    let store = Arc::new(Store::open(&database).unwrap());
+    let url = streaming_server(true).await;
+    let id = TaskId::new_v4();
+    store.prepare(id, &request(dir.path(), &url)).unwrap();
+    store.commit(id).unwrap();
+    let scheduler = Scheduler::start(store.clone(), SchedulerOptions::default()).unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while scheduler
+            .progress(id)
+            .is_none_or(|progress| progress.downloaded == 0)
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    scheduler.pause(id).await.unwrap();
+    let paused = store.get(id).unwrap().unwrap().progress.unwrap();
+    assert!(paused.downloaded > 0);
+    assert_eq!(paused.total, Some(65_536));
+    assert!(paused.elapsed_ms > 0);
+    assert!(paused.transferred_total > 0);
+    assert!(paused.segments.iter().all(|segment| !segment.active));
+    scheduler.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let reopened = Arc::new(Store::open(&database).unwrap());
+    assert_eq!(
+        reopened.get(id).unwrap().unwrap().progress.as_ref(),
+        Some(&paused)
+    );
+    let scheduler = Scheduler::start(reopened.clone(), SchedulerOptions::default()).unwrap();
+    scheduler.resume(id).await.unwrap();
+    wait_for(&reopened, id, TaskState::Completed).await;
+    scheduler.shutdown().await;
+    let completed = reopened.get(id).unwrap().unwrap().progress.unwrap();
+    assert_eq!(completed.downloaded, 65_536);
+    assert_eq!(completed.total, Some(65_536));
+    assert!(completed.elapsed_ms >= paused.elapsed_ms);
+    assert_eq!(
+        completed.transferred_total,
+        paused.transferred_total + 65_536
+    );
+    assert!(
+        completed
+            .average_bytes_per_second()
+            .is_some_and(|speed| speed > 0)
+    );
+}
+
+#[tokio::test]
+async fn saved_progress_records_actual_unknown_length_without_claiming_length_verification() {
+    let dir = TempDir::new().unwrap();
+    let store = Arc::new(Store::open(&dir.path().join("tasks.db")).unwrap());
+    let url = streaming_server(false).await;
+    let id = TaskId::new_v4();
+    store.prepare(id, &request(dir.path(), &url)).unwrap();
+    store.commit(id).unwrap();
+    let scheduler = Scheduler::start(store.clone(), SchedulerOptions::default()).unwrap();
+    wait_for(&store, id, TaskState::Completed).await;
+    scheduler.shutdown().await;
+    let task = store.get(id).unwrap().unwrap();
+    assert_eq!(task.size_verified, Some(false));
+    let progress = task.progress.unwrap();
+    assert_eq!(progress.downloaded, 65_536);
+    assert_eq!(progress.total, Some(65_536));
+    assert_eq!(progress.transferred_total, 65_536);
+    assert_eq!(
+        std::fs::metadata(task.output_path.unwrap()).unwrap().len(),
+        65_536
+    );
+}
+
+#[tokio::test]
+async fn failed_resume_keeps_owned_partial_bytes_in_the_saved_snapshot() {
+    let dir = TempDir::new().unwrap();
+    let store = Arc::new(Store::open(&dir.path().join("tasks.db")).unwrap());
+    let id = TaskId::new_v4();
+    let url = streaming_server(true).await;
+    store.prepare(id, &request(dir.path(), &url)).unwrap();
+    store.commit(id).unwrap();
+    let scheduler = Scheduler::start(store.clone(), SchedulerOptions::default()).unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while scheduler
+            .progress(id)
+            .is_none_or(|progress| progress.downloaded == 0)
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    scheduler.pause(id).await.unwrap();
+    let saved = store.get(id).unwrap().unwrap().progress.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let unavailable = format!("http://{}/file", listener.local_addr().unwrap());
+    drop(listener);
+    store.update_web_url(id, &unavailable).unwrap();
+    scheduler.resume(id).await.unwrap();
+    wait_for(&store, id, TaskState::Failed).await;
+    scheduler.shutdown().await;
+    let failed = store.get(id).unwrap().unwrap().progress.unwrap();
+    assert_eq!(failed.downloaded, saved.downloaded);
+    assert!(failed.downloaded > 0);
+    assert_eq!(failed.transferred_total, saved.transferred_total);
+    assert!(failed.elapsed_ms >= saved.elapsed_ms);
+}
+
+#[tokio::test]
+async fn paused_average_includes_received_bytes_waiting_for_the_rate_limiter() {
+    let dir = TempDir::new().unwrap();
+    let store = Arc::new(Store::open(&dir.path().join("tasks.db")).unwrap());
+    let id = TaskId::new_v4();
+    let url = streaming_server(true).await;
+    store.prepare(id, &request(dir.path(), &url)).unwrap();
+    store.commit(id).unwrap();
+    let mut options = SchedulerOptions::default();
+    options.http.max_bytes_per_second = Some(1);
+    let scheduler = Scheduler::start(store.clone(), options).unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while scheduler
+            .progress(id)
+            .is_none_or(|progress| progress.transferred <= progress.downloaded)
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    scheduler.pause(id).await.unwrap();
+    let paused = store.get(id).unwrap().unwrap().progress.unwrap();
+    assert!(paused.transferred_total > paused.downloaded);
+    assert_eq!(paused.downloaded, 0);
+    scheduler.shutdown().await;
+}
+
 #[tokio::test]
 async fn scheduler_runs_queued_tasks_with_bounded_concurrency() {
     let dir = TempDir::new().unwrap();

@@ -6,6 +6,7 @@ use std::{
         Arc, Mutex, RwLock,
         atomic::{AtomicBool, Ordering},
     },
+    time::Instant,
 };
 
 use futures_util::FutureExt;
@@ -62,6 +63,22 @@ struct Active {
     manual_pause: Arc<AtomicBool>,
     progress: DownloadProgress,
     done: watch::Receiver<bool>,
+    started: Instant,
+    previous_elapsed_ms: u64,
+    previous_transferred: u64,
+}
+
+impl Active {
+    fn snapshot(&self) -> ProgressSnapshot {
+        let mut progress = self.progress.snapshot();
+        progress.elapsed_ms = self
+            .previous_elapsed_ms
+            .saturating_add(self.started.elapsed().as_millis().min(u64::MAX as u128) as u64);
+        progress.transferred_total = self
+            .previous_transferred
+            .saturating_add(progress.transferred);
+        progress
+    }
 }
 struct Inner {
     store: Arc<Store>,
@@ -117,12 +134,7 @@ impl Scheduler {
     }
 
     pub fn progress(&self, id: TaskId) -> Option<ProgressSnapshot> {
-        self.0
-            .active
-            .lock()
-            .unwrap()
-            .get(&id)
-            .map(|active| active.progress.snapshot())
+        self.0.active.lock().unwrap().get(&id).map(Active::snapshot)
     }
 
     /// Remove a task only after its worker has stopped. Completed files are kept.
@@ -338,6 +350,15 @@ async fn dispatch(inner: Arc<Inner>) {
                     manual_pause: Arc::new(AtomicBool::new(false)),
                     progress: DownloadProgress::default(),
                     done,
+                    started: Instant::now(),
+                    previous_elapsed_ms: task
+                        .progress
+                        .as_ref()
+                        .map_or(0, |progress| progress.elapsed_ms),
+                    previous_transferred: task
+                        .progress
+                        .as_ref()
+                        .map_or(0, |progress| progress.transferred_total),
                 };
                 active.insert(task.id, job.clone());
                 drop(active);
@@ -387,7 +408,34 @@ async fn run_one(inner: Arc<Inner>, task: Task, active: Active, done: watch::Sen
     {
         let _ = inner.store.resume(task.id);
     }
-    let progress = active.progress.snapshot();
+    let mut progress = active.snapshot();
+    for segment in &mut progress.segments {
+        segment.active = false;
+    }
+    if let Ok(Some(task)) = inner.store.get(task.id) {
+        if task.state == TaskState::Completed {
+            if let Some(output) = task.output_path
+                && let Ok(metadata) = std::fs::metadata(output)
+                && metadata.is_file()
+            {
+                progress.downloaded = metadata.len();
+                progress.total = Some(metadata.len());
+            }
+        } else if progress.downloaded == 0
+            && let Some(saved) = crate::task_progress::recover_partial_progress(&task)
+        {
+            // A cancelled/offline probe has not restored the protocol counters yet.
+            // Read the remaining owned parts rather than overwriting their progress with zero.
+            progress.downloaded = saved.downloaded;
+            progress.total = progress.total.or(saved.total);
+            if progress.segments.is_empty() {
+                progress.segments = saved.segments;
+            }
+        }
+    }
+    if let Err(error) = inner.store.save_progress(task.id, &progress) {
+        eprintln!("Could not save download progress for {}: {error}", task.id);
+    }
     inner.active.lock().unwrap().remove(&task.id);
     let _ = done.send(true);
     let _ = inner.events.send(SchedulerEvent::Finished {

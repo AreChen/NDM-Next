@@ -30,6 +30,15 @@ test('captures signed and token-bearing download URLs', () => {
   ]) assert.equal(captureRequest(details({url})).url, url);
 });
 
+test('media replay removes only valid range headers and keeps credentials', () => {
+  const input=details({requestHeaders:[{name:'Range',value:'bytes=1024-'},{name:'If-Range',value:'"etag"'},{name:'Cookie',value:'private=1'},{name:'Authorization',value:'Bearer secret'},{name:'Referer',value:'https://page.test/'}]});
+  assert.equal(captureRequest(input),null);
+  const media=captureRequest(input,{media:true});
+  assert.deepEqual(media.headers,{cookie:'private=1',authorization:'Bearer secret',referer:'https://page.test/'});
+  for(const header of [{name:'Range',value:'items=1-2'},{name:'If-Range',value:'bad\r\nvalue'},{name:'X-Token',value:'private'}])
+    assert.equal(captureRequest(details({requestHeaders:[header]}),{media:true}),null);
+});
+
 test('matches an unambiguous recent final URL only', () => {
   const now=Date.now();
   const one={...captureRequest(details()),when:now};
