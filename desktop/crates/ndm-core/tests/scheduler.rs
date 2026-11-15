@@ -102,6 +102,78 @@ async fn streaming_server(known_length: bool) -> String {
 }
 
 #[tokio::test]
+async fn custom_cache_location_survives_pause_and_applies_to_future_tasks() {
+    let directory = TempDir::new().unwrap();
+    let destination = if let Some(root) = std::env::var_os("NDM_TEST_OTHER_VOLUME") {
+        TempDir::new_in(root).unwrap()
+    } else {
+        TempDir::new().unwrap()
+    };
+    let store = Arc::new(Store::open(&directory.path().join("tasks.db")).unwrap());
+    let first_cache = directory.path().join("cache-one");
+    let second_cache = directory.path().join("cache-two");
+    let mut options = SchedulerOptions {
+        cache_directory: Some(first_cache.clone()),
+        ..Default::default()
+    };
+    let scheduler = Scheduler::start(store.clone(), options.clone()).unwrap();
+    let url = streaming_server(true).await;
+    let id = TaskId::new_v4();
+    store
+        .prepare(id, &request(destination.path(), &url))
+        .unwrap();
+    store.commit(id).unwrap();
+    scheduler.notify();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if scheduler
+                .progress(id)
+                .is_some_and(|progress| progress.downloaded >= 8192)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    scheduler.pause(id).await.unwrap();
+    let paused = store.get(id).unwrap().unwrap();
+    assert!(
+        paused
+            .work_directory()
+            .starts_with(std::fs::canonicalize(&first_cache).unwrap())
+    );
+    assert!(paused.work_directory().is_dir());
+    assert!(!destination.path().join(format!(".ndm-next-{id}")).exists());
+    options.cache_directory = Some(second_cache.clone());
+    scheduler.update_options(options);
+    let report = scheduler.clean_cache(None).unwrap();
+    assert_eq!(report.removed_bytes, 0);
+    assert!(report.protected_bytes >= 8192);
+    scheduler.resume(id).await.unwrap();
+    wait_for(&store, id, TaskState::Completed).await;
+    let finished = store.get(id).unwrap().unwrap();
+    assert_eq!(finished.cache_directory, paused.cache_directory);
+    assert_eq!(
+        std::fs::read(finished.output_path.unwrap()).unwrap(),
+        vec![42; 65_536]
+    );
+    let next = TaskId::new_v4();
+    store
+        .prepare(next, &request(destination.path(), &url))
+        .unwrap();
+    store.commit(next).unwrap();
+    scheduler.notify();
+    wait_for(&store, next, TaskState::Completed).await;
+    assert_eq!(
+        store.get(next).unwrap().unwrap().cache_directory.unwrap(),
+        std::fs::canonicalize(second_cache).unwrap()
+    );
+    scheduler.shutdown().await;
+}
+
+#[tokio::test]
 async fn task_proxy_switch_preserves_request_and_statistics_without_changing_other_tasks() {
     let dir = TempDir::new().unwrap();
     let database = dir.path().join("tasks.db");

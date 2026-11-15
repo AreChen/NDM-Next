@@ -229,7 +229,14 @@ impl Host {
         match command {
             Command::Status => json!({"ok":true,"protocol":1}),
             Command::Prepare { id, task } => {
-                let Some((task, options)) = task.validate(self.destination.clone()) else {
+                // A retry of an existing handoff keeps its original destination even
+                // when the application default changes between prepare requests.
+                let destination = match self.store.get(id) {
+                    Ok(Some(existing)) => existing.request.destination,
+                    Ok(None) => self.destination.clone(),
+                    Err(_) => return json!({"ok":false,"error":"prepare_failed"}),
+                };
+                let Some((task, options)) = task.validate(destination) else {
                     return json!({"ok":false,"error":"invalid_request"});
                 };
                 match self.store.prepare_with_options(id, &task, &options) {

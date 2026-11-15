@@ -23,10 +23,7 @@ pub fn recover_task_progress(task: &Task) -> Option<ProgressSnapshot> {
 }
 
 pub(crate) fn recover_partial_progress(task: &Task) -> Option<ProgressSnapshot> {
-    let directory = task
-        .request
-        .destination
-        .join(format!(".ndm-next-{}", task.id));
+    let directory = task.work_directory();
     let mut segments = Vec::new();
     for entry in fs::read_dir(&directory).ok()?.flatten() {
         let name = entry.file_name();
@@ -91,6 +88,7 @@ mod tests {
     fn legacy_segment_progress_does_not_count_assembly_twice_or_invent_timing() {
         let directory = tempfile::tempdir().unwrap();
         let task = Task {
+            cache_directory: None,
             id: TaskId::new_v4(),
             request: NewTask {
                 url: "https://example.test/file".into(),

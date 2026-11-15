@@ -215,10 +215,12 @@ pub(super) async fn remux(
         .extension()
         .and_then(|extension| extension.to_str())
         .ok_or(Error::Hls)?;
-    let target = publish_no_overwrite(
+    let target = publish_download(
         &output,
         &request.destination,
         &format!("{stem}.{extension}"),
+        &source.progress,
+        &source.cancel,
     )
     .await?;
     super::recovery::remove_files(work_dir).await;

@@ -53,14 +53,18 @@ impl Render for ProgressWindow {
             (TaskState::Prepared, _) => self.text("等待确认", "Awaiting confirmation"),
             (TaskState::Queued, _) => self.text("等待中", "Queued"),
             (TaskState::Running, ProgressPhase::Merging) => self.text("合并中", "Merging"),
+            (TaskState::Running, ProgressPhase::Saving) => self.text("正在保存", "Saving"),
             (TaskState::Running, ProgressPhase::Finalizing) => self.text("正在封装", "Finalizing"),
             (TaskState::Running, _) => self.text("下载中", "Downloading"),
             (TaskState::Paused, _) => self.text("已暂停", "Paused"),
             (TaskState::Completed, _) => self.text("下载完成", "Completed"),
             (TaskState::Failed, _) => self.text("下载失败", "Failed"),
         };
-        let (downloaded, total) = progress_bytes(task.as_ref(), self.snapshot.as_ref());
-        let shown_bytes = if state == TaskState::Running && phase == ProgressPhase::Merging {
+        let (downloaded, mut total) = progress_bytes(task.as_ref(), self.snapshot.as_ref());
+        let shown_bytes = if state == TaskState::Running && phase == ProgressPhase::Saving {
+            total = self.snapshot.as_ref().and_then(|value| value.save_total);
+            self.snapshot.as_ref().map_or(0, |value| value.saved)
+        } else if state == TaskState::Running && phase == ProgressPhase::Merging {
             self.snapshot
                 .as_ref()
                 .map(|snapshot| snapshot.merged)
@@ -319,7 +323,9 @@ impl Render for ProgressWindow {
                 ));
             } else {
                 chips = chips.child(metric_chip(
-                    if phase == ProgressPhase::Merging {
+                    if phase == ProgressPhase::Saving {
+                        self.text("保存", "Save")
+                    } else if phase == ProgressPhase::Merging {
                         self.text("合并", "Merge")
                     } else {
                         self.text("速度", "Speed")

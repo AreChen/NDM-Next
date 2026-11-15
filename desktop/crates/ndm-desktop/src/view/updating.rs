@@ -43,6 +43,7 @@ impl Desktop {
         ) {
             return;
         }
+        self.update_cache_lease = None;
         self.update_state = UpdateState::Checking;
         self.install_update_when_idle = requested;
         self.preferences.last_update_check = Some(
@@ -88,21 +89,26 @@ impl Desktop {
         self.install_update_when_idle = requested;
         self.install_wait = None;
         self.update_state = UpdateState::Downloading;
-        let directory = self
-            .preferences_path
-            .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .join("updates");
+        let directory = self.preferences.cache_dir.join("updates");
+        let cache_gate = self.update_cache_gate.clone();
         let proxy = self.preferences.default_proxy();
         let runtime = self.runtime.clone();
         cx.notify();
         cx.spawn(async move |view, cx| {
             let outcome = runtime
-                .spawn(updates::download(release, directory, proxy))
+                .spawn(async move {
+                    let lease = cache_gate.lock_owned().await;
+                    updates::download(release, directory, proxy)
+                        .await
+                        .map(|ready| (ready, lease))
+                })
                 .await;
             let _ = view.update(cx, |this, cx| {
                 this.update_state = match outcome {
-                    Ok(Ok(ready)) => UpdateState::Ready(ready),
+                    Ok(Ok((ready, lease))) => {
+                        this.update_cache_lease = Some(lease);
+                        UpdateState::Ready(ready)
+                    }
                     _ => UpdateState::Failed,
                 };
                 this.try_install_update(cx);
@@ -197,6 +203,9 @@ impl Desktop {
                 })
                 .await;
             let _ = view.update(cx, |this, cx| {
+                if !matches!(outcome, Ok(Ok(()))) {
+                    this.update_cache_lease = None;
+                }
                 this.update_state = if matches!(outcome, Ok(Ok(()))) {
                     this.install_update_when_idle = false;
                     UpdateState::Current

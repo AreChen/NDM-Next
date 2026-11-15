@@ -123,6 +123,7 @@ mod tests {
 
     fn task(destination: &std::path::Path, output: std::path::PathBuf, state: TaskState) -> Task {
         Task {
+            cache_directory: None,
             id: ndm_core::TaskId::new_v4(),
             request: NewTask {
                 url: "https://example.test/file".into(),

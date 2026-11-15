@@ -20,16 +20,27 @@ impl Desktop {
             .progress(id)
             .or_else(|| self.retained_progress.get(&id).cloned())
             .or_else(|| task.progress.clone());
-        let total = self.task_index.known_size(id).or_else(|| {
+        let mut total = self.task_index.known_size(id).or_else(|| {
             progress
                 .as_ref()
                 .and_then(|value| value.total)
                 .or(task.request.expected_size)
         });
+        if state == TaskState::Running
+            && progress
+                .as_ref()
+                .is_some_and(|value| value.phase == ndm_core::ProgressPhase::Saving)
+        {
+            total = progress.as_ref().and_then(|value| value.save_total);
+        }
         let done = progress
             .as_ref()
             .map(|value| {
-                if state == TaskState::Running && value.phase == ndm_core::ProgressPhase::Merging {
+                if state == TaskState::Running && value.phase == ndm_core::ProgressPhase::Saving {
+                    value.saved
+                } else if state == TaskState::Running
+                    && value.phase == ndm_core::ProgressPhase::Merging
+                {
                     value.merged
                 } else {
                     value.downloaded
@@ -60,6 +71,7 @@ impl Desktop {
             TaskState::Prepared => self.text("待确认", "Pending"),
             TaskState::Queued => self.text("等待中", "Queued"),
             TaskState::Running => match progress.as_ref().map(|p| p.phase) {
+                Some(ndm_core::ProgressPhase::Saving) => self.text("保存中", "Saving"),
                 Some(ndm_core::ProgressPhase::Merging) => self.text("合并中", "Merging"),
                 Some(ndm_core::ProgressPhase::Finalizing) => self.text("封装中", "Finalizing"),
                 _ => self.text("下载中", "Downloading"),

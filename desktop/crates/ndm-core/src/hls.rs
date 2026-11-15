@@ -32,7 +32,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     DownloadProgress, Error, NewTask, ProxyOptions, Result, Store, TaskId,
     http::{
-        RateLimiter, network_client, parse_content_range, publish_no_overwrite, request_headers,
+        RateLimiter, network_client, parse_content_range, publish_download, request_headers,
         safe_filename, send,
     },
 };
@@ -374,7 +374,17 @@ pub async fn execute_hls(
 ) -> Result<HlsOutcome> {
     let task = store.get(id)?.ok_or(Error::NotFound)?;
     store.start(id)?;
-    match download_hls_with_progress(&task.request, id, options, cancel, stop, progress, None).await
+    match download_hls_with_progress(
+        &task.request,
+        id,
+        options,
+        cancel,
+        stop,
+        progress,
+        None,
+        Some(&task.work_directory()),
+    )
+    .await
     {
         Ok(outcome) => {
             store.complete(id, &outcome.path, false)?;
@@ -413,6 +423,7 @@ pub async fn download_hls(
         stop,
         DownloadProgress::default(),
         None,
+        None,
     )
     .await
 }
@@ -435,6 +446,7 @@ pub async fn download_hls_with_media_tool(
         stop,
         DownloadProgress::default(),
         Some(media_tool_dir),
+        None,
     )
     .await
 }
@@ -468,6 +480,7 @@ fn engine_failure(error: &EngineError, cancel: &CancellationToken) -> Error {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn download_hls_with_progress(
     request: &NewTask,
     id: TaskId,
@@ -476,13 +489,14 @@ async fn download_hls_with_progress(
     stop: CancellationToken,
     progress: DownloadProgress,
     media_tool_dir: Option<&Path>,
+    work_directory: Option<&std::path::Path>,
 ) -> Result<HlsOutcome> {
     let (source, url) = network_source(
         request,
         cancel.clone(),
         options.max_bytes_per_second,
         options.proxy.as_ref(),
-        progress,
+        progress.clone(),
     )?;
     let first = source
         .read_text(&SourceLocation::Url(url))
@@ -589,8 +603,11 @@ async fn download_hls_with_progress(
     )
     .map_err(|_| Error::Hls)?;
     fs::create_dir_all(&request.destination).await?;
-    let work_dir = request.destination.join(format!(".ndm-next-{id}"));
+    let work_dir = work_directory
+        .map(std::path::Path::to_owned)
+        .unwrap_or_else(|| request.destination.join(format!(".ndm-next-{id}")));
     fs::create_dir_all(&work_dir).await?;
+    crate::cache::validate_directory(&work_dir)?;
     let temporary = work_dir.join("hls-output.mp4");
     let checkpoint_path = work_dir.join("hls-checkpoint.sqlite");
     let checkpoint = recovery::load(&checkpoint_path)?;
@@ -720,7 +737,8 @@ async fn download_hls_with_progress(
             .unwrap_or("video");
         format!("{stem}.mp4")
     };
-    let target = publish_no_overwrite(&temporary, &request.destination, &name).await?;
+    let target =
+        publish_download(&temporary, &request.destination, &name, &progress, &cancel).await?;
     recovery::remove_files(&work_dir).await;
     let _ = fs::remove_dir(&work_dir).await;
     Ok(HlsOutcome {

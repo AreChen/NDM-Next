@@ -20,7 +20,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     DownloadProgress, Error, NewTask, ProxyOptions, Result, Store, TaskId,
     http::{
-        RateLimiter, network_client, parse_content_range, publish_no_overwrite, request_headers,
+        RateLimiter, network_client, parse_content_range, publish_download, request_headers,
         safe_filename, send,
     },
     media::{LocalInput, LocalTools, remux_local},
@@ -246,6 +246,7 @@ pub async fn download_dash(
         cancel,
         DownloadProgress::default(),
         None,
+        None,
     )
     .await
 }
@@ -265,6 +266,7 @@ pub async fn download_dash_with_media_tool(
         cancel,
         DownloadProgress::default(),
         Some(media_tool_dir),
+        None,
     )
     .await
 }
@@ -278,7 +280,17 @@ pub async fn execute_dash(
 ) -> Result<DashOutcome> {
     let task = store.get(id)?.ok_or(Error::NotFound)?;
     store.start(id)?;
-    match download_with_progress(&task.request, id, options, cancel, progress, None).await {
+    match download_with_progress(
+        &task.request,
+        id,
+        options,
+        cancel,
+        progress,
+        None,
+        Some(&task.work_directory()),
+    )
+    .await
+    {
         Ok(outcome) => {
             store.complete(id, &outcome.path, false)?;
             Ok(outcome)
@@ -588,6 +600,7 @@ async fn download_with_progress(
     cancel: CancellationToken,
     progress: DownloadProgress,
     tool_directory: Option<&Path>,
+    work_directory: Option<&std::path::Path>,
 ) -> Result<DashOutcome> {
     let network = Network::new(request, options, cancel.clone(), progress.clone())?;
     let (manifest, bytes, url) = network.manifest().await?;
@@ -600,8 +613,11 @@ async fn download_with_progress(
     )
     .await?;
     fs::create_dir_all(&request.destination).await?;
-    let directory = request.destination.join(format!(".ndm-next-{id}"));
+    let directory = work_directory
+        .map(std::path::Path::to_owned)
+        .unwrap_or_else(|| request.destination.join(format!(".ndm-next-{id}")));
     fs::create_dir_all(&directory).await?;
+    crate::cache::validate_directory(&directory)?;
     let metadata = fs::symlink_metadata(&directory).await?;
     if !metadata.is_dir() || reparse(&metadata) {
         return Err(Error::DashRecovery);
@@ -778,10 +794,12 @@ async fn download_with_progress(
         .extension()
         .and_then(|extension| extension.to_str())
         .ok_or(Error::Dash)?;
-    let path = publish_no_overwrite(
+    let path = publish_download(
         &output,
         &request.destination,
         &format!("{stem}.{extension}"),
+        &progress,
+        &cancel,
     )
     .await?;
     for file in owned {

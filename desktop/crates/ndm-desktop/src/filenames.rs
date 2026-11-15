@@ -40,6 +40,7 @@ mod tests {
 
     fn task(url: &str) -> Task {
         Task {
+            cache_directory: None,
             id: TaskId::new_v4(),
             request: NewTask {
                 url: url.into(),

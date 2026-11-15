@@ -73,6 +73,8 @@ struct ProgressState {
     downloaded: AtomicU64,
     transferred: AtomicU64,
     merged: AtomicU64,
+    saved: AtomicU64,
+    save_total: AtomicU64,
     finalized_ms: AtomicU64,
     finalization_total_ms: AtomicU64,
     phase: AtomicU8,
@@ -124,6 +126,8 @@ pub struct ProgressSnapshot {
     pub transferred_total: u64,
     pub total: Option<u64>,
     pub merged: u64,
+    pub saved: u64,
+    pub save_total: Option<u64>,
     /// Timestamp actually reported by the local media tool, in milliseconds.
     pub finalized_ms: u64,
     /// Known local media duration; absent when finalization cannot be measured.
@@ -138,6 +142,7 @@ pub enum ProgressPhase {
     Downloading,
     Merging,
     Finalizing,
+    Saving,
 }
 
 impl ProgressSnapshot {
@@ -157,6 +162,11 @@ impl DownloadProgress {
             elapsed_ms: 0,
             transferred_total: self.0.transferred.load(Ordering::Relaxed),
             merged: self.0.merged.load(Ordering::Relaxed),
+            saved: self.0.saved.load(Ordering::Relaxed),
+            save_total: match self.0.save_total.load(Ordering::Relaxed) {
+                0 => None,
+                value => Some(value),
+            },
             finalized_ms: self.0.finalized_ms.load(Ordering::Relaxed),
             finalization_total_ms: match self.0.finalization_total_ms.load(Ordering::Relaxed) {
                 0 => None,
@@ -165,6 +175,7 @@ impl DownloadProgress {
             phase: match self.0.phase.load(Ordering::Acquire) {
                 1 => ProgressPhase::Merging,
                 2 => ProgressPhase::Finalizing,
+                3 => ProgressPhase::Saving,
                 _ => ProgressPhase::Downloading,
             },
             total: self
@@ -263,7 +274,16 @@ pub async fn execute_http(
 ) -> Result<PathBuf> {
     let task = store.get(id)?.ok_or(Error::NotFound)?;
     store.start(id)?;
-    match download_http_with_progress(&task.request, id, options, cancel, progress.clone()).await {
+    match download_http_with_progress(
+        &task.request,
+        id,
+        options,
+        cancel,
+        progress.clone(),
+        Some(&task.work_directory()),
+    )
+    .await
+    {
         Ok(path) => {
             let size_verified =
                 progress.snapshot().total.is_some() || task.request.expected_size.is_some();
@@ -329,7 +349,15 @@ pub async fn download_http(
     options: &HttpOptions,
     cancel: CancellationToken,
 ) -> Result<PathBuf> {
-    download_http_with_progress(request, id, options, cancel, DownloadProgress::default()).await
+    download_http_with_progress(
+        request,
+        id,
+        options,
+        cancel,
+        DownloadProgress::default(),
+        None,
+    )
+    .await
 }
 
 async fn download_http_with_progress(
@@ -338,6 +366,7 @@ async fn download_http_with_progress(
     options: &HttpOptions,
     cancel: CancellationToken,
     progress: DownloadProgress,
+    work_directory: Option<&std::path::Path>,
 ) -> Result<PathBuf> {
     progress.0.downloaded.store(0, Ordering::Relaxed);
     progress.0.transferred.store(0, Ordering::Relaxed);
@@ -346,8 +375,11 @@ async fn download_http_with_progress(
     let client = network_client(options.proxy.as_ref())?;
     let headers = request_headers(request)?;
     fs::create_dir_all(&request.destination).await?;
-    let work_dir = request.destination.join(format!(".ndm-next-{id}"));
+    let work_dir = work_directory
+        .map(std::path::Path::to_owned)
+        .unwrap_or_else(|| request.destination.join(format!(".ndm-next-{id}")));
     fs::create_dir_all(&work_dir).await?;
+    crate::cache::validate_directory(&work_dir)?;
     let limiter = Arc::new(RateLimiter {
         bytes_per_second: options.max_bytes_per_second.filter(|v| *v > 0),
         next: Mutex::new(Instant::now()),
@@ -519,7 +551,14 @@ async fn download_http_with_progress(
             .or(discovered_filename.as_deref())
             .unwrap_or("download"),
     );
-    let target = publish_no_overwrite(&assembled, &request.destination, &filename).await?;
+    let target = publish_download(
+        &assembled,
+        &request.destination,
+        &filename,
+        &progress,
+        &cancel,
+    )
+    .await?;
     // The target is already published; cleanup failures must not turn a
     // successful transfer into a failed task and cause a duplicate retry.
     let _ = clear_parts(&work_dir).await;
@@ -1031,11 +1070,97 @@ pub(crate) fn safe_filename(suggested: &str) -> String {
     }
 }
 
-pub(crate) async fn publish_no_overwrite(
+/// A cross-volume cache must stage the complete file on the destination volume
+/// before publishing its final name. Existing files are never overwritten.
+pub(crate) async fn publish_download(
+    source: &Path,
+    destination: &Path,
+    filename: &str,
+    progress: &DownloadProgress,
+    cancel: &CancellationToken,
+) -> Result<PathBuf> {
+    if cancel.is_cancelled() {
+        return Err(Error::Cancelled);
+    }
+    match publish_local(source, destination, filename).await {
+        Ok(path) => Ok(path),
+        Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
+            publish_staged(source, destination, filename, progress, cancel).await
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+async fn publish_staged(
+    source: &Path,
+    destination: &Path,
+    filename: &str,
+    progress: &DownloadProgress,
+    cancel: &CancellationToken,
+) -> Result<PathBuf> {
+    let (from, to, progress, cancel) = (
+        source.to_owned(),
+        destination.to_owned(),
+        progress.clone(),
+        cancel.clone(),
+    );
+    let staged = tokio::task::spawn_blocking(move || -> Result<tempfile::NamedTempFile> {
+        use std::io::{Read, Write};
+        let mut input = std::fs::File::open(&from)?;
+        let total = input.metadata()?.len();
+        progress.0.saved.store(0, Ordering::Relaxed);
+        progress.0.save_total.store(total, Ordering::Relaxed);
+        progress.0.phase.store(3, Ordering::Release);
+        let mut staged = tempfile::Builder::new()
+            .prefix(".ndm-next-publish-")
+            .suffix(".part")
+            .tempfile_in(to)?;
+        let mut buffer = vec![0; 512 * 1024];
+        loop {
+            if cancel.is_cancelled() {
+                return Err(Error::Cancelled);
+            }
+            let bytes = input.read(&mut buffer)?;
+            if bytes == 0 {
+                break;
+            }
+            staged.write_all(&buffer[..bytes])?;
+            progress.0.saved.fetch_add(bytes as u64, Ordering::Relaxed);
+        }
+        staged.as_file().sync_all()?;
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        Ok(staged)
+    })
+    .await
+    .map_err(std::io::Error::other)??;
+    let target = publish_local(staged.path(), destination, filename).await?;
+    let _ = fs::remove_file(source).await;
+    Ok(target)
+}
+
+#[cfg(test)]
+async fn publish_no_overwrite(
     source: &Path,
     destination: &Path,
     filename: &str,
 ) -> Result<PathBuf> {
+    publish_download(
+        source,
+        destination,
+        filename,
+        &DownloadProgress::default(),
+        &CancellationToken::new(),
+    )
+    .await
+}
+
+async fn publish_local(
+    source: &Path,
+    destination: &Path,
+    filename: &str,
+) -> std::io::Result<PathBuf> {
     let path = Path::new(filename);
     let stem = path
         .file_stem()
@@ -1054,10 +1179,10 @@ pub(crate) async fn publish_no_overwrite(
         match publish_file(source, &target).await {
             Ok(()) => return Ok(target),
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(err) => return Err(err.into()),
+            Err(err) => return Err(err),
         }
     }
-    Err(std::io::Error::other("no available download filename").into())
+    Err(std::io::Error::other("no available download filename"))
 }
 
 #[cfg(windows)]
@@ -1154,6 +1279,65 @@ mod publication_tests {
         let snapshot = progress.snapshot();
         assert_eq!(snapshot.merged, 12);
         assert_eq!(snapshot.phase, ProgressPhase::Finalizing);
+    }
+
+    #[tokio::test]
+    async fn cache_export_stages_complete_files_and_never_overwrites() {
+        let cache = tempfile::tempdir().unwrap();
+        let other_volume = std::env::var_os("NDM_TEST_OTHER_VOLUME");
+        let destination = if let Some(root) = &other_volume {
+            tempfile::tempdir_in(root).unwrap()
+        } else {
+            tempfile::tempdir().unwrap()
+        };
+        let source = cache.path().join("assembled.part");
+        let content = vec![0x7b; 1_200_000];
+        std::fs::write(&source, &content).unwrap();
+        std::fs::write(destination.path().join("file.bin"), b"keep").unwrap();
+        let progress = DownloadProgress::default();
+        let token = CancellationToken::new();
+        let result = if other_volume.is_some() {
+            publish_download(&source, destination.path(), "file.bin", &progress, &token)
+                .await
+                .unwrap()
+        } else {
+            publish_staged(&source, destination.path(), "file.bin", &progress, &token)
+                .await
+                .unwrap()
+        };
+        assert_eq!(result.file_name().unwrap(), "file (1).bin");
+        assert_eq!(std::fs::read(&result).unwrap(), content);
+        assert_eq!(
+            std::fs::read(destination.path().join("file.bin")).unwrap(),
+            b"keep"
+        );
+        assert!(!source.exists());
+        let snapshot = progress.snapshot();
+        assert_eq!(snapshot.phase, ProgressPhase::Saving);
+        assert_eq!(snapshot.saved, 1_200_000);
+        assert_eq!(snapshot.save_total, Some(1_200_000));
+        assert_eq!(std::fs::read_dir(destination.path()).unwrap().count(), 2);
+    }
+
+    #[tokio::test]
+    async fn cancelled_cache_export_keeps_source_and_removes_staging_files() {
+        let cache = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let source = cache.path().join("assembled.part");
+        std::fs::write(&source, b"resumable").unwrap();
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let result = publish_staged(
+            &source,
+            destination.path(),
+            "file.bin",
+            &DownloadProgress::default(),
+            &cancel,
+        )
+        .await;
+        assert!(matches!(result, Err(Error::Cancelled)));
+        assert_eq!(std::fs::read(&source).unwrap(), b"resumable");
+        assert_eq!(std::fs::read_dir(destination.path()).unwrap().count(), 0);
     }
 
     #[tokio::test]

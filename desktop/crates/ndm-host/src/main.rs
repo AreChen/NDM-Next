@@ -13,13 +13,21 @@ use serde_json::{Value, json};
 #[derive(Deserialize)]
 struct HostPreferences {
     download_dir: Option<PathBuf>,
+    use_system_download_dir: Option<bool>,
 }
 
-fn default_downloads() -> PathBuf {
-    std::env::var_os("USERPROFILE")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("Downloads")
+fn configured_downloads(data_dir: &std::path::Path) -> PathBuf {
+    fs::read(data_dir.join("preferences.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<HostPreferences>(&bytes).ok())
+        .map(|prefs| {
+            ndm_core::resolve_download_directory(
+                prefs.download_dir.as_deref(),
+                prefs.use_system_download_dir,
+            )
+            .0
+        })
+        .unwrap_or_else(ndm_core::system_download_directory)
 }
 
 fn run() -> io::Result<()> {
@@ -30,14 +38,7 @@ fn run() -> io::Result<()> {
             "installation is in progress",
         ));
     }
-    let destination = fs::read(data_dir.join("preferences.json"))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<HostPreferences>(&bytes).ok())
-        .and_then(|prefs| prefs.download_dir)
-        .filter(|path| path.is_absolute())
-        .unwrap_or_else(default_downloads);
-    let store = Store::open(&data_dir.join("tasks.db")).map_err(io::Error::other)?;
-    let host = Host::new(Arc::new(store), destination);
+    let store = Arc::new(Store::open(&data_dir.join("tasks.db")).map_err(io::Error::other)?);
     let executable = std::env::current_exe()?.with_file_name("ndm-desktop.exe");
     let mut input = io::stdin().lock();
     let mut output = io::stdout().lock();
@@ -45,6 +46,7 @@ fn run() -> io::Result<()> {
         if ndm_core::desktop_installation_active(&data_dir)? {
             return Ok(());
         }
+        let host = Host::new(store.clone(), configured_downloads(&data_dir));
         let request: Value = serde_json::from_slice(&message).unwrap_or(Value::Null);
         let kind = request.get("type").and_then(Value::as_str);
         let can_commit = if matches!(kind, Some("commit" | "discard")) {
@@ -343,4 +345,18 @@ fn main() {
     // stdout is exclusively reserved for Native Messaging frames; neither
     // malformed requests nor task credentials are written to diagnostic logs.
     let _ = run();
+}
+
+#[cfg(test)]
+mod storage_tests {
+    use super::configured_downloads;
+    #[test]
+    fn storage_preferences_are_reloaded_for_each_message() {
+        let directory = tempfile::tempdir().unwrap();
+        for name in ["first", "第二个目录"] {
+            let expected = directory.path().join(name);
+            std::fs::write(directory.path().join("preferences.json"), serde_json::to_vec(&serde_json::json!({"download_dir": expected, "use_system_download_dir": false})).unwrap()).unwrap();
+            assert_eq!(configured_downloads(directory.path()), expected);
+        }
+    }
 }

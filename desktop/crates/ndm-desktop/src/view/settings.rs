@@ -70,6 +70,9 @@ impl Desktop {
                         if !this.settings_open.insert(index) {
                             this.settings_open.remove(&index);
                         }
+                        if index == 6 && this.settings_open.contains(&index) {
+                            this.maintain_storage(false, false, cx);
+                        }
                         cx.notify();
                     })),
             )
@@ -361,6 +364,20 @@ impl Desktop {
                     ),
                 ),
                 downloads,
+                dark,
+                cx,
+            ))
+            .child(self.settings_group(
+                (
+                    6,
+                    IconName::Folder,
+                    self.text("存储与缓存", "Storage and cache"),
+                    self.text(
+                        "下载目录、缓存位置与自动清理",
+                        "Download folder, cache location and cleanup",
+                    ),
+                ),
+                self.storage_settings(dark, cx),
                 dark,
                 cx,
             ))

@@ -16,6 +16,7 @@ mod protocol_auth;
 mod speed;
 #[cfg(windows)]
 mod startup;
+mod storage;
 #[cfg(windows)]
 mod tray;
 mod updates;

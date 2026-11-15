@@ -244,6 +244,9 @@ impl ProgressWindow {
                                 this.meter.sample(Instant::now(), snapshot.merged)
                             }
                             ProgressPhase::Finalizing => 0,
+                            ProgressPhase::Saving => {
+                                this.meter.sample(Instant::now(), snapshot.saved)
+                            }
                         };
                         this.history.push_back(this.speed);
                         if this.history.len() > 24 {
@@ -440,6 +443,7 @@ mod tests {
         let output = directory.path().join("archive.zip");
         std::fs::write(&output, [0; 123]).unwrap();
         let task = Task {
+            cache_directory: None,
             id: TaskId::new_v4(),
             request: NewTask {
                 url: "https://example.test/archive.zip".into(),

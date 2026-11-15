@@ -35,6 +35,62 @@ fn sftp_endpoint(url: &str) -> Result<(String, u16)> {
 }
 
 impl Store {
+    /// Bind once; existing on-disk legacy data wins over a changed preference.
+    pub fn assign_workspace(&self, id: TaskId, preferred: Option<&Path>) -> Result<Task> {
+        let mut connection = self.connection()?;
+        let task = read_task(&connection, id)?.ok_or(Error::NotFound)?;
+        if task.cache_directory.is_some() {
+            return Ok(task);
+        }
+        let legacy = task.request.destination.join(format!(".ndm-next-{id}"));
+        let root = if legacy.try_exists()? {
+            &task.request.destination
+        } else {
+            preferred.unwrap_or(&task.request.destination)
+        };
+        if !root.is_absolute() {
+            return Err(std::io::Error::other("cache directory must be absolute").into());
+        }
+        // Network or redirected directories can be slow. Do not hold SQLite's
+        // writer reservation during filesystem operations.
+        std::fs::create_dir_all(root)?;
+        let root = std::fs::canonicalize(root)?;
+        let encrypted = secrets::protect(&serde_json::to_vec(&root)?)?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if read_task(&transaction, id)?.is_none() {
+            return Err(Error::NotFound);
+        }
+        transaction.execute(
+            "INSERT OR IGNORE INTO cache_workspaces (id, root) VALUES (?1, ?2)",
+            params![id.to_string(), encrypted],
+        )?;
+        let task = read_task(&transaction, id)?.ok_or(Error::NotFound)?;
+        transaction.commit()?;
+        Ok(task)
+    }
+
+    pub(crate) fn cache_workspaces(&self) -> Result<Vec<(TaskId, PathBuf)>> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare("SELECT id, root FROM cache_workspaces")?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?;
+        rows.map(|row| {
+            let (id, encrypted) = row?;
+            let id = TaskId::parse_str(&id).map_err(|_| Error::InvalidStoredState)?;
+            Ok((
+                id,
+                serde_json::from_slice(&secrets::unprotect(&encrypted)?)?,
+            ))
+        })
+        .collect()
+    }
+
+    pub(crate) fn forget_cache_workspace(&self, id: TaskId) -> Result<()> {
+        self.connection()?.execute("DELETE FROM cache_workspaces WHERE id = ?1 AND NOT EXISTS (SELECT 1 FROM tasks WHERE id = ?1)", [id.to_string()])?;
+        Ok(())
+    }
+
     pub fn reserve_update_if_idle(&self) -> Result<Option<crate::instance::DesktopUpdateGuard>> {
         let _admission = crate::instance::WorkAdmission::acquire(self.profile_directory())?;
         if crate::desktop_installation_active(self.profile_directory())? {
@@ -83,7 +139,7 @@ impl Store {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let version: i64 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if version > 2 {
+        if version > 3 {
             return Err(Error::UnsupportedSchema);
         }
         tx.execute_batch(
@@ -99,6 +155,7 @@ impl Store {
                 progress BLOB,
                 created_at INTEGER NOT NULL DEFAULT (unixepoch())
             );
+            CREATE TABLE IF NOT EXISTS cache_workspaces (id TEXT PRIMARY KEY NOT NULL, root BLOB NOT NULL);
             CREATE TABLE IF NOT EXISTS discard_requests (id TEXT PRIMARY KEY NOT NULL);
             CREATE TABLE IF NOT EXISTS sftp_known_hosts (
                 host TEXT NOT NULL, port INTEGER NOT NULL, fingerprint TEXT NOT NULL,
@@ -128,7 +185,7 @@ impl Store {
                 )?;
             }
         }
-        tx.pragma_update(None, "user_version", 2)?;
+        tx.pragma_update(None, "user_version", 3)?;
         tx.commit()?;
         Ok(store)
     }
@@ -240,7 +297,7 @@ impl Store {
     pub fn list(&self) -> Result<Vec<Task>> {
         let conn = self.connection()?;
         let mut statement = conn.prepare(
-            "SELECT id, request, state, output, error, size_verified, options, progress FROM tasks ORDER BY rowid",
+            "SELECT id, request, state, output, error, size_verified, options, progress, (SELECT root FROM cache_workspaces w WHERE w.id = tasks.id) FROM tasks ORDER BY rowid",
         )?;
         let mut rows = statement.query([])?;
         let mut tasks = Vec::new();
@@ -254,6 +311,7 @@ impl Store {
             let size_verified: Option<bool> = row.get(5)?;
             let options: Option<Vec<u8>> = row.get(6)?;
             let progress: Option<Vec<u8>> = row.get(7)?;
+            let cache_directory: Option<Vec<u8>> = row.get(8)?;
             tasks.push(decode_task(
                 id,
                 &encrypted,
@@ -263,6 +321,7 @@ impl Store {
                 size_verified,
                 options,
                 progress,
+                cache_directory,
             )?);
         }
         Ok(tasks)
@@ -598,7 +657,7 @@ impl Store {
 fn read_task(conn: &Connection, id: TaskId) -> Result<Option<Task>> {
     let row = conn
         .query_row(
-            "SELECT request, state, output, error, size_verified, options, progress FROM tasks WHERE id = ?1",
+            "SELECT request, state, output, error, size_verified, options, progress, (SELECT root FROM cache_workspaces w WHERE w.id = tasks.id) FROM tasks WHERE id = ?1",
             [id.to_string()],
             |row| {
                 Ok((
@@ -609,12 +668,13 @@ fn read_task(conn: &Connection, id: TaskId) -> Result<Option<Task>> {
                     row.get::<_, Option<bool>>(4)?,
                     row.get::<_, Option<Vec<u8>>>(5)?,
                     row.get::<_, Option<Vec<u8>>>(6)?,
+                    row.get::<_, Option<Vec<u8>>>(7)?,
                 ))
             },
         )
         .optional()?;
     row.map(
-        |(encrypted, state, output, error, size_verified, options, progress)| {
+        |(encrypted, state, output, error, size_verified, options, progress, cache_directory)| {
             decode_task(
                 id,
                 &encrypted,
@@ -624,6 +684,7 @@ fn read_task(conn: &Connection, id: TaskId) -> Result<Option<Task>> {
                 size_verified,
                 options,
                 progress,
+                cache_directory,
             )
         },
     )
@@ -640,6 +701,7 @@ fn decode_task(
     size_verified: Option<bool>,
     options: Option<Vec<u8>>,
     progress: Option<Vec<u8>>,
+    cache_directory: Option<Vec<u8>>,
 ) -> Result<Task> {
     let request = serde_json::from_slice(&secrets::unprotect(encrypted)?)?;
     let output_path = output
@@ -655,7 +717,11 @@ fn decode_task(
     let progress = progress
         .map(|encrypted| Ok::<_, Error>(serde_json::from_slice(&secrets::unprotect(&encrypted)?)?))
         .transpose()?;
+    let cache_directory = cache_directory
+        .map(|bytes| Ok::<_, Error>(serde_json::from_slice(&secrets::unprotect(&bytes)?)?))
+        .transpose()?;
     Ok(Task {
+        cache_directory,
         id,
         request,
         options,

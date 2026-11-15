@@ -31,6 +31,7 @@ use std::{
 
 mod media;
 mod settings;
+mod storage;
 mod tasks;
 mod updating;
 
@@ -71,6 +72,13 @@ pub(crate) struct Desktop {
     settings_open: HashSet<usize>,
     replacement_input: Entity<InputState>,
     directory_input: Entity<InputState>,
+    storage_download_input: Entity<InputState>,
+    cache_input: Entity<InputState>,
+    retention_input: Entity<InputState>,
+    storage_busy: bool,
+    cache_report: Option<ndm_core::CacheReport>,
+    update_cache_gate: Arc<tokio::sync::Mutex<()>>,
+    update_cache_lease: Option<tokio::sync::OwnedMutexGuard<()>>,
     active_input: Entity<InputState>,
     connections_input: Entity<InputState>,
     speed_input: Entity<InputState>,
@@ -165,6 +173,17 @@ impl Desktop {
         let replacement_input = cx.new(|cx| InputState::new(window, cx).placeholder("https://…"));
         let directory = preferences.download_dir.to_string_lossy().into_owned();
         let directory_input = cx.new(|cx| InputState::new(window, cx).default_value(directory));
+        let storage_download_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(preferences.download_dir.to_string_lossy().into_owned())
+        });
+        let cache_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(preferences.cache_dir.to_string_lossy().into_owned())
+        });
+        let retention_input = cx.new(|cx| {
+            InputState::new(window, cx).default_value(preferences.cache_retention_days.to_string())
+        });
         let active_input = cx.new(|cx| {
             InputState::new(window, cx).default_value(preferences.max_active_tasks.to_string())
         });
@@ -342,6 +361,13 @@ impl Desktop {
             settings_open: HashSet::new(),
             replacement_input,
             directory_input,
+            storage_download_input,
+            cache_input,
+            retention_input,
+            storage_busy: false,
+            cache_report: None,
+            update_cache_gate: Arc::new(tokio::sync::Mutex::new(())),
+            update_cache_lease: None,
             active_input,
             connections_input,
             speed_input,
@@ -397,6 +423,7 @@ impl Desktop {
             this.track_progress(cx);
         }
         this.start_update_watcher(cx);
+        this.start_storage_watcher(cx);
         this
     }
 
@@ -587,6 +614,7 @@ impl Desktop {
                                 let bytes = match progress.phase {
                                     ndm_core::ProgressPhase::Downloading => progress.transferred,
                                     ndm_core::ProgressPhase::Merging => progress.merged,
+                                    ndm_core::ProgressPhase::Saving => progress.saved,
                                     ndm_core::ProgressPhase::Finalizing => 0,
                                 };
                                 this.speed
@@ -705,8 +733,7 @@ impl Desktop {
                 self.scheduler.notify();
                 self.seen_tasks.insert(id);
                 self.show_progress(id, cx);
-                self.preferences.download_dir = request.destination.clone();
-                self.save_preferences(cx);
+
                 self.set_notice(self.text("下载已添加。", "Download added.").into(), cx);
                 self.section = Section::All;
                 self.new_download_open = false;

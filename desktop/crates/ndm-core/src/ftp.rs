@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     DownloadProgress, Error, NewTask, Result, Store, TaskId,
     continuation::{PartialFile, source_binding},
-    http::{RateLimiter, publish_no_overwrite, safe_filename},
+    http::{RateLimiter, publish_download, safe_filename},
 };
 
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(30);
@@ -46,7 +46,16 @@ pub async fn execute_ftp(
 ) -> Result<PathBuf> {
     let task = store.get(id)?.ok_or(Error::NotFound)?;
     store.start(id)?;
-    match download_ftp_with_progress(&task.request, id, options, cancel, progress.clone()).await {
+    match download_ftp_with_progress(
+        &task.request,
+        id,
+        options,
+        cancel,
+        progress.clone(),
+        Some(&task.work_directory()),
+    )
+    .await
+    {
         Ok(path) => {
             store.complete(id, &path, progress.snapshot().total.is_some())?;
             Ok(path)
@@ -74,7 +83,15 @@ pub async fn download_ftp(
     options: &FtpOptions,
     cancel: CancellationToken,
 ) -> Result<PathBuf> {
-    download_ftp_with_progress(request, id, options, cancel, DownloadProgress::default()).await
+    download_ftp_with_progress(
+        request,
+        id,
+        options,
+        cancel,
+        DownloadProgress::default(),
+        None,
+    )
+    .await
 }
 
 async fn download_ftp_with_progress(
@@ -83,6 +100,7 @@ async fn download_ftp_with_progress(
     options: &FtpOptions,
     cancel: CancellationToken,
     progress: DownloadProgress,
+    work_directory: Option<&std::path::Path>,
 ) -> Result<PathBuf> {
     let url = reqwest::Url::parse(&request.url).map_err(|_| Error::InvalidFtpAddress)?;
     if !matches!(url.scheme(), "ftp" | "ftps") || url.query().is_some() || url.fragment().is_some()
@@ -174,8 +192,11 @@ async fn download_ftp_with_progress(
     };
     progress.set_total(size);
     fs::create_dir_all(&request.destination).await?;
-    let work_dir = request.destination.join(format!(".ndm-next-{id}"));
+    let work_dir = work_directory
+        .map(std::path::Path::to_owned)
+        .unwrap_or_else(|| request.destination.join(format!(".ndm-next-{id}")));
     fs::create_dir_all(&work_dir).await?;
+    crate::cache::validate_directory(&work_dir)?;
     let temporary = work_dir.join("ftp.part");
     let binding = source_binding(&(&request.url, security, &options.additional_ca_der))?;
     let mut partial =
@@ -271,7 +292,14 @@ async fn download_ftp_with_progress(
             .or_else(|| path.rsplit('/').next())
             .unwrap_or("download"),
     );
-    let target = publish_no_overwrite(&temporary, &request.destination, &filename).await?;
+    let target = publish_download(
+        &temporary,
+        &request.destination,
+        &filename,
+        &progress,
+        &cancel,
+    )
+    .await?;
     let _ = fs::remove_file(&temporary).await;
     PartialFile::cleanup(&work_dir).await;
     let _ = tokio::time::timeout(Duration::from_secs(1), ftp.quit()).await;

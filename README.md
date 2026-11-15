@@ -12,6 +12,7 @@
 - Browser download capture with file type, size and domain filters.
 - Media library with search, format filters and batch downloads; optional buttons beside webpage media.
 - Search and categorize downloads; choose light or dark mode and English or Chinese.
+- Custom download and cache folders, with safe manual and scheduled cache cleanup.
 - Automatic desktop updates from GitHub.
 - The browser extension also works with Neat Download Manager.
 

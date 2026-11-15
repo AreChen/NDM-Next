@@ -1,3 +1,9 @@
+mod cache;
+mod directories;
+pub use cache::CacheReport;
+pub use directories::{
+    default_cache_directory, resolve_download_directory, system_download_directory,
+};
 mod continuation;
 mod dash;
 mod ftp;

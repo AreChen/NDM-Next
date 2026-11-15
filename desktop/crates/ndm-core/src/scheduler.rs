@@ -1,7 +1,6 @@
 use std::{
     collections::HashMap,
-    io,
-    path::Path,
+    path::PathBuf,
     sync::{
         Arc, Mutex, RwLock,
         atomic::{AtomicBool, Ordering},
@@ -27,6 +26,7 @@ pub struct SchedulerOptions {
     pub max_active_tasks: usize,
     pub http: HttpOptions,
     pub auto_resume: bool,
+    pub cache_directory: Option<PathBuf>,
 }
 impl Default for SchedulerOptions {
     fn default() -> Self {
@@ -34,6 +34,7 @@ impl Default for SchedulerOptions {
             max_active_tasks: 3,
             http: HttpOptions::default(),
             auto_resume: true,
+            cache_directory: None,
         }
     }
 }
@@ -84,6 +85,7 @@ struct Inner {
     store: Arc<Store>,
     options: RwLock<SchedulerOptions>,
     active: Mutex<HashMap<TaskId, Active>>,
+    maintenance: RwLock<()>,
     wake: Notify,
     shutdown: CancellationToken,
     events: broadcast::Sender<SchedulerEvent>,
@@ -107,6 +109,7 @@ impl Scheduler {
             store,
             options: RwLock::new(options),
             active: Mutex::new(HashMap::new()),
+            maintenance: RwLock::new(()),
             wake: Notify::new(),
             shutdown: CancellationToken::new(),
             events,
@@ -115,6 +118,73 @@ impl Scheduler {
         let dispatcher = runtime.spawn(dispatch(inner.clone()));
         *inner.dispatcher.lock().unwrap() = Some(dispatcher);
         Ok(Self(inner))
+    }
+
+    pub fn cache_usage(&self) -> Result<crate::CacheReport> {
+        self.maintain_cache(None, false)
+    }
+
+    /// Only completed/unreferenced workspaces are disposable. Never purge resumable tasks.
+    /// `cutoff` is the latest allowed modification time; `None` means manual cleanup.
+    pub fn clean_cache(&self, cutoff: Option<std::time::SystemTime>) -> Result<crate::CacheReport> {
+        self.maintain_cache(cutoff, true)
+    }
+
+    fn maintain_cache(
+        &self,
+        cutoff: Option<std::time::SystemTime>,
+        remove: bool,
+    ) -> Result<crate::CacheReport> {
+        let mut workspaces: HashMap<_, _> = self.0.store.cache_workspaces()?.into_iter().collect();
+        for task in self.0.store.list()? {
+            workspaces
+                .entry(task.id)
+                .or_insert_with(|| task.cache_directory.unwrap_or(task.request.destination));
+        }
+        let mut report = crate::CacheReport::default();
+        for (id, root) in workspaces {
+            // Starting workers also hold the maintenance gate while binding their workspace.
+            // Progress reads do not use this gate and remain responsive during cleanup.
+            let _maintenance = self.0.maintenance.write().unwrap();
+            let task = self.0.store.get(id)?;
+            let protected = task
+                .as_ref()
+                .is_some_and(|task| task.state != TaskState::Completed)
+                || self.0.active.lock().unwrap().contains_key(&id);
+            let files = match crate::cache::inspect(&root, id) {
+                Ok(Some(files)) => files,
+                Ok(None) => {
+                    if remove && task.is_none() {
+                        self.0.store.forget_cache_workspace(id)?;
+                    }
+                    continue;
+                }
+                Err(_) => {
+                    report.skipped_directories += 1;
+                    continue;
+                }
+            };
+            report.bytes = report.bytes.saturating_add(files.bytes);
+            if protected {
+                report.protected_bytes = report.protected_bytes.saturating_add(files.bytes);
+                continue;
+            }
+            report.reclaimable_bytes = report.reclaimable_bytes.saturating_add(files.bytes);
+            if remove && cutoff.is_none_or(|cutoff| files.modified <= cutoff) {
+                let bytes = files.bytes;
+                match files.remove() {
+                    Ok(count) => {
+                        report.removed_bytes = report.removed_bytes.saturating_add(bytes);
+                        report.removed_files += count;
+                        if task.is_none() {
+                            self.0.store.forget_cache_workspace(id)?;
+                        }
+                    }
+                    Err(_) => report.skipped_directories += 1,
+                }
+            }
+        }
+        Ok(report)
     }
 
     /// Wake the dispatcher after another component commits a task.
@@ -139,13 +209,17 @@ impl Scheduler {
 
     /// Remove a task only after its worker has stopped. Completed files are kept.
     pub fn delete(&self, id: TaskId, remove_partial: bool) -> Result<()> {
-        // The dispatcher inserts workers under the same lock. Holding it until
-        // the record is removed prevents a queued task from starting mid-delete.
+        // Block dispatch while deleting files without holding the progress-map lock.
+        let _maintenance = self.0.maintenance.write().unwrap();
         let active = self.0.active.lock().unwrap();
         if active.contains_key(&id) {
             return Err(Error::InvalidState);
         }
+        drop(active);
         let task = self.0.store.get(id)?.ok_or(Error::NotFound)?;
+        if task.cache_directory.is_none() && task.work_directory().try_exists()? {
+            self.0.store.assign_workspace(id, None)?;
+        }
         if !matches!(
             task.state,
             TaskState::Queued | TaskState::Paused | TaskState::Failed | TaskState::Completed
@@ -153,7 +227,12 @@ impl Scheduler {
             return Err(Error::InvalidState);
         }
         if remove_partial && task.state != TaskState::Completed {
-            remove_owned_partial_files(&task.request.destination, id)?;
+            crate::cache::remove_partial(
+                task.cache_directory
+                    .as_deref()
+                    .unwrap_or(&task.request.destination),
+                id,
+            )?;
         }
         self.0.store.delete(id)
     }
@@ -274,67 +353,6 @@ impl Scheduler {
     }
 }
 
-fn is_reparse_point(metadata: &std::fs::Metadata) -> bool {
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-    }
-    #[cfg(not(windows))]
-    {
-        metadata.file_type().is_symlink()
-    }
-}
-
-fn remove_owned_partial_files(destination: &Path, id: TaskId) -> Result<()> {
-    let directory = destination.join(format!(".ndm-next-{id}"));
-    let metadata = match std::fs::symlink_metadata(&directory) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error.into()),
-    };
-    if !metadata.is_dir() || is_reparse_point(&metadata) {
-        return Err(io::Error::other("temporary directory is not a regular directory").into());
-    }
-    let mut files = Vec::new();
-    for entry in std::fs::read_dir(&directory)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        let known = matches!(
-            name.as_ref(),
-            "resume.bin"
-                | "assembled.part"
-                | "ftp.part"
-                | "sftp.part"
-                | "protocol-resume.bin"
-                | "protocol-resume.pending"
-                | "hls-output.mp4"
-                | "hls-output.mp4.hls-partial"
-                | "hls-checkpoint.sqlite"
-                | "hls-checkpoint.sqlite-journal"
-        ) || name
-            .strip_prefix("segment-")
-            .and_then(|name| name.strip_suffix(".part"))
-            .and_then(|index| index.parse::<usize>().ok())
-            .is_some_and(|index| index < 16 && name == format!("segment-{index}.part"))
-            || crate::dash::owns_partial_name(&name);
-        let metadata = std::fs::symlink_metadata(entry.path())?;
-        if !known || !metadata.is_file() || is_reparse_point(&metadata) {
-            return Err(
-                io::Error::other("temporary directory contains an unexpected entry").into(),
-            );
-        }
-        files.push(entry.path());
-    }
-    for file in files {
-        std::fs::remove_file(file)?;
-    }
-    std::fs::remove_dir(directory)?;
-    Ok(())
-}
-
 async fn dispatch(inner: Arc<Inner>) {
     loop {
         if inner.shutdown.is_cancelled() {
@@ -372,6 +390,7 @@ async fn dispatch(inner: Arc<Inner>) {
                 if started >= capacity || inner.shutdown.is_cancelled() {
                     break;
                 }
+                let _maintenance = inner.maintenance.read().unwrap();
                 let mut active = inner.active.lock().unwrap();
                 if active.contains_key(&task.id) {
                     continue;
@@ -414,9 +433,18 @@ async fn dispatch(inner: Arc<Inner>) {
 
 async fn run_one(inner: Arc<Inner>, task: Task, active: Active, done: watch::Sender<bool>) {
     let _ = inner.events.send(SchedulerEvent::Started(task.id));
-    let result = std::panic::AssertUnwindSafe(execute_one(&inner, &task, &active))
-        .catch_unwind()
-        .await;
+    let result = std::panic::AssertUnwindSafe(async {
+        {
+            let _maintenance = inner.maintenance.read().unwrap();
+            let preferred = inner.options.read().unwrap().cache_directory.clone();
+            inner
+                .store
+                .assign_workspace(task.id, preferred.as_deref())?;
+        }
+        execute_one(&inner, &task, &active).await
+    })
+    .catch_unwind()
+    .await;
     match result {
         Ok(Err(Error::SftpUnknownHost { fingerprint })) => {
             let _ = inner.events.send(SchedulerEvent::SftpHostKeyRequired {

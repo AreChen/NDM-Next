@@ -27,6 +27,11 @@ pub struct Preferences {
     pub theme: Theme,
     pub sidebar_collapsed: bool,
     pub download_dir: PathBuf,
+    pub use_system_download_dir: bool,
+    pub cache_dir: PathBuf,
+    pub previous_cache_dirs: Vec<PathBuf>,
+    pub cache_retention_days: u32,
+    pub last_cache_cleanup: Option<u64>,
     pub max_active_tasks: usize,
     pub max_connections: usize,
     pub auto_resume: bool,
@@ -41,15 +46,17 @@ pub struct Preferences {
 
 impl Default for Preferences {
     fn default() -> Self {
-        let download_dir = std::env::var_os("USERPROFILE")
-            .map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir)
-            .join("Downloads");
+        let download_dir = ndm_core::system_download_directory();
         Self {
             language: Language::Chinese,
             theme: Theme::System,
             sidebar_collapsed: false,
             download_dir,
+            use_system_download_dir: true,
+            cache_dir: ndm_core::default_cache_directory(),
+            previous_cache_dirs: Vec::new(),
+            cache_retention_days: 7,
+            last_cache_cleanup: None,
             max_active_tasks: 3,
             max_connections: 4,
             auto_resume: true,
@@ -70,6 +77,21 @@ impl Preferences {
                     serde_json::from_slice(&data).map_err(std::io::Error::other)?;
                 let mut preferences: Self =
                     serde_json::from_value(value.clone()).map_err(std::io::Error::other)?;
+                let (directory, automatic) = ndm_core::resolve_download_directory(
+                    value
+                        .get("download_dir")
+                        .and_then(|value| value.as_str())
+                        .map(Path::new),
+                    value
+                        .get("use_system_download_dir")
+                        .and_then(|value| value.as_bool()),
+                );
+                preferences.download_dir = directory;
+                preferences.use_system_download_dir = automatic;
+                if !preferences.cache_dir.is_absolute() {
+                    preferences.cache_dir = ndm_core::default_cache_directory();
+                }
+                preferences.cache_retention_days = preferences.cache_retention_days.min(3650);
                 if let Some(encrypted) = value.get("proxy_protected") {
                     let encrypted: Vec<u8> =
                         serde_json::from_value(encrypted.clone()).map_err(std::io::Error::other)?;
@@ -116,6 +138,7 @@ impl Preferences {
     pub fn scheduler_options(&self) -> ndm_core::SchedulerOptions {
         ndm_core::SchedulerOptions {
             max_active_tasks: self.max_active_tasks,
+            cache_directory: Some(self.cache_dir.join("transfers")),
             auto_resume: self.auto_resume,
             http: ndm_core::HttpOptions {
                 max_connections: self.max_connections,

@@ -72,6 +72,8 @@ impl TaskState {
 
 #[derive(Clone, Debug)]
 pub struct Task {
+    /// Persisted per task so changing the cache setting cannot discard resumable data.
+    pub cache_directory: Option<PathBuf>,
     pub id: TaskId,
     pub request: NewTask,
     pub options: TaskOptions,
@@ -80,4 +82,13 @@ pub struct Task {
     pub error: Option<String>,
     pub size_verified: Option<bool>,
     pub progress: Option<crate::ProgressSnapshot>,
+}
+
+impl Task {
+    pub fn work_directory(&self) -> PathBuf {
+        self.cache_directory
+            .as_deref()
+            .unwrap_or(&self.request.destination)
+            .join(format!(".ndm-next-{}", self.id))
+    }
 }

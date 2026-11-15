@@ -13,6 +13,31 @@ fn request(id: TaskId) -> Value {
 }
 
 #[test]
+fn changing_default_directory_keeps_existing_handoffs_idempotent() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::open(&directory.path().join("tasks.db")).unwrap());
+    let first = directory.path().join("first");
+    let second = directory.path().join("second");
+    let id = TaskId::new_v4();
+    assert_eq!(
+        Host::new(store.clone(), first.clone()).handle(request(id))["ok"],
+        true
+    );
+    let host = Host::new(store.clone(), second.clone());
+    assert_eq!(host.handle(request(id))["ok"], true);
+    assert_eq!(store.get(id).unwrap().unwrap().request.destination, first);
+    let new_id = TaskId::new_v4();
+    assert_eq!(host.handle(request(new_id))["ok"], true);
+    assert_eq!(
+        store.get(new_id).unwrap().unwrap().request.destination,
+        second
+    );
+    let mut conflict = request(id);
+    conflict["task"]["url"] = json!("https://example.test/other-file.zip");
+    assert_eq!(host.handle(conflict)["ok"], false);
+}
+
+#[test]
 fn native_frames_are_little_endian_and_bounded() {
     let payload = br#"{"type":"status"}"#;
     let mut framed = Vec::new();

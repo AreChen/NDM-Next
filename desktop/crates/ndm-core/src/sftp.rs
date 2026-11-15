@@ -18,7 +18,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     DownloadProgress, Error, NewTask, Result, Store, TaskId,
     continuation::{PartialFile, source_binding},
-    http::{RateLimiter, publish_no_overwrite, safe_filename},
+    http::{RateLimiter, publish_download, safe_filename},
 };
 
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(30);
@@ -84,7 +84,16 @@ pub async fn execute_sftp(
 ) -> Result<PathBuf> {
     let task = store.get(id)?.ok_or(Error::NotFound)?;
     store.start(id)?;
-    match download_sftp_with_progress(&task.request, id, options, cancel, progress.clone()).await {
+    match download_sftp_with_progress(
+        &task.request,
+        id,
+        options,
+        cancel,
+        progress.clone(),
+        Some(&task.work_directory()),
+    )
+    .await
+    {
         Ok(path) => {
             store.complete(id, &path, progress.snapshot().total.is_some())?;
             Ok(path)
@@ -123,7 +132,15 @@ pub async fn download_sftp(
     options: &SftpOptions,
     cancel: CancellationToken,
 ) -> Result<PathBuf> {
-    download_sftp_with_progress(request, id, options, cancel, DownloadProgress::default()).await
+    download_sftp_with_progress(
+        request,
+        id,
+        options,
+        cancel,
+        DownloadProgress::default(),
+        None,
+    )
+    .await
 }
 
 async fn download_sftp_with_progress(
@@ -132,6 +149,7 @@ async fn download_sftp_with_progress(
     options: &SftpOptions,
     cancel: CancellationToken,
     progress: DownloadProgress,
+    work_directory: Option<&std::path::Path>,
 ) -> Result<PathBuf> {
     let url = reqwest::Url::parse(&request.url).map_err(|_| Error::InvalidSftpAddress)?;
     if url.scheme() != "sftp" || url.query().is_some() || url.fragment().is_some() {
@@ -223,8 +241,11 @@ async fn download_sftp_with_progress(
     let size = metadata.size.or(request.expected_size);
     progress.set_total(size);
     fs::create_dir_all(&request.destination).await?;
-    let work_dir = request.destination.join(format!(".ndm-next-{id}"));
+    let work_dir = work_directory
+        .map(std::path::Path::to_owned)
+        .unwrap_or_else(|| request.destination.join(format!(".ndm-next-{id}")));
     fs::create_dir_all(&work_dir).await?;
+    crate::cache::validate_directory(&work_dir)?;
     let temporary = work_dir.join("sftp.part");
     let binding = source_binding(&(&request.url, &options.trusted_fingerprint, &options.auth))?;
     // Host keys authenticate the server, not a file version. SFTP's size/mtime do not
@@ -299,7 +320,14 @@ async fn download_sftp_with_progress(
             .or_else(|| path.rsplit('/').next())
             .unwrap_or("download"),
     );
-    let target = publish_no_overwrite(&temporary, &request.destination, &filename).await?;
+    let target = publish_download(
+        &temporary,
+        &request.destination,
+        &filename,
+        &progress,
+        &cancel,
+    )
+    .await?;
     let _ = fs::remove_file(&temporary).await;
     PartialFile::cleanup(&work_dir).await;
     Ok(target)
