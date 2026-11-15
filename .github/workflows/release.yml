@@ -5,40 +5,75 @@ on:
     tags:
       - 'desktop-v*'
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Existing desktop-vX.Y.Z tag to publish'
+        required: true
+        type: string
+      artifact_run_id:
+        description: 'Optional release run to reuse after a publishing failure'
+        required: false
+        type: string
 
 permissions:
   contents: read
+  actions: read
+
+env:
+  GH_REPO: ${{ github.repository }}
+  RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
 
 jobs:
   windows:
+    if: ${{ !inputs.artifact_run_id }}
     uses: ./.github/workflows/windows-installer.yml
     secrets: inherit
 
   macos:
+    if: ${{ !inputs.artifact_run_id }}
     uses: ./.github/workflows/macos-build.yml
     secrets: inherit
 
   publish:
     name: Publish GitHub release
     needs: [windows, macos]
+    if: ${{ !cancelled() && (inputs.artifact_run_id || (needs.windows.result == 'success' && needs.macos.result == 'success')) }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      actions: read
     steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+      - name: Validate artifact provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id || github.run_id }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#desktop-v}"
+          [[ "$RELEASE_TAG" == desktop-v* && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$ARTIFACT_RUN_ID" =~ ^[0-9]+$ ]]
+          run_sha=$(gh api "repos/$GH_REPO/actions/runs/$ARTIFACT_RUN_ID" --jq '.head_sha')
+          [[ "$run_sha" == "$(git rev-parse HEAD)" ]]
       - name: Download Windows artifact
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: ndm-next-windows-installer-unsigned
           path: release-assets
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.artifact_run_id || github.run_id }}
       - name: Download macOS artifacts
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: ndm-next-macos-*
           path: release-assets
           merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.artifact_run_id || github.run_id }}
       - name: Validate release version and checksums
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#desktop-v}"
@@ -46,14 +81,15 @@ jobs:
           [[ -n "$(find release-assets -type f -name 'NDM-Next-Setup-*-x64.exe' -print -quit)" ]]
           mapfile -t dmgs < <(find release-assets -type f -name 'NDM-Next-*-macos-*.dmg' -print)
           [[ "${#dmgs[@]}" -eq 2 ]]
-          for digest in release-assets/**/*.sha256; do
-            [[ -f "$digest" ]] || continue
+          while IFS= read -r -d '' digest; do
             (cd "$(dirname "$digest")" && shasum -a 256 --check "$(basename "$digest")")
+          done < <(find release-assets -type f -name '*.sha256' -print0)
+          for dmg in "${dmgs[@]}"; do
+            [[ -f "$dmg.sha256" ]]
           done
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           mapfile -t assets < <(find release-assets -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.sha256' \) -print)
