@@ -1764,7 +1764,11 @@ impl Render for Desktop {
                         | UpdateState::Installing
                 ) || self.remembered_update()
                     || (self.update_state == UpdateState::Failed && self.install_update_when_idle),
-                |bar| bar.child(self.title_update_button(cx)),
+                |bar| {
+                    bar.child(crate::chrome::title_bar_action(
+                        self.title_update_button(cx),
+                    ))
+                },
             ))
             .child(
                 div()

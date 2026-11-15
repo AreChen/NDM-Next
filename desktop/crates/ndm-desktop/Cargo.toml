@@ -29,3 +29,7 @@ winreg = "0.56"
 
 [build-dependencies]
 embed-resource = "3.0.12"
+
+[dev-dependencies]
+# Enable headless GPUI hit testing without changing release features.
+gpui-pre = { version = "=0.3.12", features = ["test-support"] }
