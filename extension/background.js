@@ -5,6 +5,7 @@ const requests = new Map();
 const pendingApprovals = new Map();
 const tabEpochs = new Map();
 const mediaNotices = new Map();
+const mediaOpenings = new Map();
 const SETTING_KEYS = new Set(Object.keys(DEFAULTS));
 const HOST = 'com.ndmnext.host';
 const RECOVERY_ALARM = 'ndm-next-recover';
@@ -304,7 +305,7 @@ chrome.webRequest.onHeadersReceived.addListener(async details => {
   try {
     const headers = Object.fromEntries((details.responseHeaders || []).map(h => [h.name.toLowerCase(), h.value || '']));
     const type = (headers['content-type'] || '').split(';')[0].trim().toLowerCase();
-    if (!/^(audio|video)\//.test(type) && !isMediaManifest({url:details.url,type})) return;
+    if (!mediaKind({url:details.url,type})) return;
     const config = await settings(); if (!config.media) return;
     if (details.statusCode && (details.statusCode < 200 || details.statusCode >= 300)) return;
     const tab = await chrome.tabs.get(details.tabId);
@@ -344,27 +345,59 @@ function mediaSize(details, headers) {
   return Number.isSafeInteger(size) && size > 0 ? size : undefined;
 }
 chrome.tabs.onUpdated.addListener((id,change) => {
-  if (change.status === 'loading') { invalidatedMediaTabs.add(id);mediaByTab.delete(id); tabEpochs.set(id,(tabEpochs.get(id) || 0)+1);mediaDirty=true;persistMedia().catch(()=>{}); }
+  if (change.status === 'loading') { invalidatedMediaTabs.add(id);mediaByTab.delete(id); tabEpochs.set(id,(tabEpochs.get(id) || 0)+1);mediaDirty=true;persistMedia().catch(()=>{});notifyMedia(id); }
 });
-chrome.tabs.onRemoved.addListener(id => { invalidatedMediaTabs.add(id);mediaByTab.delete(id); tabEpochs.set(id,(tabEpochs.get(id) || 0)+1);clearTimeout(mediaNotices.get(id));mediaNotices.delete(id);mediaDirty=true;persistMedia().catch(()=>{}); });
+chrome.tabs.onRemoved.addListener(id => { invalidatedMediaTabs.add(id);mediaByTab.delete(id); tabEpochs.set(id,(tabEpochs.get(id) || 0)+1);clearTimeout(mediaNotices.get(id));mediaNotices.delete(id);mediaDirty=true;persistMedia().catch(()=>{});notifyMedia(id); });
+function resourceWindowTab(sender) {
+  if (sender.id !== chrome.runtime.id || typeof sender.url !== 'string') return null;
+  const prefix=chrome.runtime.getURL('media.html')+'?tab=';
+  if (!sender.url.startsWith(prefix)) return null;
+  const raw=sender.url.slice(prefix.length),id=Number(raw);
+  return /^\d+$/.test(raw) && Number.isSafeInteger(id) && id >= 0 ? id : null;
+}
+function mediaUi(sender) {
+  return sender.id === chrome.runtime.id && (sender.url === chrome.runtime.getURL('popup.html') || resourceWindowTab(sender) !== null);
+}
 function mediaTab(message,sender) {
   if (sender.id !== chrome.runtime.id) return null;
+  const source=resourceWindowTab(sender);
+  if (source !== null) return message.tabId === source ? source : null;
+  if (sender.url === chrome.runtime.getURL('popup.html')) return Number.isSafeInteger(message.tabId) && message.tabId >= 0 ? message.tabId : null;
+  if (sender.url?.startsWith(chrome.runtime.getURL(''))) return null;
   if (sender.tab) {
     if (!Number.isInteger(sender.tab.id) || (message.tabId !== undefined && message.tabId !== sender.tab.id)) return null;
     return sender.tab.id;
   }
-  return sender.id === chrome.runtime.id && sender.url === chrome.runtime.getURL?.('popup.html') && Number.isInteger(message.tabId) ? message.tabId : null;
+  return null;
 }
 function visibleMedia(tabId,sender,config) {
   return (mediaByTab.get(tabId) || []).filter(({item}) => config.media && !shouldSkip(item,config)
-    && (!sender.tab || (item.frameId === (sender.frameId ?? 0)
+    && (mediaUi(sender) || !sender.tab || (item.frameId === (sender.frameId ?? 0)
       && (!item.documentId || !sender.documentId || item.documentId === sender.documentId))));
+}
+async function openMediaWindow(tabId) {
+  if (mediaOpenings.has(tabId)) return mediaOpenings.get(tabId);
+  const pending=(async()=>{
+    await chrome.tabs.get(tabId);
+    const url=chrome.runtime.getURL('media.html')+'?tab='+tabId;
+    const existing=(await chrome.windows.getAll({populate:true,windowTypes:['popup']}))
+      .find(window=>window.tabs?.some(tab=>tab.url === url));
+    if (existing) await chrome.windows.update(existing.id,{focused:true,state:'normal'});
+    else await chrome.windows.create({url,type:'popup',width:880,height:540,focused:true});
+    return {ok:true};
+  })();
+  mediaOpenings.set(tabId,pending);
+  try {return await pending;} finally {mediaOpenings.delete(tabId);}
 }
 chrome.runtime.onMessage.addListener((message,sender,reply) => {
   (async () => {
     let config = await settings();
     if (message.action === 'status') return {connected:await status(config)};
     const tabId = mediaTab(message,sender);
+    if (message.action === 'openMediaWindow') {
+      if (tabId === null || !mediaUi(sender)) return {ok:false,error:'invalid_sender'};
+      return openMediaWindow(tabId);
+    }
     if ((message.action === 'media' || message.action === 'send') && tabId !== null) {
       await mediaReady;
       await persistMedia();
@@ -372,7 +405,8 @@ chrome.runtime.onMessage.addListener((message,sender,reply) => {
     }
     if (message.action === 'media') {
       if (tabId === null) return {ok:false,error:'invalid_sender'};
-      return {items:visibleMedia(tabId,sender,config).map(entry => entry.item),inlineMedia:config.inlineMedia,language:config.language};
+      const source=resourceWindowTab(sender) !== null ? await chrome.tabs.get(tabId).catch(()=>null) : undefined;
+      return {items:source === null ? [] : visibleMedia(tabId,sender,config).map(entry => entry.item),inlineMedia:config.inlineMedia,language:config.language,source:source && {title:source.title,url:source.url}};
     }
     if (message.action === 'send') {
       if (tabId === null) return {ok:false,error:'invalid_sender'};

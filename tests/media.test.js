@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 
 function setup(type, config={}, options={}) {
-  const listeners={}, prepared=[],localWrites=[];
+  const listeners={}, prepared=[],localWrites=[],windowCalls=[];const openWindows=[];
   let pauseTab=false,releaseTab;
   const storage={get:async key=>key===null?{}:{...key,backend:'next',...config},set:async value=>localWrites.push(value),remove:async()=>{}};
   const session=options.session && {setAccessLevel:async value=>{options.session.access=value.accessLevel;},get:async key=>{await options.restoreGate;return structuredClone({[key]:options.session[key]});},set:async value=>{options.session.writes=(options.session.writes || 0)+1;Object.assign(options.session,structuredClone(value));}};
@@ -12,6 +12,7 @@ function setup(type, config={}, options={}) {
     storage:{local:storage,session}, downloads:{onCreated:{addListener(){}}},
     webRequest:{onBeforeSendHeaders:{addListener:f=>listeners.headers=f},onHeadersReceived:{addListener:f=>listeners.media=f}},
     tabs:{onUpdated:{addListener:fn=>listeners.navigation=fn},onRemoved:{addListener:fn=>listeners.removed=fn},get:async id=>{if(pauseTab)await new Promise(resolve=>releaseTab=resolve);return {url:`https://page.test/${id}`};}},
+    windows:{getAll:async()=>openWindows,create:async options=>{windowCalls.push(options);const window={id:10,tabs:[{url:options.url}]};openWindows.push(window);return window;},update:async(id,options)=>windowCalls.push({id,...options})},
     runtime:{id:'extension',getURL:path=>'chrome-extension://extension/'+path,onInstalled:{addListener(){}},onMessage:{addListener:f=>listeners.message=f},sendNativeMessage:async (_host,msg)=>{
       if(msg.type==='prepare') prepared.push(msg.task);
       return {ok:true,state:msg.type==='prepare'?'prepared':'queued'};
@@ -21,7 +22,7 @@ function setup(type, config={}, options={}) {
     importScripts(...files){for(const file of files)vm.runInContext(fs.readFileSync('extension/'+file,'utf8'),ctx)}};
   vm.createContext(ctx); vm.runInContext(fs.readFileSync('extension/background.js','utf8'),ctx);
   const send=(message,sender={id:'extension',url:'chrome-extension://extension/popup.html'})=>new Promise(resolve=>listeners.message(message,sender,resolve));
-  return {prepared,localWrites,send,pauseTab:()=>pauseTab=true,releaseTab:()=>releaseTab(),navigate:()=>listeners.navigation(1,{status:'loading'}),remove:()=>listeners.removed(1),observe:async (tabId,requestId,cookie,extra={})=>{
+  return {prepared,localWrites,windowCalls,send,pauseTab:()=>pauseTab=true,releaseTab:()=>releaseTab(),navigate:()=>listeners.navigation(1,{status:'loading'}),remove:()=>listeners.removed(1),observe:async (tabId,requestId,cookie,extra={})=>{
     const url=extra.url || 'https://video.test/playlist?id=42';
     listeners.headers({requestId,tabId,url,frameId:extra.frameId??0,documentId:extra.requestDocumentId??extra.documentId,method:'GET',requestHeaders:[{name:'Cookie',value:cookie},...(extra.requestHeaders||[])]});
     await listeners.media({requestId,tabId,url,frameId:extra.frameId??0,documentId:extra.documentId,method:'GET',statusCode:extra.statusCode??200,responseHeaders:[{name:'Content-Type',value:type},{name:'Content-Length',value:'512'},...(extra.responseHeaders||[])]});
@@ -43,6 +44,41 @@ for (const type of ['application/vnd.apple.mpegurl','application/dash+xml']) tes
   const other=await t.send({action:'media',tabId:2});
   assert.equal((await t.send({action:'send',tabId:2,item:other.items[0]})).ok,true);
   assert.equal(t.prepared[1].headers.cookie,'other=2');
+});
+
+test('known video and audio extensions are detected when servers use generic MIME types',async()=>{
+  for(const extension of ['webm','mkv','mov','flv','mp3','m4a','ogg','opus','flac','wav']) {
+    const t=setup('application/octet-stream',{minBytes:0});
+    await t.observe(1,'file','session=1',{url:`https://video.test/file.${extension}?token=1`});
+    assert.equal((await t.send({action:'media',tabId:1})).items.length,1,extension);
+  }
+});
+
+test('resource windows stay bound to their source tab and focus an existing window',async()=>{
+  const t=setup('video/mp4',{minBytes:0});
+  await t.observe(1,'first','session=1',{frameId:2});await t.observe(2,'other','session=2');
+  assert.equal((await t.send({action:'openMediaWindow',tabId:1})).ok,true);
+  assert.equal(t.windowCalls[0].url,'chrome-extension://extension/media.html?tab=1');
+  assert.equal(t.windowCalls[0].focused,true);
+  assert.equal((await t.send({action:'openMediaWindow',tabId:1})).ok,true);
+  assert.equal(t.windowCalls.length,2);assert.equal(t.windowCalls[1].id,10);
+  const sender={id:'extension',url:'chrome-extension://extension/media.html?tab=1',tab:{id:99}};
+  const result=await t.send({action:'media',tabId:1},sender);
+  assert.equal(result.items.length,1);assert.equal(result.items[0].frameId,2);
+  assert.equal((await t.send({action:'send',tabId:1,id:result.items[0].id},sender)).ok,true);
+  assert.equal(t.prepared[0].headers.cookie,'session=1');
+  for(const invalid of [{...sender,url:'https://evil.test/media.html?tab=1'},{...sender,url:'chrome-extension://extension/media.html?tab=2'},{...sender,id:'other'}]) {
+    assert.equal((await t.send({action:'media',tabId:1},invalid)).ok,false);
+  }
+  assert.equal((await t.send({action:'openMediaWindow',tabId:1},{id:'extension',url:'https://page.test/1',tab:{id:1}})).ok,false);
+  t.navigate();assert.equal((await t.send({action:'media',tabId:1},sender)).items.length,0);
+});
+
+test('HTML and arbitrary binary files are not mistaken for media by their suffix',async()=>{
+  for(const [type,url] of [['text/html','https://video.test/movie.mp4'],['application/octet-stream','https://video.test/data.bin']]) {
+    const t=setup(type,{minBytes:0});await t.observe(1,'file','', {url});
+    assert.equal((await t.send({action:'media',tabId:1})).items.length,0);
+  }
 });
 
 test('range media sends a full GET using its observed credentials and complete length',async()=>{

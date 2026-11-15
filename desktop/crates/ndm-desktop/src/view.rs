@@ -543,6 +543,9 @@ impl Desktop {
             },
         ) {
             Ok((handle, view)) => {
+                // Opening a window while the browser owns focus is insufficient
+                // on Windows. Explicit activation also restores minimized windows.
+                let _ = handle.update(cx, |_, window, _| window.activate_window());
                 self.progress_windows.insert(id, (handle, view.downgrade()));
             }
             Err(_) => self.set_notice(

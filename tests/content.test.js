@@ -6,9 +6,9 @@ const fs=require('node:fs');
 // A small DOM boundary double: production matching, rendering, messaging and
 // lifecycle code run unchanged, without browser automation or network access.
 function setup({popovers=true}={}) {
-  const nodes=[],listeners={},messages=[],frames=[],observers=[];
+  const nodes=[],listeners={},messages=[],frames=[],observers=[],timers=new Map();let timerSequence=0;
   class Element {
-    constructor(tag) {this.tag=tag;this.children=[];this.style={};this.attributes={};this.events={};this.textContent='';this.isConnected=false;this.offsetWidth=190;this.offsetHeight=30;this.classes=new Set();this.classList={add:value=>this.classes.add(value),contains:value=>this.classes.has(value)};nodes.push(this);}
+    constructor(tag) {this.tag=tag;this.children=[];this.style={};this.attributes={};this.events={};this.textContent='';this.isConnected=false;this.offsetWidth=190;this.offsetHeight=30;this.classes=new Set();this.classList={add:value=>this.classes.add(value),remove:value=>this.classes.delete(value),contains:value=>this.classes.has(value)};nodes.push(this);}
     showPopover() {this.popoverOpen=true;}
     hidePopover() {this.popoverOpen=false;}
     matches(selector) {return selector===':popover-open' && this.popoverOpen===true;}
@@ -30,12 +30,12 @@ function setup({popovers=true}={}) {
     messages.push(message);if(message.action==='media') return {items:blocked?[]:[item],inlineMedia,language:'en'};
     if(reject)throw Error('offline');return {ok:true};
   }},storage:{onChanged:{addListener:fn=>listeners.storage=fn}}};
-  const ctx={document,chrome,URL,Intl,innerWidth:1000,innerHeight:800,getComputedStyle:()=>({visibility:'visible'}),requestAnimationFrame:fn=>{frames.push(fn);return frames.length;},ResizeObserver:class{observe(){}unobserve(){}},MutationObserver:class{constructor(fn){observers.push(fn);}observe(){}},addEventListener:(name,fn)=>listeners[name]=fn};
+  const ctx={document,chrome,URL,Intl,setTimeout:(fn,delay)=>{const id=++timerSequence;timers.set(id,{fn,delay});return id;},clearTimeout:id=>timers.delete(id),innerWidth:1000,innerHeight:800,getComputedStyle:()=>({visibility:'visible'}),requestAnimationFrame:fn=>{frames.push(fn);return frames.length;},ResizeObserver:class{observe(){}unobserve(){}},MutationObserver:class{constructor(fn){observers.push(fn);}observe(){}},addEventListener:(name,fn)=>listeners[name]=fn};
   vm.createContext(ctx);
   for(const file of ['rules.js','media-ui.js','content.js']) vm.runInContext(fs.readFileSync('extension/'+file,'utf8'),ctx);
   const flush=async()=>{await new Promise(resolve=>setImmediate(resolve));while(frames.length)frames.shift()();};
   const addPlayer=()=>{const player=new Element('video');player.src=item.url;player.currentSrc=item.url;root.append(player);players.push(player);observers[0]();return player;};
-  return {messages,listeners,flush,addPlayer,host:()=>root.children.find(node=>node.attributes.popover==='manual'),buttons:()=>nodes.filter(node=>node.tag==='button' && node.isConnected),disable:()=>{inlineMedia=false;listeners.storage({inlineMedia:{newValue:false}},'local');},block:()=>{blocked=true;listeners.storage({blockedDomains:{newValue:['page.test']}},'local');},reject:()=>reject=true,remove:player=>{player.remove();players=players.filter(p=>p!==player);observers[0]();}};
+  return {messages,listeners,flush,addPlayer,timers,expire:()=>{for(const [id,{fn}] of [...timers]){timers.delete(id);fn();}},host:()=>root.children.find(node=>node.attributes.popover==='manual'),buttons:()=>nodes.filter(node=>node.tag==='button' && node.isConnected),disable:()=>{inlineMedia=false;listeners.storage({inlineMedia:{newValue:false}},'local');},block:()=>{blocked=true;listeners.storage({blockedDomains:{newValue:['page.test']}},'local');},reject:()=>reject=true,remove:player=>{player.remove();players=players.filter(p=>p!==player);observers[0]();}};
 }
 
 test('inline button uses detected ID, reports failed sends and disappears when disabled',async()=>{
@@ -47,6 +47,17 @@ test('inline button uses detected ID, reports failed sends and disappears when d
   const message=t.messages.find(message=>message.action==='send');
   assert.deepEqual(Object.keys(message).sort(),['action','id']);assert.equal(message.id,'detected');
   t.disable();await t.flush();assert.equal(t.buttons().length,0);
+});
+
+test('send notices expire and restore the compact button; disabling clears pending notices',async()=>{
+  const t=setup();t.addPlayer();await t.flush();const [button]=t.buttons();
+  await button.events.click({preventDefault(){},stopPropagation(){}});
+  assert.equal(t.timers.size,1);
+  assert([...t.timers.values()][0].delay<=1500);
+  t.expire();await t.flush();assert.equal(button.classList.contains('notice'),false);
+  assert(button.children.some(child=>/NDM.*Download/.test(child.textContent)));
+  t.reject();await button.events.click({preventDefault(){},stopPropagation(){}});
+  assert.equal(t.timers.size,1);t.disable();await t.flush();assert.equal(t.timers.size,0);
 });
 
 test('SPA media insertion and removal use cached captures without request polling',async()=>{

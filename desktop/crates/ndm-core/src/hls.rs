@@ -10,9 +10,9 @@ use std::{
 use futures_util::{StreamExt, future::try_join_all};
 use hls_engine::{
     ByteRange, CheckpointDurability, EmbeddedAudio, EngineCause, EngineEndReason, EngineError,
-    EngineErrorKind, EngineEvent, EngineInput, EngineInputs, EngineMode, EngineOptions,
-    EngineSession, EngineState, EngineWait, RecoveryOptions, Source, SourceLocation, TextResource,
-    TrackMetadata,
+    EngineErrorKind, EngineEvent, EngineInput, EngineInputs, EngineLimits, EngineMode,
+    EngineOptions, EngineSession, EngineState, EngineWait, RecoveryOptions, Source, SourceLocation,
+    TextResource, TrackMetadata,
     crypto::key::{
         AvailableKey, KeyClock, KeyFuture, KeyProvider, KeyRequest, KeyResolution, KeySession,
         KeySessionOptions, SecretKey,
@@ -39,6 +39,22 @@ use crate::{
 
 const MAX_PLAYLIST_BYTES: usize = 2 * 1024 * 1024;
 const MAX_RESOURCE_BYTES: usize = 32 * 1024 * 1024;
+
+fn engine_options(progress: DownloadProgress) -> EngineOptions {
+    EngineOptions::default()
+        .with_mode(EngineMode::Open)
+        // The engine admits a whole playlist atomically. Its 128-descriptor
+        // default rejects ordinary VOD before requesting the first segment.
+        // These are metadata ceilings; the download byte budget stays unchanged.
+        .with_limits(EngineLimits::default().with_queue(16_384, 16 * 1024 * 1024))
+        .with_download_concurrency(4)
+        .with_on_event(Arc::new(move |event| {
+            if matches!(event, EngineEvent::State(EngineState::Finalizing)) {
+                progress.finalize();
+            }
+        }))
+        .with_waiter(Arc::new(Wait), Duration::from_secs(30))
+}
 
 mod fallback;
 mod recovery;
@@ -582,16 +598,7 @@ async fn download_hls_with_progress(
     let terminal = checkpoint
         .as_ref()
         .is_some_and(|value| value.is_finalizing() || value.is_completed());
-    let phase_progress = source.progress.clone();
-    let engine_options = EngineOptions::default()
-        .with_mode(EngineMode::Open)
-        .with_download_concurrency(4)
-        .with_on_event(Arc::new(move |event| {
-            if matches!(event, EngineEvent::State(EngineState::Finalizing)) {
-                phase_progress.finalize();
-            }
-        }))
-        .with_waiter(Arc::new(Wait), Duration::from_secs(30));
+    let engine_options = engine_options(source.progress.clone());
     let engine = match checkpoint {
         Some(checkpoint) => EngineSession::restore(inputs, keys, engine_options, checkpoint),
         None => EngineSession::new(inputs, keys, engine_options),
@@ -721,4 +728,63 @@ async fn download_hls_with_progress(
         tracks: report.tracks().len(),
         stopped: report.media().end_reason() == EngineEndReason::Stop,
     })
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn multi_hour_vod_playlist_is_admitted_without_downloading_media() {
+        let request = NewTask {
+            url: "https://media.example.test/index.m3u8".into(),
+            destination: PathBuf::new(),
+            suggested_filename: None,
+            source_url: None,
+            expected_size: None,
+            headers: Default::default(),
+        };
+        let cancel = CancellationToken::new();
+        let (source, url) =
+            network_source(&request, cancel, None, None, DownloadProgress::default()).unwrap();
+        let primary = InputId::new("primary").unwrap();
+        let keys = KeySession::new(
+            "test",
+            "hls",
+            Arc::new(Keys(source.clone())),
+            Arc::new(Clock(Instant::now())),
+            KeySessionOptions::default(),
+        )
+        .unwrap();
+        let engine = EngineSession::new(
+            EngineInputs::new(
+                EngineInput::new(primary.clone(), source),
+                EmbeddedAudio::Keep,
+            ),
+            keys,
+            engine_options(DownloadProgress::default()),
+        )
+        .unwrap();
+        let mut content = "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXT-X-PLAYLIST-TYPE:VOD\n".to_owned();
+        for index in 0..3600 {
+            content.push_str(&format!("#EXTINF:4.0,\nsegment-{index}.ts\n"));
+        }
+        content.push_str("#EXT-X-ENDLIST\n");
+        let snapshot = parse_playlist_snapshot(
+            &TextResource {
+                content,
+                location: SourceLocation::Url(url),
+            },
+            PlaylistContext::new(primary.clone(), 0),
+        )
+        .unwrap();
+        engine
+            .handle()
+            .accept_when_ready(&primary, &snapshot)
+            .await
+            .expect(
+                "the whole VOD playlist must fit admission, independently of download concurrency",
+            );
+        engine.handle().cancel();
+    }
 }

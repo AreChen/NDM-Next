@@ -10,6 +10,21 @@ function isDash(item) {
   try { return new URL(item.url).pathname.toLowerCase().endsWith('.mpd'); } catch { return false; }
 }
 function isMediaManifest(item) { return isHls(item) || isDash(item); }
+function mediaKind(item) {
+  if (isHls(item)) return 'hls';
+  if (isDash(item)) return 'dash';
+  const type=String(item.type || '').split(';')[0].trim().toLowerCase();
+  if (type.startsWith('video/')) return 'video';
+  if (type.startsWith('audio/')) return 'audio';
+  // Only infer from an explicit media suffix for missing/generic MIME types.
+  if (type && !['application/octet-stream','binary/octet-stream','application/ogg'].includes(type)) return null;
+  try {
+    const path=new URL(item.url).pathname;
+    if (/\.(mp4|m4v|webm|mkv|mov|avi|flv|ogv|mpeg|mpg)$/i.test(path)) return 'video';
+    if (/\.(mp3|m4a|aac|ogg|oga|opus|flac|wav|aiff|aif)$/i.test(path)) return 'audio';
+  } catch {}
+  return null;
+}
 function isMediaSegment(item) {
   if (['video/mp2t','video/iso.segment','audio/iso.segment'].includes(String(item.type || '').split(';')[0].toLowerCase())) return true;
   try {return /\.(ts|m4s|cmfv|cmfa)$/i.test(new URL(item.url).pathname);} catch {return false;}
@@ -41,4 +56,4 @@ function encodeTask(item) {
   if (item.type) result += `8:${safe(item.type)}\r\n`;
   return result;
 }
-if (typeof module !== 'undefined') module.exports = { DEFAULTS, normalizeDomain, domainMatches, shouldSkip, encodeTask, isHls, isDash, isMediaManifest, isMediaSegment };
+if (typeof module !== 'undefined') module.exports = { DEFAULTS, normalizeDomain, domainMatches, shouldSkip, encodeTask, isHls, isDash, isMediaManifest, isMediaSegment, mediaKind };

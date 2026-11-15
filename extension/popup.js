@@ -6,7 +6,13 @@ Object.assign(dict.en,{transferPolicy:'Takeover safety',safeTransfer:'Verify bef
 Object.assign(dict.zh,{transferPolicy:'接管安全性',safeTransfer:'验证后接管',immediateTransfer:'立即接管',transferHint:'验证期间可能产生额外流量；立即接管可能导致一次性链接下载失败。'});
 Object.assign(dict.en,{inlineMedia:'Buttons beside media',inlineHint:'Show a compact download button on web pages.',download:'Download'});
 Object.assign(dict.zh,{inlineMedia:'网页媒体下载按钮',inlineHint:'在网页视频和音频旁显示精简下载按钮。',download:'下载'});
-const $ = id => document.getElementById(id); let config, tab, lang;
+Object.assign(dict.en,{openMedia:'Open media library ↗'});
+Object.assign(dict.zh,{openMedia:'打开媒体资源窗口 ↗'});
+const $ = id => document.getElementById(id); let config, tab, lang, messageTimer;
+function showMediaNotice(message,error=false) {
+  clearTimeout(messageTimer);$('message').textContent=message;$('message').classList.toggle('error',error);
+  messageTimer=setTimeout(()=>{$('message').textContent='';},error?6000:2000);
+}
 function text(key) { return dict[lang][key]; }
 function translate() { lang = config.language === 'auto' ? (chrome.i18n.getUILanguage().toLowerCase().startsWith('zh') ? 'zh' : 'en') : config.language; document.documentElement.lang=lang; document.querySelectorAll('[data-i18n]').forEach(el => el.textContent=text(el.dataset.i18n)); $('status').title=text($('status').classList.contains('online')?'online':'offline'); }
 function renderSite() { const domain=normalizeDomain(tab?.url || ''); $('domain').textContent=domain || '—'; const blocked=config.blockedDomains.some(d=>domainMatches(domain,d)); $('siteState').textContent=text(blocked?'blocked':'allowed'); $('blockSite').textContent=text(blocked?'unblock':'block'); $('blockSite').disabled=!domain; }
@@ -29,9 +35,8 @@ function renderMedia(items) {
       button.disabled=true;button.textContent=mediaMessage('sending',lang);$('message').textContent='';
       try {
         const result=await chrome.runtime.sendMessage({action:'send',tabId:tab?.id,id:item.id});
-        $('message').textContent=mediaMessage(result?.ok?'sent':result?.error,lang);
-        $('message').classList.toggle('error',!result?.ok);
-      } catch { $('message').textContent=mediaMessage('manager_unavailable',lang);$('message').classList.add('error'); }
+        showMediaNotice(mediaMessage(result?.ok?'sent':result?.error,lang),!result?.ok);
+      } catch { showMediaNotice(mediaMessage('manager_unavailable',lang),true); }
       finally {button.disabled=false;button.textContent=text('download');}
     };
     row.append(info,button); list.append(row);
@@ -39,7 +44,16 @@ function renderMedia(items) {
 }
 async function start() { config={...DEFAULTS,...await chrome.storage.local.get(DEFAULTS)}; [tab]=await chrome.tabs.query({active:true,currentWindow:true}); translate(); $('enabled').checked=config.enabled; $('media').checked=config.media; $('inlineMedia').checked=config.inlineMedia; $('backend').value=config.backend; $('captureMode').value=config.captureMode; $('transferPolicy').value=config.transferPolicy; $('minSize').value=config.minBytes/1048576; $('extensions').value=config.excludedExtensions.join(', '); $('domains').value=config.blockedDomains.join('\n'); $('language').value=config.language; renderSite(); const result=await chrome.runtime.sendMessage({action:'media',tabId:tab?.id}); renderMedia(result.items || []); const connection=await chrome.runtime.sendMessage({action:'status'}); $('status').classList.toggle('online',connection.connected); $('status').title=text(connection.connected?'online':'offline'); }
 $('inlineMedia').onchange=async e=>{config.inlineMedia=e.target.checked;await chrome.storage.local.set({inlineMedia:config.inlineMedia});};
-chrome.runtime.onMessage.addListener(message=>{if(message.action==='mediaChanged' && tab) chrome.runtime.sendMessage({action:'media',tabId:tab.id}).then(result=>renderMedia(result.items||[])).catch(()=>{});});
+chrome.runtime.onMessage.addListener(message=>{if(message.action==='mediaChanged' && tab && message.tabId===tab.id) chrome.runtime.sendMessage({action:'media',tabId:tab.id}).then(result=>renderMedia(result.items||[])).catch(()=>{});});
+$('openMedia').onclick=async()=>{
+  if(!Number.isInteger(tab?.id))return;
+  $('openMedia').disabled=true;
+  try {
+    const result=await chrome.runtime.sendMessage({action:'openMediaWindow',tabId:tab.id});
+    if(!result?.ok)showMediaNotice(mediaMessage('manager_unavailable',lang),true);
+  } catch {showMediaNotice(mediaMessage('manager_unavailable',lang),true);}
+  finally {$('openMedia').disabled=false;}
+};
 $('enabled').onchange=async e=>{config.enabled=e.target.checked; await chrome.storage.local.set({enabled:config.enabled});};
 $('blockSite').onclick=async()=>{ const domain=normalizeDomain(tab?.url || ''); if(!domain)return; const matched=config.blockedDomains.filter(d=>domainMatches(domain,d)); config.blockedDomains=matched.length?config.blockedDomains.filter(d=>!matched.includes(d)):[...config.blockedDomains,domain]; await chrome.storage.local.set({blockedDomains:config.blockedDomains}); $('domains').value=config.blockedDomains.join('\n'); renderSite(); };
 $('save').onclick=async()=>{ const raw=$('domains').value.split(/\n/).map(s=>s.trim()).filter(Boolean); const domains=raw.map(normalizeDomain); if(domains.some(d=>!d)){ $('message').textContent=text('invalid'); return; } config={...config,backend:$('backend').value,captureMode:$('captureMode').value,transferPolicy:$('transferPolicy').value,minBytes:Math.max(0,Number($('minSize').value)||0)*1048576,excludedExtensions:$('extensions').value.split(',').map(s=>s.trim().toLowerCase().replace(/^\./,'')).filter(Boolean),blockedDomains:[...new Set(domains)],language:$('language').value,media:$('media').checked}; await chrome.storage.local.set(config); translate(); renderSite(); const result=await chrome.runtime.sendMessage({action:'media',tabId:tab?.id}); renderMedia(result.items||[]); const connection=await chrome.runtime.sendMessage({action:'status'}); $('status').classList.toggle('online',connection.connected); $('status').title=text(connection.connected?'online':'offline'); $('message').textContent=text('saved'); };

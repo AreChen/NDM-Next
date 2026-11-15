@@ -21,9 +21,10 @@ function setup() {
     if(message.action==='status')return {connected:true};
     if(fail)throw Error('disconnected');return {ok:false,error:'unsupported_request'};
   }}};
-  const ctx={chrome,document,URL,Intl};vm.createContext(ctx);
+  const timers=new Map();let sequence=0;
+  const ctx={chrome,document,URL,Intl,setTimeout:(fn,delay)=>{const id=++sequence;timers.set(id,{fn,delay});return id;},clearTimeout:id=>timers.delete(id)};vm.createContext(ctx);
   for(const file of ['rules.js','media-ui.js','popup.js'])vm.runInContext(fs.readFileSync('extension/'+file,'utf8'),ctx);
-  return {get,sent,saved,fail:()=>fail=true,ready:()=>new Promise(resolve=>setImmediate(resolve))};
+  return {get,sent,saved,timers,expire:()=>{for(const [id,{fn}]of [...timers]){timers.delete(id);fn();}},fail:()=>fail=true,ready:()=>new Promise(resolve=>setImmediate(resolve))};
 }
 
 test('popup shows file size and actionable send failures while restoring its button',async()=>{
@@ -41,4 +42,11 @@ test('popup shows file size and actionable send failures while restoring its but
 test('popup inline toggle persists immediately without saving other settings',async()=>{
   const t=setup();await t.ready();await t.get('inlineMedia').onchange({target:{checked:false}});
   assert.equal(t.saved.length,1);assert.equal(t.saved[0].inlineMedia,false);assert.deepEqual(Object.keys(t.saved[0]),['inlineMedia']);
+});
+
+test('popup opens the resource window for its captured source tab and notices expire',async()=>{
+  const t=setup();await t.ready();await t.get('openMedia').onclick();
+  const message=t.sent.find(message=>message.action==='openMediaWindow');assert.equal(message.tabId,1);
+  assert.equal(t.get('openMedia').disabled,false);assert(t.timers.size>0);
+  t.expire();assert.equal(t.get('message').textContent,'');
 });

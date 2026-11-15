@@ -4933,7 +4933,7 @@ dependencies = [
 
 [[package]]
 name = "ndm-desktop"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "caseless",
  "embed-resource",
@@ -4959,7 +4959,7 @@ dependencies = [
 
 [[package]]
 name = "ndm-host"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "embed-resource",
  "ndm-core",

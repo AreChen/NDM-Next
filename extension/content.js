@@ -22,7 +22,7 @@
   }
   function schedule() { if (!frame) frame=requestAnimationFrame(() => {frame=undefined;render();}); }
   const resizeObserver=new ResizeObserver(schedule);
-  function remove(player) { const entry=buttons.get(player); if (entry) {entry.button.remove();resizeObserver.unobserve(player);buttons.delete(player);} }
+  function remove(player) { const entry=buttons.get(player); if (entry) {clearTimeout(entry.noticeTimer);entry.button.remove();resizeObserver.unobserve(player);buttons.delete(player);} }
   function render() {
     if (buttons.size) ensureHost();
     const players=enabled ? [...document.querySelectorAll('video,audio')].filter(player=>player.isConnected) : [];
@@ -39,13 +39,21 @@
         entry={button,id:item.id}; buttons.set(player,entry); resizeObserver.observe(player);
         button.addEventListener('click',async event=>{
           event.preventDefault();event.stopPropagation();button.disabled=true;
+          clearTimeout(entry.noticeTimer);
           button.textContent=mediaMessage('sending',language);
+          let sent=false;
           try {
             const result=await chrome.runtime.sendMessage({action:'send',id:entry.id});
+            sent=result?.ok === true;
             button.textContent=mediaMessage(result?.ok?'sent':result?.error,language);
           } catch {button.textContent=mediaMessage('manager_unavailable',language);}
+          if (buttons.get(player) !== entry) return;
+          if (sent) button.textContent=language==='zh'?'已发送 ✓':'Sent ✓';
           button.classList.add('notice');button.disabled=false;
           button.setAttribute('aria-label',button.textContent);
+          entry.noticeTimer=setTimeout(()=>{
+            entry.noticeTimer=undefined;button.classList.remove('notice');schedule();
+          },sent?1200:4000);
           schedule();
         });
         shadow.append(button);

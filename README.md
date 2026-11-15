@@ -10,7 +10,7 @@
 
 - HTTP(S), FTP(S), SFTP, HLS and static DASH downloads, with multi-connection HTTP(S).
 - Browser download capture with file type, size and domain filters.
-- Optional download buttons beside webpage media, with file sizes when available.
+- Media library with search, format filters and batch downloads; optional buttons beside webpage media.
 - Search and categorize downloads; choose light or dark mode and English or Chinese.
 - Automatic desktop updates from GitHub.
 - The browser extension also works with Neat Download Manager.

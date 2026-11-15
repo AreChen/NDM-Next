@@ -30,6 +30,21 @@ struct Fixture {
 }
 
 async fn serve(State(fixture): State<Arc<Fixture>>, AxumPath(path): AxumPath<String>) -> Response {
+    if path == "long-vod.m3u8" {
+        let mut playlist = String::from(
+            "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:1\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-MAP:URI=\"video/init.mp4\"\n",
+        );
+        for index in 0..129 {
+            // Repeat the short fixture as separate timeline epochs. This keeps
+            // the repository small while testing a real >128-segment remux.
+            if index > 0 && index % 3 == 0 {
+                playlist.push_str("#EXT-X-DISCONTINUITY\n");
+            }
+            playlist.push_str(&format!("#EXTINF:1.0,\nvideo/seg{:03}.m4s\n", index % 3));
+        }
+        playlist.push_str("#EXT-X-ENDLIST\n");
+        return Response::new(Body::from(playlist));
+    }
     if fixture.missing && (path.ends_with("seg001.ts") || path == "mpeg2/index1.ts") {
         return Response::builder()
             .status(StatusCode::NOT_FOUND)
@@ -96,6 +111,25 @@ fn save_for_external_verification(path: &Path, name: &str) {
     if let Some(directory) = std::env::var_os("NDM_HLS_VERIFY_OUTPUTS") {
         std::fs::copy(path, Path::new(&directory).join(name)).unwrap();
     }
+}
+
+#[tokio::test]
+async fn vod_over_default_queue_limit_downloads_and_merges() {
+    let base = server(false).await;
+    let dir = TempDir::new().unwrap();
+    let result = download_hls(
+        &request(dir.path(), format!("{base}/long-vod.m3u8")),
+        TaskId::new_v4(),
+        &HlsOptions::default(),
+        CancellationToken::new(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    let output = std::fs::read(result.path).unwrap();
+    assert_eq!(&output[4..8], b"ftyp");
+    assert_eq!(result.tracks, 1);
+    assert!(output.len() > 128 * 1024);
 }
 
 #[tokio::test]
