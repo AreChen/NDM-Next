@@ -141,12 +141,13 @@ impl Desktop {
                         .on_click(move |_, _, cx| {
                             let _ = view.update(cx, |this, cx| {
                                 if this.scheduler.stop_live(id).is_err() {
-                                    this.notice = Some(
+                                    this.set_notice(
                                         this.text(
                                             "无法停止该媒体任务。",
                                             "Could not stop the media task.",
                                         )
                                         .into(),
+                                        cx,
                                     );
                                 }
                                 cx.notify();

@@ -5,7 +5,7 @@ use crate::{
     progress::ProgressWindow,
     protocol_auth::{AuthFields, apply as apply_protocol_auth},
     speed::SpeedMeter,
-    updates::{self, UpdateState},
+    updates::{self, InstallWait, UpdateState},
 };
 use gpui_kit::{
     component::{
@@ -111,9 +111,11 @@ pub(crate) struct Desktop {
     sample: HashMap<TaskId, (ndm_core::ProgressPhase, SpeedMeter)>,
     speed: HashMap<TaskId, u64>,
     tracking: bool,
-    notice: Option<String>,
+    notice: crate::notice::Notice,
+    notice_timer: Option<gpui_kit::Task<()>>,
     update_state: UpdateState,
     install_update_when_idle: bool,
+    install_wait: Option<InstallWait>,
 }
 
 pub(crate) struct DesktopServices {
@@ -298,16 +300,17 @@ impl Desktop {
                                     if this.seen_tasks.insert(id) { this.show_progress(id, cx); }
                                 }
                                 SchedulerEvent::SftpHostKeyRequired { .. } => {
-                                    this.notice = Some(this.text("SFTP 服务器密钥需要核对。", "Check the SFTP server key before trusting it.").into());
+                                    this.set_notice(this.text("SFTP 服务器密钥需要核对。", "Check the SFTP server key before trusting it.").into(), cx);
                                 },
                                 SchedulerEvent::SftpHostKeyChanged { .. } => {
-                                    this.notice = Some(this.text("SFTP 服务器密钥已改变，请谨慎核对。", "The SFTP server key has changed; verify it carefully.").into());
+                                    this.set_notice(this.text("SFTP 服务器密钥已改变，请谨慎核对。", "The SFTP server key has changed; verify it carefully.").into(), cx);
                                 },
                                 SchedulerEvent::Finished { id, progress } => {
                                     this.retained_progress.insert(id, progress);
                                     this.speed.remove(&id);
                                     this.sample.remove(&id);
                                     this.refilter();
+                                    this.try_install_update(cx);
                                 }
                             }
                             cx.notify();
@@ -377,9 +380,11 @@ impl Desktop {
             sample: HashMap::new(),
             speed: HashMap::new(),
             tracking: false,
-            notice: None,
+            notice: crate::notice::Notice::default(),
+            notice_timer: None,
             update_state: UpdateState::NotChecked,
             install_update_when_idle: false,
+            install_wait: None,
         };
         if this
             .tasks
@@ -396,6 +401,36 @@ impl Desktop {
         match self.preferences.language {
             Language::Chinese => chinese,
             Language::English => english,
+        }
+    }
+
+    fn set_notice(&mut self, message: String, cx: &mut Context<Self>) {
+        self.notice.show(message, Instant::now());
+        // Replacing this handle cancels the previous timer, including identical messages.
+        self.notice_timer = Some(cx.spawn(async move |view, cx| {
+            cx.background_executor().timer(Duration::from_secs(5)).await;
+            let _ = view.update(cx, |this, cx| {
+                if this.notice.expire(Instant::now()) {
+                    cx.notify();
+                }
+            });
+        }));
+    }
+
+    fn clear_notice(&mut self) {
+        self.notice.clear();
+        self.notice_timer = None;
+    }
+
+    pub(crate) fn delete_confirmation_closed(
+        &mut self,
+        handle: AnyWindowHandle,
+        cx: &mut Context<Self>,
+    ) {
+        if self.delete_dialog == Some(handle) {
+            self.delete_dialog = None;
+            self.try_install_update(cx);
+            cx.notify();
         }
     }
     fn reload(&mut self) {
@@ -507,12 +542,11 @@ impl Desktop {
             Ok((handle, view)) => {
                 self.progress_windows.insert(id, (handle, view.downgrade()));
             }
-            Err(_) => {
-                self.notice = Some(
-                    self.text("无法打开进度窗口。", "Could not open the progress window.")
-                        .into(),
-                )
-            }
+            Err(_) => self.set_notice(
+                self.text("无法打开进度窗口。", "Could not open the progress window.")
+                    .into(),
+                cx,
+            ),
         }
     }
     fn track_progress(&mut self, cx: &mut Context<Self>) {
@@ -583,9 +617,10 @@ impl Desktop {
         let mut parsed = match reqwest::Url::parse(&url) {
             Ok(url) if matches!(url.scheme(), "http" | "https" | "ftp" | "ftps" | "sftp") => url,
             _ => {
-                self.notice = Some(
+                self.set_notice(
                     self.text("请输入有效的下载链接。", "Enter a valid download URL.")
                         .into(),
+                    cx,
                 );
                 cx.notify();
                 return;
@@ -600,21 +635,23 @@ impl Desktop {
         let protocol_options = match apply_protocol_auth(&mut parsed, &auth, self.ftp_security) {
             Ok(options) => options,
             Err(_) => {
-                self.notice = Some(
+                self.set_notice(
                     self.text(
                         "请检查 FTP/SFTP 凭据与连接方式。",
                         "Check the FTP/SFTP credentials and connection mode.",
                     )
                     .into(),
+                    cx,
                 );
                 cx.notify();
                 return;
             }
         };
         if destination.trim().is_empty() {
-            self.notice = Some(
+            self.set_notice(
                 self.text("请选择保存位置。", "Choose a destination folder.")
                     .into(),
+                cx,
             );
             cx.notify();
             return;
@@ -663,8 +700,8 @@ impl Desktop {
                 self.seen_tasks.insert(id);
                 self.show_progress(id, cx);
                 self.preferences.download_dir = request.destination.clone();
-                self.save_preferences();
-                self.notice = Some(self.text("下载已添加。", "Download added.").into());
+                self.save_preferences(cx);
+                self.set_notice(self.text("下载已添加。", "Download added.").into(), cx);
                 self.section = Section::All;
                 self.new_download_open = false;
                 self.url_input
@@ -687,27 +724,27 @@ impl Desktop {
                 }
                 self.reload();
             }
-            Err(_) => {
-                self.notice = Some(
-                    self.text("无法添加下载任务。", "Could not add the download.")
-                        .into(),
-                )
-            }
+            Err(_) => self.set_notice(
+                self.text("无法添加下载任务。", "Could not add the download.")
+                    .into(),
+                cx,
+            ),
         }
         cx.notify();
     }
-    fn save_preferences(&mut self) {
+    fn save_preferences(&mut self, cx: &mut Context<Self>) {
         if self.preferences.save(&self.preferences_path).is_err() {
-            self.notice = Some(
+            self.set_notice(
                 self.text("无法保存设置。", "Could not save settings.")
                     .into(),
+                cx,
             );
         }
     }
     fn set_theme(&mut self, mode: Theme, cx: &mut Context<Self>) {
         self.preferences.theme = mode;
         apply_theme(mode, cx);
-        self.save_preferences();
+        self.save_preferences(cx);
         cx.notify();
     }
     fn save_download_settings(&mut self, cx: &mut Context<Self>) {
@@ -715,20 +752,22 @@ impl Desktop {
         let connections = self.connections_input.read(cx).value().parse::<usize>();
         let speed = self.speed_input.read(cx).value().parse::<u64>();
         let (Ok(active), Ok(connections), Ok(speed)) = (active, connections, speed) else {
-            self.notice = Some(
+            self.set_notice(
                 self.text("请输入有效的数字设置。", "Enter valid numeric settings.")
                     .into(),
+                cx,
             );
             cx.notify();
             return;
         };
         if !(1..=32).contains(&active) || !(1..=16).contains(&connections) || speed > 1_000_000 {
-            self.notice = Some(
+            self.set_notice(
                 self.text(
                     "任务数须为 1–32，连接数须为 1–16，限速须为 0–1000000。",
                     "Tasks must be 1–32, connections 1–16, and speed 0–1000000.",
                 )
                 .into(),
+                cx,
             );
             cx.notify();
             return;
@@ -744,9 +783,10 @@ impl Desktop {
         let password = self.proxy_password_input.read(cx).value().to_string();
         let proxy = if url.is_empty() {
             if !username.is_empty() || !password.is_empty() {
-                self.notice = Some(
+                self.set_notice(
                     self.text("请先填写代理地址。", "Enter a proxy address first.")
                         .into(),
+                    cx,
                 );
                 cx.notify();
                 return;
@@ -759,12 +799,13 @@ impl Desktop {
                 password: (!password.is_empty()).then_some(password),
             };
             if config.validate().is_err() {
-                self.notice = Some(
+                self.set_notice(
                     self.text(
                         "代理地址须为 HTTP(S)，用户名和密码请单独填写。",
                         "Use an HTTP(S) proxy URL and enter credentials separately.",
                     )
                     .into(),
+                    cx,
                 );
                 cx.notify();
                 return;
@@ -778,19 +819,21 @@ impl Desktop {
         updated.auto_resume = self.pending_auto_resume;
         updated.proxy = proxy;
         if updated.save(&self.preferences_path).is_err() {
-            self.notice = Some(
+            self.set_notice(
                 self.text("无法保存设置。", "Could not save settings.")
                     .into(),
+                cx,
             );
         } else {
             self.scheduler.update_options(updated.scheduler_options());
             self.preferences = updated;
-            self.notice = Some(
+            self.set_notice(
                 self.text(
                     "设置已保存；正在运行的任务会保持原设置。",
                     "Settings saved; running downloads keep their current settings.",
                 )
                 .into(),
+                cx,
             );
         }
         cx.notify();
@@ -801,20 +844,20 @@ impl Desktop {
         match crate::startup::set(enabled) {
             Ok(()) => {
                 self.startup_enabled = enabled;
-                self.notice = Some(
+                self.set_notice(
                     self.text("开机自启设置已更新。", "Startup setting updated.")
                         .into(),
+                    cx,
                 );
             }
-            Err(_) => {
-                self.notice = Some(
-                    self.text(
-                        "无法更新开机自启，请检查系统设置或其他安装。",
-                        "Could not update startup; check system settings or another installation.",
-                    )
-                    .into(),
+            Err(_) => self.set_notice(
+                self.text(
+                    "无法更新开机自启，请检查系统设置或其他安装。",
+                    "Could not update startup; check system settings or another installation.",
                 )
-            }
+                .into(),
+                cx,
+            ),
         }
         cx.notify();
     }
@@ -844,23 +887,25 @@ impl Desktop {
                 self.pending_host_keys.remove(&id);
                 self.confirming_host_key = None;
                 self.task_action(id, TaskState::Failed);
-                self.notice = Some(
+                self.set_notice(
                     self.text(
                         "服务器密钥已保存，正在重新连接。",
                         "Server key saved; reconnecting.",
                     )
                     .into(),
+                    cx,
                 );
             }
             Err(_) => {
                 self.reload();
                 self.confirming_host_key = None;
-                self.notice = Some(
+                self.set_notice(
                     self.text(
                         "无法保存服务器密钥，请重新核对。",
                         "Could not save the server key; review it again.",
                     )
                     .into(),
+                    cx,
                 )
             }
         }
@@ -904,15 +949,14 @@ impl Desktop {
             cx,
         ) {
             Ok(handle) => self.delete_dialog = Some(handle),
-            Err(()) => {
-                self.notice = Some(
-                    self.text(
-                        "无法打开删除确认窗口。",
-                        "Could not open the delete confirmation.",
-                    )
-                    .into(),
+            Err(()) => self.set_notice(
+                self.text(
+                    "无法打开删除确认窗口。",
+                    "Could not open the delete confirmation.",
                 )
-            }
+                .into(),
+                cx,
+            ),
         }
         cx.notify();
     }
@@ -927,7 +971,7 @@ impl Desktop {
             return;
         }
         self.deleting = true;
-        self.notice = Some(self.text("正在删除任务…", "Deleting downloads…").into());
+        self.set_notice(self.text("正在删除任务…", "Deleting downloads…").into(), cx);
         let store = self.store.clone();
         let scheduler = self.scheduler.clone();
         let runtime = self.runtime.clone();
@@ -945,17 +989,18 @@ impl Desktop {
                             }
                             if this.editing_url == Some(*id) { this.editing_url = None; }
                         }
-                        this.notice = Some(if report.failed.is_empty() {
+                        this.set_notice(if report.failed.is_empty() {
                             format!("{} {} {}", this.text("已删除", "Deleted"), report.removed.len(), this.text("个任务。", "downloads."))
                         } else {
                             format!("{} {} · {} {}. {}", this.text("已删除", "Deleted"), report.removed.len(),
                                 this.text("未完成", "Failed"), report.failed.len(),
                                 this.text("未删除的记录已保留；部分文件可能已删除。", "Unremoved records were kept; some files may already have been deleted."))
-                        });
+                        }, cx);
                     }
-                    Err(_) => this.notice = Some(this.text("删除失败，请检查文件和目录权限。", "Deletion failed; check file and folder permissions.").into()),
+                    Err(_) => this.set_notice(this.text("删除失败，请检查文件和目录权限。", "Deletion failed; check file and folder permissions.").into(), cx),
                 }
                 this.reload();
+                this.try_install_update(cx);
                 cx.notify();
             });
         }).detach();
@@ -976,7 +1021,7 @@ impl Desktop {
                 }
             });
         if result.is_err() {
-            self.notice = Some(
+            self.set_notice(
                 if file {
                     self.text(
                         "无法打开文件，请检查文件是否存在。",
@@ -989,6 +1034,7 @@ impl Desktop {
                     )
                 }
                 .into(),
+                cx,
             );
             cx.notify();
         }
@@ -1002,21 +1048,23 @@ impl Desktop {
                 self.replacement_input
                     .update(cx, |input, cx| input.set_value("", window, cx));
                 self.reload();
-                self.notice = Some(
+                self.set_notice(
                     self.text(
                         "链接已更新，可以继续下载。",
                         "Link updated; you can resume the download.",
                     )
                     .into(),
+                    cx,
                 );
             }
             Err(_) => {
-                self.notice = Some(
+                self.set_notice(
                     self.text(
                         "链接无效，或任务已不再暂停。",
                         "The link is invalid or the task is no longer paused.",
                     )
                     .into(),
+                    cx,
                 );
             }
         }
@@ -1196,6 +1244,7 @@ impl Desktop {
                 if this.section != section {
                     this.selected_tasks.clear();
                     this.new_download_open = false;
+                    this.clear_notice();
                 }
                 this.section = section;
                 cx.notify();
@@ -1372,15 +1421,6 @@ impl Render for Desktop {
                     )
                 }),
         );
-        if matches!(
-            self.update_state,
-            UpdateState::Available(_)
-                | UpdateState::Downloading
-                | UpdateState::Ready(_)
-                | UpdateState::Installing
-        ) {
-            content = content.child(self.update_banner(border, side, cx));
-        }
         if self.section == Section::Settings {
             content = content
                 .overflow_y_scroll()
@@ -1660,8 +1700,32 @@ impl Render for Desktop {
                 );
             }
         }
-        if let Some(notice) = &self.notice {
-            content = content.child(div().text_sm().text_color(rgb(muted)).child(notice.clone()));
+        if let Some(notice) = self.notice.message() {
+            content = content.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .rounded_md()
+                    .bg(rgb(side))
+                    .px_2()
+                    .py_1()
+                    .text_xs()
+                    .text_color(rgb(muted))
+                    .child(Icon::new(IconName::Info).with_size(px(13.)))
+                    .child(div().flex_1().child(notice.to_owned()))
+                    .child(
+                        Button::new("dismiss-notice")
+                            .small()
+                            .ghost()
+                            .icon(IconName::Close)
+                            .accessibility_label(self.text("关闭提示", "Dismiss notification"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.clear_notice();
+                                cx.notify();
+                            })),
+                    ),
+            );
         }
         div()
             .size_full()
@@ -1680,7 +1744,17 @@ impl Render for Desktop {
             .flex_col()
             .bg(rgb(page))
             .text_color(rgb(fg))
-            .child(crate::chrome::title_bar("NDM Next", dark))
+            .child(crate::chrome::title_bar("NDM Next", dark).when(
+                matches!(
+                    self.update_state,
+                    UpdateState::Available(_)
+                        | UpdateState::Downloading
+                        | UpdateState::Ready(_)
+                        | UpdateState::Installing
+                ) || self.remembered_update()
+                    || (self.update_state == UpdateState::Failed && self.install_update_when_idle),
+                |bar| bar.child(self.title_update_button(cx)),
+            ))
             .child(
                 div()
                     .flex_1()
@@ -1742,7 +1816,7 @@ impl Render for Desktop {
                                                 this.sidebar_collapsed = !this.sidebar_collapsed;
                                                 this.preferences.sidebar_collapsed =
                                                     this.sidebar_collapsed;
-                                                this.save_preferences();
+                                                this.save_preferences(cx);
                                                 cx.notify();
                                             })),
                                     ),

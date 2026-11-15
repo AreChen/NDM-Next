@@ -43,20 +43,22 @@ impl Desktop {
         }
         let url = self.url_input.read(cx).value().trim().to_owned();
         let Ok(parsed) = reqwest::Url::parse(&url) else {
-            self.notice = Some(
+            self.set_notice(
                 self.text("请输入有效的媒体链接。", "Enter a valid media URL.")
                     .into(),
+                cx,
             );
             cx.notify();
             return;
         };
         if !matches!(parsed.scheme(), "http" | "https") {
-            self.notice = Some(
+            self.set_notice(
                 self.text(
                     "媒体链接须使用 HTTP 或 HTTPS。",
                     "Media URLs must use HTTP or HTTPS.",
                 )
                 .into(),
+                cx,
             );
             cx.notify();
             return;
@@ -72,7 +74,7 @@ impl Desktop {
         };
         let proxy = self.preferences.proxy.clone();
         self.inspecting_hls = true;
-        self.notice = None;
+        self.clear_notice();
         let result = self.runtime.spawn(async move {
             let cancel = tokio_util::sync::CancellationToken::new();
             let dash = DashOptions {
@@ -109,12 +111,12 @@ impl Desktop {
                     match result {
                         Ok(Ok(MediaCatalog::Hls(catalog))) => this.hls_catalog = Some((url, catalog)),
                         Ok(Ok(MediaCatalog::Dash(catalog))) => this.dash_catalog = Some((url, catalog)),
-                        Ok(Err(ndm_core::Error::DashDrmUnsupported)) => this.notice = Some(this.text(
-                            "此 DASH 媒体受 DRM 保护，无法下载。", "This DASH media is DRM-protected and cannot be downloaded.").into()),
-                        Ok(Err(ndm_core::Error::DashDynamicUnsupported)) => this.notice = Some(this.text(
-                            "此链接是动态 DASH 直播，目前支持静态 DASH 和 HLS 直播。", "This is a dynamic DASH stream; static DASH and HLS live streams are supported.").into()),
-                        _ => this.notice = Some(this.text(
-                            "无法读取媒体选项，请检查格式、链接和代理。", "Could not inspect media; check the format, URL and proxy.").into()),
+                        Ok(Err(ndm_core::Error::DashDrmUnsupported)) => this.set_notice(this.text(
+                            "此 DASH 媒体受 DRM 保护，无法下载。", "This DASH media is DRM-protected and cannot be downloaded.").into(), cx),
+                        Ok(Err(ndm_core::Error::DashDynamicUnsupported)) => this.set_notice(this.text(
+                            "此链接是动态 DASH 直播，目前支持静态 DASH 和 HLS 直播。", "This is a dynamic DASH stream; static DASH and HLS live streams are supported.").into(), cx),
+                        _ => this.set_notice(this.text(
+                            "无法读取媒体选项，请检查格式、链接和代理。", "Could not inspect media; check the format, URL and proxy.").into(), cx),
                     }
                 }
                 cx.notify();

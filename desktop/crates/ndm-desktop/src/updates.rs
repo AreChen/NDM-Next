@@ -11,6 +11,18 @@ const RELEASES_API: &str = "https://api.github.com/repos/AreChen/NDM-Next/releas
 const MAX_RESPONSE: usize = 2 * 1024 * 1024;
 const MAX_INSTALLER: u64 = 256 * 1024 * 1024;
 
+pub(crate) fn automatic_check_due(last: Option<u64>, now: u64) -> bool {
+    last.is_none_or(|last| now < last || now - last >= 12 * 60 * 60)
+}
+
+// A cached version is only a hint. Installation after restart still requires
+// fresh GitHub metadata and a trusted, verified installer download.
+pub(crate) fn remembered_version(version: Option<&str>) -> Option<Version> {
+    let version = Version::parse(version?).ok()?;
+    let current = Version::parse(env!("CARGO_PKG_VERSION")).ok()?;
+    (version > current && version.pre.is_empty() && version.build.is_empty()).then_some(version)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct UpdateRelease {
     pub version: Version,
@@ -34,6 +46,23 @@ pub(crate) enum UpdateState {
     Ready(ReadyUpdate),
     Installing,
     Failed,
+}
+
+impl UpdateState {
+    pub(crate) fn installation_requested(&self, requested: bool) -> bool {
+        requested && matches!(self, Self::Ready(_))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InstallWait {
+    Editor,
+    Confirmation,
+    Deleting,
+    Media,
+    Downloads,
+    OtherInstaller,
+    Storage,
 }
 #[derive(Deserialize)]
 struct Release {

@@ -14,6 +14,47 @@ fn select(releases: Value) -> Option<UpdateRelease> {
     )
     .unwrap()
 }
+
+#[test]
+fn automatic_checks_remain_infrequent_across_restarts_and_failures() {
+    assert!(automatic_check_due(None, 1_000));
+    assert!(!automatic_check_due(Some(1_000), 1_001));
+    assert!(!automatic_check_due(Some(1_000), 44_199));
+    assert!(automatic_check_due(Some(1_000), 44_200));
+    // A clock correction repairs the persisted timestamp rather than disabling checks forever.
+    assert!(automatic_check_due(Some(100_000), 1_000));
+}
+
+#[test]
+fn cached_hints_ignore_current_older_prerelease_and_invalid_versions() {
+    for hint in [
+        None,
+        Some(env!("CARGO_PKG_VERSION")),
+        Some("0.0.1"),
+        Some("99.0.0-beta.1"),
+        Some("99.0.0+build"),
+        Some("not a version"),
+    ] {
+        assert!(remembered_version(hint).is_none());
+    }
+    assert_eq!(
+        remembered_version(Some("99.0.0")).unwrap().to_string(),
+        "99.0.0"
+    );
+}
+
+#[test]
+fn discovering_or_caching_an_update_never_authorizes_installation() {
+    let release = select(json!([release("0.2.0")])).unwrap();
+    let ready = UpdateState::Ready(ReadyUpdate {
+        release: release.clone(),
+        path: PathBuf::from("cached.exe"),
+    });
+    assert!(!ready.installation_requested(false));
+    assert!(ready.installation_requested(true));
+    assert!(!UpdateState::Available(release).installation_requested(true));
+    assert!(!UpdateState::Downloading.installation_requested(true));
+}
 #[test]
 fn does_not_offer_a_release_without_an_installable_verified_asset() {
     assert!(

@@ -9,6 +9,7 @@ mod filenames;
 mod files;
 mod instance;
 mod library;
+mod notice;
 mod preferences;
 mod progress;
 mod protocol_auth;

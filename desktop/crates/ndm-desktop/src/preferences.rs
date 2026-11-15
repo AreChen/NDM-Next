@@ -31,6 +31,8 @@ pub struct Preferences {
     pub max_connections: usize,
     pub auto_resume: bool,
     pub auto_update: bool,
+    pub last_update_check: Option<u64>,
+    pub available_update: Option<String>,
     pub max_kib_per_second: u64,
     #[serde(skip)]
     pub proxy: Option<ndm_core::ProxyOptions>,
@@ -51,6 +53,8 @@ impl Default for Preferences {
             max_connections: 4,
             auto_resume: true,
             auto_update: true,
+            last_update_check: None,
+            available_update: None,
             max_kib_per_second: 0,
             proxy: None,
         }
@@ -129,6 +133,8 @@ mod tests {
             theme: Theme::Dark,
             language: Language::English,
             auto_update: false,
+            last_update_check: Some(1_000),
+            available_update: Some("99.0.0".into()),
             ..Default::default()
         };
         preferences.save(&path).unwrap();
@@ -138,6 +144,8 @@ mod tests {
         assert_eq!(restored.theme, Theme::Light);
         assert_eq!(restored.max_connections, 4);
         assert!(restored.auto_update);
+        assert_eq!(restored.last_update_check, None);
+        assert_eq!(restored.available_update, None);
     }
 
     #[cfg(windows)]

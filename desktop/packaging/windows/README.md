@@ -6,7 +6,7 @@ Run `build.ps1 -MediaToolDir <output-directory>` on Windows with the Rust 1.100.
 
 The build verifies the media files and configuration, checks dependency licenses, and creates an installer under `desktop/dist/` with the relevant source and license notices. The per-user installer registers the Chrome and Edge native messaging hosts. Uninstalling offers to retain or remove settings and download records; completed downloads are kept. Silent uninstall retains the records.
 
-Desktop releases are distributed through GitHub as `desktop-v{version}`. The Windows asset is `NDM-Next-Setup-{version}-x64.exe`; the updater verifies its GitHub SHA-256 asset digest and length, then runs it silently once transfers are idle. Automatic updates can be disabled in Settings. Setup closes the running installation before replacing its files and defaults to opening the app afterward. Silent `/UPDATE` installs also reopen it.
+Desktop releases are distributed through GitHub as `desktop-v{version}`. Automatic checks run at most every 12 hours, with the last check remembered across restarts; they can be disabled in Settings. Available updates appear in the title bar. Click Upgrade to download and verify the GitHub SHA-256 digest and length, then install once transfers and confirmation dialogs finish. A remembered version hint is rechecked against GitHub before downloading after a restart. Setup closes the running installation before replacing its files and defaults to opening the app afterward. Silent `/UPDATE` installs also reopen it.
 
 ## Browser extension
 

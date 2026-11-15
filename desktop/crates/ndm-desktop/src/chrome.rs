@@ -1,6 +1,6 @@
 use gpui_kit::{component::TitleBar, prelude::*, *};
 
-pub(crate) fn title_bar(title: impl Into<SharedString>, dark: bool) -> impl IntoElement {
+pub(crate) fn title_bar(title: impl Into<SharedString>, dark: bool) -> TitleBar {
     TitleBar::new()
         .bg(rgb(if dark { 0x111827 } else { 0xf8f9fd }))
         .border_color(rgb(if dark { 0x263247 } else { 0xe5e9f2 }))

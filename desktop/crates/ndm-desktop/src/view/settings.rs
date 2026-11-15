@@ -115,6 +115,7 @@ impl Desktop {
                         "中文"
                     })
                     .on_click(cx.listener(|this, _, _, cx| {
+                        this.clear_notice();
                         this.preferences.language =
                             if this.preferences.language == Language::Chinese {
                                 Language::English
@@ -133,7 +134,7 @@ impl Desktop {
                                 });
                             }
                         }
-                        this.save_preferences();
+                        this.save_preferences(cx);
                         cx.notify();
                     })),
             );
@@ -278,7 +279,17 @@ impl Desktop {
                             .text_color(rgb(muted))
                             .child(self.update_status()),
                     )
-                    .child(self.update_button(cx)),
+                    .child(self.update_button(cx))
+                    .child(Button::new("update-release-notes").small().ghost().icon(IconName::ExternalLink)
+                        .tooltip(self.text("发行说明", "Release notes"))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let url = match &this.update_state {
+                                UpdateState::Available(release) => updates::release_url(&release.version),
+                                UpdateState::Ready(ready) => updates::release_url(&ready.release.version),
+                                _ => format!("https://github.com/AreChen/NDM-Next/releases/tag/desktop-v{}", env!("CARGO_PKG_VERSION")),
+                            };
+                            cx.open_url(&url);
+                        }))),
             )
             .child(
                 div()
@@ -290,24 +301,22 @@ impl Desktop {
                             .small()
                             .selected(self.preferences.auto_update)
                             .label(if self.preferences.auto_update {
-                                self.text("自动更新：开启", "Auto updates: On")
+                                self.text("自动检查：开启", "Auto check: On")
                             } else {
-                                self.text("自动更新：关闭", "Auto updates: Off")
+                                self.text("自动检查：关闭", "Auto check: Off")
                             })
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.preferences.auto_update = !this.preferences.auto_update;
-                                this.install_update_when_idle = false;
-                                this.save_preferences();
+                                this.save_preferences(cx);
                                 if this.preferences.auto_update {
-                                    this.check_for_update(cx);
-                                    this.try_install_update(cx);
+                                    this.check_for_update(false, cx);
                                 }
                                 cx.notify();
                             })),
                     )
                     .child(div().text_xs().text_color(rgb(muted)).child(self.text(
-                        "GitHub 发布 · 空闲时安装并重启",
-                        "GitHub releases · installs and restarts when idle",
+                        "每 12 小时检查 · 点击升级后下载、安装",
+                        "Checks every 12 hours · click upgrade to download and install",
                     ))),
             );
         let mut panel = div()

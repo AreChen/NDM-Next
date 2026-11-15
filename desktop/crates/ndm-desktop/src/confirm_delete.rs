@@ -29,11 +29,20 @@ pub(crate) fn open(
         move |window, cx| {
             chrome::round_window(window);
             window.set_window_title("NDM Next · Delete");
-            cx.new(|_| ConfirmDelete {
-                ids,
-                name,
-                language,
-                parent,
+            let handle = window.window_handle();
+            cx.new(|cx| {
+                cx.on_release(move |this: &mut ConfirmDelete, cx| {
+                    let _ = this.parent.update(cx, |parent, cx| {
+                        parent.delete_confirmation_closed(handle, cx);
+                    });
+                })
+                .detach();
+                ConfirmDelete {
+                    ids,
+                    name,
+                    language,
+                    parent,
+                }
             })
         },
     )
