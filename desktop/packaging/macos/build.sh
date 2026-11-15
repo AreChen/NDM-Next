@@ -24,7 +24,7 @@ for flag in --disable-gpl --disable-version3 --disable-nonfree --disable-network
     [[ $configuration == *"$flag"* ]] || { echo "Media tools missing $flag" >&2; exit 1; }
 done
 for name in ffmpeg ffprobe; do
-    lipo -verify_arch "$(uname -m)" "$media/bin/$name"
+    lipo "$media/bin/$name" -verify_arch "$(uname -m)"
 done
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/ndm-macos-package.XXXXXXXX")
 trap 'rm -rf "$scratch"' EXIT
