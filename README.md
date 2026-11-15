@@ -1,24 +1,21 @@
 <div align="center">
   <img src="extension/icons/icon-128.png" width="112" alt="NDM Next icon">
   <h1>NDM Next</h1>
-  <p>A modern Windows download manager and browser companion.</p>
-  <p><a href="README.zh-CN.md">简体中文</a> · English</p>
+  <p>A Windows download manager built with Rust, with a browser companion.</p>
+  <p><a href="https://github.com/AreChen/NDM-Next/releases/latest"><strong>Download</strong></a> · <a href="desktop/packaging/windows/README.md#browser-extension">Browser extension</a> · <a href="README.zh-CN.md">简体中文</a></p>
+  <img src="assets/ndm-next-screenshot.png" width="920" alt="NDM Next download manager showing download tasks">
 </div>
 
-NDM Next combines a Rust desktop downloader with a browser extension that keeps unwanted files out of your download list.
+## Features
 
-- Download over HTTP(S), FTP(S), SFTP, HLS, and static DASH; use multi-connection downloads for HTTP(S).
-- Filter browser downloads by file type, size, and domain; block a site in one click.
-- Use light or dark themes and switch between English and Chinese.
-- Search and categorize downloads, and receive automatic updates from GitHub.
-- Connect the extension to NDM Next or Neat Download Manager.
+- HTTP(S), FTP(S), SFTP, HLS and static DASH downloads, with multi-connection HTTP(S).
+- Browser download capture with file type, size and domain filters.
+- Search and categorize downloads; choose light or dark mode and English or Chinese.
+- Automatic desktop updates from GitHub.
+- The browser extension also works with Neat Download Manager.
 
 ## Install
 
-Download the Windows x64 installer from [GitHub Releases](https://github.com/AreChen/NDM-Next/releases/latest). Setup opens the app when finished. Find the Chrome / Brave and Edge extension links in **Settings → Browser extension**. While store review is pending, use the [manual installation instructions](desktop/packaging/windows/README.md#browser-extension).
+Download the Windows x64 installer from [GitHub Releases](https://github.com/AreChen/NDM-Next/releases/latest). Follow the [extension installation guide](desktop/packaging/windows/README.md#browser-extension) to connect your browser.
 
-Desktop updates download automatically and install when transfers are idle. You can turn this off in **Settings → About and updates**.
-
-NDM Next is an independent project and is not affiliated with Neat Download Manager.
-
-[MIT License](LICENSE)
+NDM Next is an independent project and is not affiliated with Neat Download Manager. [MIT License](LICENSE)

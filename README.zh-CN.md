@@ -1,24 +1,21 @@
 <div align="center">
   <img src="extension/icons/icon-128.png" width="112" alt="NDM Next 图标">
   <h1>NDM Next</h1>
-  <p>简洁现代的 Windows 下载器与浏览器扩展。</p>
-  <p>简体中文 · <a href="README.md">English</a></p>
+  <p>使用 Rust 构建的 Windows 下载管理器，搭配浏览器扩展。</p>
+  <p><a href="https://github.com/AreChen/NDM-Next/releases/latest"><strong>下载</strong></a> · <a href="desktop/packaging/windows/README.md#browser-extension">浏览器扩展</a> · <a href="README.md">English</a></p>
+  <img src="assets/ndm-next-screenshot.png" width="920" alt="显示下载任务的 NDM Next 桌面程序">
 </div>
 
-NDM Next 将 Rust 桌面下载器与浏览器扩展结合，过滤不需要的文件，让下载列表保持清爽。
+## 功能
 
-- 支持 HTTP(S)、FTP(S)、SFTP、HLS 和静态 DASH 下载，HTTP(S) 支持多连接下载。
-- 按文件类型、大小和域名过滤浏览器下载，一键屏蔽当前网站。
-- 支持亮暗主题与中英文切换。
-- 支持任务搜索、文件分类和 GitHub 自动更新。
-- 扩展可连接 NDM Next 或 Neat Download Manager。
+- 支持 HTTP(S)、FTP(S)、SFTP、HLS 和静态 DASH，HTTP(S) 支持多连接下载。
+- 浏览器下载接管，按文件类型、大小和域名过滤。
+- 搜索和分类下载任务，支持亮暗主题与中英文切换。
+- 通过 GitHub 自动更新桌面程序。
+- 浏览器扩展也可连接 Neat Download Manager。
 
 ## 安装
 
-从 [GitHub Releases](https://github.com/AreChen/NDM-Next/releases/latest) 下载 Windows x64 安装包，安装完成后默认打开程序。在「设置 → 浏览器扩展」打开 Chrome／Brave 或 Edge 商店入口；商店审核期间可按[手动安装说明](desktop/packaging/windows/README.md#browser-extension)加载扩展。
+从 [GitHub Releases](https://github.com/AreChen/NDM-Next/releases/latest) 下载 Windows x64 安装包。按照[扩展安装说明](desktop/packaging/windows/README.md#browser-extension)连接浏览器。
 
-桌面端会自动下载更新，等待下载任务空闲后安装并重启。可在「设置 → 关于与更新」关闭。
-
-NDM Next 是独立项目，与 Neat Download Manager 官方无关联。
-
-[MIT 许可证](LICENSE)
+NDM Next 是独立项目，与 Neat Download Manager 官方无关联。[MIT 许可证](LICENSE)
