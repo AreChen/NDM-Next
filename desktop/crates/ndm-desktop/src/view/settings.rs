@@ -190,8 +190,8 @@ impl Desktop {
             .flex_col()
             .gap_2()
             .child(div().text_xs().text_color(rgb(muted)).child(self.text(
-                "用于 HTTP 和媒体下载；留空使用系统代理。",
-                "Used for HTTP and media downloads; leave blank for the system proxy.",
+                "保存代理后，可用下载窗口的闪电按钮单独启用；默认沿用系统网络设置。",
+                "Save a proxy, then use the download window’s lightning button for one task. System network settings apply by default.",
             )))
             .child(self.settings_field(
                 self.text("HTTP(S) 代理地址", "HTTP(S) proxy URL"),
@@ -215,6 +215,19 @@ impl Desktop {
                         &self.proxy_password_input,
                         muted,
                     )),
+            )
+            .child(
+                Button::new("proxy-default")
+                    .small()
+                    .label(if self.pending_proxy_enabled {
+                        self.text("新任务默认使用代理：开启", "Proxy for new downloads: On")
+                    } else {
+                        self.text("新任务默认使用代理：关闭", "Proxy for new downloads: Off")
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.pending_proxy_enabled = !this.pending_proxy_enabled;
+                        cx.notify();
+                    })),
             )
             .child(
                 Button::new("save-proxy-settings")

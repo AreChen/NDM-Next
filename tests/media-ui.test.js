@@ -1,6 +1,12 @@
 const test=require('node:test');
 const assert=require('node:assert/strict');
-const {mediaSizeLabel,matchMedia,mediaMessage}=require('../extension/media-ui.js');
+const {mediaSizeLabel,matchMedia,mediaMessage,mediaButtonPosition}=require('../extension/media-ui.js');
+
+test('media button sits above the player and stays inside the frame viewport',()=>{
+  assert.deepEqual(mediaButtonPosition({top:120,right:650},190,30,1000,800),{left:452,top:84});
+  assert.deepEqual(mediaButtonPosition({top:0,right:1200},190,30,1000,800),{left:802,top:8});
+  assert.deepEqual(mediaButtonPosition({top:-100,right:90},190,30,1000,800),{left:8,top:8});
+});
 
 test('size labels keep unknown and manifest sizes honest in both languages',()=>{
   assert.equal(mediaSizeLabel({size:2097152,url:'https://x/video.mp4'},'en'),'2 MB');

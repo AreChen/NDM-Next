@@ -1,6 +1,11 @@
 mod ui;
 
-use crate::{chrome, files, preferences::Language, speed::SpeedMeter, view::format_bytes};
+use crate::{
+    chrome, files,
+    preferences::{Language, Preferences},
+    speed::SpeedMeter,
+    view::format_bytes,
+};
 use gpui_kit::{component::Theme as ComponentTheme, prelude::*, *};
 use ndm_core::{
     ProgressPhase, ProgressSnapshot, Scheduler, SchedulerEvent, Store, Task, TaskId, TaskState,
@@ -15,6 +20,10 @@ pub(crate) const WINDOW_WIDTH: f32 = 480.;
 pub(crate) const COMPACT_HEIGHT: f32 = 192.;
 pub(crate) const FINISHED_HEIGHT: f32 = 160.;
 pub(crate) const EXPANDED_HEIGHT: f32 = 430.;
+
+fn should_track(state: Option<TaskState>, has_worker: bool) -> bool {
+    has_worker || matches!(state, Some(TaskState::Queued | TaskState::Running))
+}
 
 fn remaining_seconds(total: Option<u64>, downloaded: u64, speed: u64) -> Option<u64> {
     total
@@ -82,6 +91,8 @@ pub(crate) struct ProgressWindow {
     scheduler: Scheduler,
     runtime: Arc<tokio::runtime::Runtime>,
     pub(crate) language: Language,
+    pub(crate) configured_proxy: Option<ndm_core::ProxyOptions>,
+    proxy_switching: bool,
     task: Option<Task>,
     snapshot: Option<ProgressSnapshot>,
     meter: SpeedMeter,
@@ -101,7 +112,7 @@ impl ProgressWindow {
         store: Arc<Store>,
         scheduler: Scheduler,
         runtime: Arc<tokio::runtime::Runtime>,
-        language: Language,
+        preferences: Preferences,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -120,6 +131,7 @@ impl ProgressWindow {
                         if view
                             .update(cx, |this, cx| match event {
                                 SchedulerEvent::Started(task_id) if task_id == this.id => {
+                                    this.task = this.store.get(this.id).ok().flatten();
                                     if let Some(task) = &mut this.task {
                                         task.state = TaskState::Running;
                                     }
@@ -156,7 +168,9 @@ impl ProgressWindow {
             store,
             scheduler,
             runtime,
-            language,
+            language: preferences.language,
+            configured_proxy: preferences.proxy,
+            proxy_switching: false,
             task,
             snapshot,
             meter: SpeedMeter::default(),
@@ -169,11 +183,10 @@ impl ProgressWindow {
             notice: None,
             layout_height: COMPACT_HEIGHT,
         };
-        if this
-            .task
-            .as_ref()
-            .is_some_and(|task| task.state == TaskState::Running)
-        {
+        if should_track(
+            this.task.as_ref().map(|task| task.state),
+            this.scheduler.progress(id).is_some(),
+        ) {
             this.begin_tracking(cx);
         }
         this
@@ -200,9 +213,23 @@ impl ProgressWindow {
                 let keep = view
                     .update(cx, |this, cx| {
                         let Some(snapshot) = this.scheduler.progress(this.id) else {
-                            this.tracking = false;
-                            return false;
+                            this.task = this.store.get(this.id).ok().flatten();
+                            this.tracking =
+                                should_track(this.task.as_ref().map(|task| task.state), false);
+                            if !this.tracking {
+                                this.speed = 0;
+                                this.snapshot = this
+                                    .task
+                                    .as_ref()
+                                    .and_then(ndm_core::recover_task_progress)
+                                    .or_else(|| this.snapshot.clone());
+                            }
+                            cx.notify();
+                            return this.tracking;
                         };
+                        if let Some(task) = &mut this.task {
+                            task.state = TaskState::Running;
+                        }
                         if this.measured_phase != Some(snapshot.phase) {
                             this.measured_phase = Some(snapshot.phase);
                             this.phase_started = Some(Instant::now());
@@ -236,6 +263,9 @@ impl ProgressWindow {
     }
 
     fn change_state(&mut self, state: TaskState, cx: &mut Context<Self>) {
+        if self.proxy_switching {
+            return;
+        }
         let scheduler = self.scheduler.clone();
         let runtime = self.runtime.clone();
         let id = self.id;
@@ -269,6 +299,62 @@ impl ProgressWindow {
                     this.speed = 0;
                     this.meter.reset();
                     this.measured_phase = None;
+                }
+                if should_track(
+                    this.task.as_ref().map(|task| task.state),
+                    this.scheduler.progress(id).is_some(),
+                ) {
+                    this.begin_tracking(cx);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn enable_task_proxy(&mut self, cx: &mut Context<Self>) {
+        if self.proxy_switching {
+            return;
+        }
+        let Some(proxy) = self.configured_proxy.clone() else {
+            self.notice = Some(
+                self.text(
+                    "请先在设置中配置下载代理。",
+                    "Configure a download proxy in Settings first.",
+                )
+                .into(),
+            );
+            cx.notify();
+            return;
+        };
+        self.proxy_switching = true;
+        self.notice = None;
+        let scheduler = self.scheduler.clone();
+        let runtime = self.runtime.clone();
+        let id = self.id;
+        cx.spawn(async move |view, cx| {
+            let result = runtime
+                .spawn(async move { scheduler.retry_with_proxy(id, proxy).await })
+                .await;
+            let _ = view.update(cx, |this, cx| {
+                this.proxy_switching = false;
+                this.task = this.store.get(id).ok().flatten();
+                this.notice = if matches!(result, Ok(Ok(()))) {
+                    None
+                } else {
+                    Some(
+                        this.text(
+                            "无法切换代理，请检查任务状态后重试。",
+                            "Could not switch proxy. Check the download state and retry.",
+                        )
+                        .into(),
+                    )
+                };
+                if should_track(
+                    this.task.as_ref().map(|task| task.state),
+                    this.scheduler.progress(id).is_some(),
+                ) {
+                    this.begin_tracking(cx);
                 }
                 cx.notify();
             });
@@ -313,8 +399,27 @@ impl ProgressWindow {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_elapsed, media_remaining_seconds, progress_bytes, remaining_seconds};
+    use super::{
+        format_elapsed, media_remaining_seconds, progress_bytes, remaining_seconds, should_track,
+    };
     use ndm_core::{NewTask, ProgressSnapshot, Task, TaskId, TaskOptions, TaskState};
+
+    #[test]
+    fn a_new_window_polls_queued_tasks_even_when_started_was_already_broadcast() {
+        assert!(should_track(Some(TaskState::Queued), false));
+        assert!(should_track(Some(TaskState::Queued), true));
+        assert!(should_track(Some(TaskState::Running), true));
+        assert!(should_track(Some(TaskState::Running), false));
+        for state in [
+            TaskState::Prepared,
+            TaskState::Paused,
+            TaskState::Completed,
+            TaskState::Failed,
+        ] {
+            assert!(!should_track(Some(state), false));
+        }
+        assert!(!should_track(None, false));
+    }
 
     #[test]
     fn paused_window_preserves_saved_bytes_and_known_total() {

@@ -84,6 +84,7 @@ pub(crate) struct Desktop {
     auth_expanded: bool,
     ftp_security: FtpSecurity,
     pending_auto_resume: bool,
+    pending_proxy_enabled: bool,
     pending_host_keys: HashMap<TaskId, PendingHostKey>,
     confirming_host_key: Option<TaskId>,
     editing_url: Option<TaskId>,
@@ -207,6 +208,7 @@ impl Desktop {
         let auth_key_input = cx.new(|cx| InputState::new(window, cx));
         let auth_passphrase_input = cx.new(|cx| InputState::new(window, cx).masked(true));
         let pending_auto_resume = preferences.auto_resume;
+        let pending_proxy_enabled = preferences.proxy_enabled_by_default;
         let sidebar_collapsed = preferences.sidebar_collapsed;
         #[cfg(windows)]
         let startup_enabled = crate::startup::enabled().unwrap_or(false);
@@ -353,6 +355,7 @@ impl Desktop {
             auth_expanded: false,
             ftp_security: FtpSecurity::Auto,
             pending_auto_resume,
+            pending_proxy_enabled,
             pending_host_keys,
             confirming_host_key: None,
             editing_url: None,
@@ -516,7 +519,7 @@ impl Desktop {
         let store = self.store.clone();
         let scheduler = self.scheduler.clone();
         let runtime = self.runtime.clone();
-        let language = self.preferences.language;
+        let preferences = self.preferences.clone();
         let bounds = Bounds::centered(
             None,
             size(
@@ -535,7 +538,7 @@ impl Desktop {
             move |window, cx| {
                 crate::chrome::round_window(window);
                 cx.new(|cx| {
-                    ProgressWindow::new(id, store, scheduler, runtime, language, window, cx)
+                    ProgressWindow::new(id, store, scheduler, runtime, preferences, window, cx)
                 })
             },
         ) {
@@ -782,7 +785,7 @@ impl Desktop {
         let username = self.proxy_user_input.read(cx).value().to_string();
         let password = self.proxy_password_input.read(cx).value().to_string();
         let proxy = if url.is_empty() {
-            if !username.is_empty() || !password.is_empty() {
+            if !username.is_empty() || !password.is_empty() || self.pending_proxy_enabled {
                 self.set_notice(
                     self.text("请先填写代理地址。", "Enter a proxy address first.")
                         .into(),
@@ -818,6 +821,7 @@ impl Desktop {
         updated.max_kib_per_second = speed;
         updated.auto_resume = self.pending_auto_resume;
         updated.proxy = proxy;
+        updated.proxy_enabled_by_default = self.pending_proxy_enabled && updated.proxy.is_some();
         if updated.save(&self.preferences_path).is_err() {
             self.set_notice(
                 self.text("无法保存设置。", "Could not save settings.")
@@ -827,6 +831,13 @@ impl Desktop {
         } else {
             self.scheduler.update_options(updated.scheduler_options());
             self.preferences = updated;
+            let proxy = self.preferences.proxy.clone();
+            for (_, view) in self.progress_windows.values() {
+                let _ = view.update(cx, |view, cx| {
+                    view.configured_proxy = proxy.clone();
+                    cx.notify();
+                });
+            }
             self.set_notice(
                 self.text(
                     "设置已保存；正在运行的任务会保持原设置。",

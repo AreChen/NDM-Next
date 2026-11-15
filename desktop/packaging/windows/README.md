@@ -25,13 +25,18 @@ pwsh -File .\enable-dev-extension.ps1 -ExtensionId <extension-id>
 
 Download `enable-dev-extension.ps1` from the same release (or use `desktop/packaging/windows/enable-dev-extension.ps1` in a source checkout). The command adds that one local extension to the native messaging manifest. Reload the extension and select **NDM Next** as its backend. Setup preserves existing valid extension IDs across upgrades, including when changing the installation directory. The existing extension store release has a separate version stream.
 
-Update the companion extension as well as the desktop app to receive media-button fixes. Reload open webpages after updating the extension. **Settings → Buttons beside media** hides the page buttons immediately; detected media remains available in the popup. Complete file sizes appear when the server supplies them; playlist and segment lengths are not presented as a whole video's size.
+Update the companion extension as well as the desktop app to receive media-button fixes. Reload open webpages after updating the extension. Media buttons appear above the player where space allows, with a viewport-clamped fallback near its top edge. A non-modal top-layer host avoids ordinary page stacking and clipping; controls stay within their own iframe. **Settings → Buttons beside media** hides the page buttons immediately; detected media remains available in the popup. Complete file sizes appear when the server supplies them; playlist and segment lengths are not presented as a whole video's size.
+
+## Download proxy
+
+Saving a proxy does not activate it. Enable **Proxy for new downloads** and save to apply it by default; otherwise downloads retain the system network settings. The lightning button in a download window restarts only that HTTP(S), HLS or DASH task through the saved proxy, retaining supported resume data and cumulative statistics. Other tasks and the default setting are unchanged. The task keeps its proxy through pause, resume and application restart. FTP(S) and SFTP do not use this HTTP proxy control. Proxy credentials remain encrypted in preferences and task storage.
 
 ## Release checklist
 
 - Run the Rust workspace suite, media integration tests, extension tests, formatting and clippy checks.
 - Build the installer with the audited media tools. Publish its corresponding source and licenses with the installer (the build includes them).
 - Publish the installer, companion extension, browser-integration helper and `SHA256SUMS` at a stable `desktop-v{version}` GitHub release. Keep incomplete uploads in a draft.
+- Write every release announcement in both **English and 简体中文**, with matching changes and installation instructions in each language.
 - Verify the published installer size and SHA-256 digest against the local build before considering the release ready for automatic updates.
 
 ## Windows signing

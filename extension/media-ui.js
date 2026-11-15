@@ -30,6 +30,13 @@ function matchMedia(sources,items,playerCount) {
   }
   return null;
 }
+function mediaButtonPosition(rect,width,height,viewportWidth,viewportHeight) {
+  const edge=8,gap=6;
+  const left=Math.max(edge,Math.min(rect.right-width-edge,viewportWidth-width-edge));
+  const above=rect.top-height-gap;
+  const top=Math.max(edge,Math.min(above>=edge ? above : rect.top+gap,viewportHeight-height-edge));
+  return {left,top};
+}
 if (typeof module !== 'undefined') {
-  module.exports={mediaLanguage,mediaMessage,mediaSizeLabel,matchMedia};
+  module.exports={mediaLanguage,mediaMessage,mediaSizeLabel,matchMedia,mediaButtonPosition};
 }

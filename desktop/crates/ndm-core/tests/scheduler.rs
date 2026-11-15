@@ -102,6 +102,130 @@ async fn streaming_server(known_length: bool) -> String {
 }
 
 #[tokio::test]
+async fn task_proxy_switch_preserves_request_and_statistics_without_changing_other_tasks() {
+    let dir = TempDir::new().unwrap();
+    let database = dir.path().join("tasks.db");
+    let store = Arc::new(Store::open(&database).unwrap());
+    let url = streaming_server(true).await;
+    let hits = Arc::new(AtomicUsize::new(0));
+    let count = hits.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy = ndm_core::ProxyOptions {
+        url: format!("http://{}", listener.local_addr().unwrap()),
+        username: Some("task-user".into()),
+        password: Some("task-secret".into()),
+    };
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().fallback(move |headers: axum::http::HeaderMap| {
+                let count = count.clone();
+                async move {
+                    assert!(headers.contains_key(header::PROXY_AUTHORIZATION));
+                    count.fetch_add(1, Ordering::SeqCst);
+                    let chunks = futures_util::stream::unfold(0, |index| async move {
+                        if index == 16 {
+                            return None;
+                        }
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                        Some((Ok::<_, std::io::Error>(vec![42; 4096]), index + 1))
+                    });
+                    Response::builder()
+                        .header(header::CONTENT_LENGTH, 65_536)
+                        .body(Body::from_stream(chunks))
+                        .unwrap()
+                }
+            }),
+        )
+        .await
+        .unwrap();
+    });
+    let id = TaskId::new_v4();
+    let mut original = request(dir.path(), &url);
+    original
+        .headers
+        .insert("Cookie".into(), "media-session=preserved".into());
+    store.prepare(id, &original).unwrap();
+    store.commit(id).unwrap();
+    let scheduler = Scheduler::start(store.clone(), SchedulerOptions::default()).unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while scheduler.progress(id).is_none_or(|p| p.downloaded == 0) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    scheduler.retry_with_proxy(id, proxy.clone()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while hits.load(Ordering::SeqCst) == 0
+            || scheduler.progress(id).is_none_or(|p| p.downloaded == 0)
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    scheduler.pause(id).await.unwrap();
+    let paused = store.get(id).unwrap().unwrap();
+    assert_eq!(paused.request, original);
+    assert!(
+        matches!(&paused.options, ndm_core::TaskOptions::Http(options) if options.proxy.as_ref() == Some(&proxy))
+    );
+    assert!(paused.progress.as_ref().unwrap().transferred_total > 0);
+    scheduler.shutdown().await;
+    let scheduler = Scheduler::start(store.clone(), SchedulerOptions::default()).unwrap();
+    let before_resume = hits.load(Ordering::SeqCst);
+    scheduler.resume(id).await.unwrap();
+    wait_for(&store, id, TaskState::Completed).await;
+    let completed = store.get(id).unwrap().unwrap();
+    assert!(hits.load(Ordering::SeqCst) > before_resume);
+    assert_eq!(
+        std::fs::read(completed.output_path.unwrap()).unwrap(),
+        vec![42; 65_536]
+    );
+    assert!(
+        completed.progress.unwrap().transferred_total > paused.progress.unwrap().transferred_total
+    );
+    let before_other = hits.load(Ordering::SeqCst);
+    let other = TaskId::new_v4();
+    store.prepare(other, &request(dir.path(), &url)).unwrap();
+    store.commit(other).unwrap();
+    scheduler.notify();
+    wait_for(&store, other, TaskState::Completed).await;
+    assert_eq!(hits.load(Ordering::SeqCst), before_other);
+    assert_eq!(
+        store.get(other).unwrap().unwrap().options,
+        ndm_core::TaskOptions::Auto
+    );
+    scheduler.shutdown().await;
+}
+
+#[tokio::test]
+async fn proxy_retry_is_atomic_when_an_installer_has_reserved_the_idle_profile() {
+    let dir = TempDir::new().unwrap();
+    let store = Arc::new(Store::open(&dir.path().join("tasks.db")).unwrap());
+    let id = TaskId::new_v4();
+    store
+        .prepare(id, &request(dir.path(), "https://example.test/video.m3u8"))
+        .unwrap();
+    store.commit(id).unwrap();
+    store.pause(id).unwrap();
+    let scheduler = Scheduler::start(store.clone(), SchedulerOptions::default()).unwrap();
+    let reservation = store.reserve_update_if_idle().unwrap().unwrap();
+    let proxy = ndm_core::ProxyOptions {
+        url: "http://127.0.0.1:18085".into(),
+        username: None,
+        password: None,
+    };
+    assert!(scheduler.retry_with_proxy(id, proxy).await.is_err());
+    let task = store.get(id).unwrap().unwrap();
+    assert_eq!(task.state, TaskState::Paused);
+    assert_eq!(task.options, ndm_core::TaskOptions::Auto);
+    drop(reservation);
+    scheduler.shutdown().await;
+}
+
+#[tokio::test]
 async fn saved_progress_survives_pause_reopen_and_resume_without_counting_pause_time() {
     let dir = TempDir::new().unwrap();
     let database = dir.path().join("tasks.db");

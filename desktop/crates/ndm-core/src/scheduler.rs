@@ -18,8 +18,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     DashOptions, DownloadProgress, Error, FtpOptions, HlsOptions, HttpOptions, ProgressSnapshot,
-    Result, SftpOptions, Store, Task, TaskId, TaskOptions, TaskState, execute_dash, execute_ftp,
-    execute_hls, execute_http, execute_sftp,
+    ProxyOptions, Result, SftpOptions, Store, Task, TaskId, TaskOptions, TaskState, execute_dash,
+    execute_ftp, execute_hls, execute_http, execute_sftp,
 };
 
 #[derive(Clone, Debug)]
@@ -159,7 +159,14 @@ impl Scheduler {
     }
 
     pub async fn pause(&self, id: TaskId) -> Result<()> {
-        let active = self.0.active.lock().unwrap().get(&id).cloned();
+        let active = {
+            let workers = self.0.active.lock().unwrap();
+            let active = workers.get(&id).cloned();
+            if active.is_none() {
+                self.0.store.pause(id)?;
+            }
+            active
+        };
         if let Some(mut active) = active {
             active.manual_pause.store(true, Ordering::Release);
             active.cancel.cancel();
@@ -173,7 +180,7 @@ impl Scheduler {
                 _ => Err(Error::InvalidState),
             }
         } else {
-            self.0.store.pause(id)
+            Ok(())
         }
     }
 
@@ -192,6 +199,32 @@ impl Scheduler {
 
     pub async fn resume(&self, id: TaskId) -> Result<()> {
         self.0.store.resume(id)?;
+        self.notify();
+        Ok(())
+    }
+
+    /// Restart only this task through the supplied proxy, retaining its request,
+    /// protocol selections and resumable data. Credentials remain encrypted by Store.
+    pub async fn retry_with_proxy(&self, id: TaskId, proxy: ProxyOptions) -> Result<()> {
+        proxy.validate()?;
+        let task = self.0.store.get(id)?.ok_or(Error::NotFound)?;
+        task_proxy_options(&task, &self.0.options.read().unwrap(), proxy.clone())?;
+        if self.progress(id).is_some()
+            || matches!(task.state, TaskState::Queued | TaskState::Running)
+        {
+            self.pause(id).await?;
+        }
+        // The dispatcher revalidates state and options under this same lock.
+        // No worker can start between updating the encrypted options and queuing.
+        {
+            let active = self.0.active.lock().unwrap();
+            if active.contains_key(&id) {
+                return Err(Error::InvalidState);
+            }
+            let task = self.0.store.get(id)?.ok_or(Error::NotFound)?;
+            let options = task_proxy_options(&task, &self.0.options.read().unwrap(), proxy)?;
+            self.0.store.resume_with_options(id, &options)?;
+        }
         self.notify();
         Ok(())
     }
@@ -343,6 +376,12 @@ async fn dispatch(inner: Arc<Inner>) {
                 if active.contains_key(&task.id) {
                     continue;
                 }
+                let Ok(Some(task)) = inner.store.get(task.id) else {
+                    continue;
+                };
+                if task.state != TaskState::Queued {
+                    continue;
+                }
                 let (done_tx, done) = watch::channel(false);
                 let job = Active {
                     cancel: CancellationToken::new(),
@@ -445,9 +484,23 @@ async fn run_one(inner: Arc<Inner>, task: Task, active: Active, done: watch::Sen
     inner.wake.notify_one();
 }
 
-async fn execute_one(inner: &Arc<Inner>, task: &Task, active: &Active) -> Result<()> {
-    let defaults = inner.options.read().unwrap().clone();
-    let options = match task.options.clone() {
+fn task_proxy_options(
+    task: &Task,
+    defaults: &SchedulerOptions,
+    proxy: ProxyOptions,
+) -> Result<TaskOptions> {
+    let mut options = task_options(task, defaults);
+    match &mut options {
+        TaskOptions::Http(options) => options.proxy = Some(proxy),
+        TaskOptions::Hls(options) => options.proxy = Some(proxy),
+        TaskOptions::Dash(options) => options.proxy = Some(proxy),
+        _ => return Err(Error::InvalidState),
+    }
+    Ok(options)
+}
+
+fn task_options(task: &Task, defaults: &SchedulerOptions) -> TaskOptions {
+    match task.options.clone() {
         TaskOptions::AutoHttp => TaskOptions::Http(defaults.http.clone()),
         TaskOptions::Auto => {
             match reqwest::Url::parse(&task.request.url).ok().map(|url| {
@@ -516,7 +569,11 @@ async fn execute_one(inner: &Arc<Inner>, task: &Task, active: &Active) -> Result
             TaskOptions::Ftp(options)
         }
         other => other,
-    };
+    }
+}
+
+async fn execute_one(inner: &Arc<Inner>, task: &Task, active: &Active) -> Result<()> {
+    let options = task_options(task, &inner.options.read().unwrap());
     match options {
         TaskOptions::Auto | TaskOptions::AutoHttp => match inner.store.start(task.id) {
             Ok(()) => {
@@ -588,5 +645,89 @@ async fn execute_one(inner: &Arc<Inner>, task: &Task, active: &Active) -> Result
                 Err(_) => Err(Error::Hls),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod proxy_tests {
+    use super::*;
+
+    #[test]
+    fn proxy_restart_preserves_protocol_tracks_limits_and_explicit_http_detection() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("tasks.db")).unwrap();
+        let id = TaskId::new_v4();
+        store
+            .prepare(
+                id,
+                &crate::NewTask {
+                    url: "https://example.test/media.m3u8".into(),
+                    destination: dir.path().into(),
+                    suggested_filename: None,
+                    source_url: None,
+                    expected_size: None,
+                    headers: Default::default(),
+                },
+            )
+            .unwrap();
+        let mut task = store.get(id).unwrap().unwrap();
+        let proxy = ProxyOptions {
+            url: "http://127.0.0.1:18085".into(),
+            username: None,
+            password: None,
+        };
+        let defaults = SchedulerOptions::default();
+        task.options = TaskOptions::Hls(HlsOptions {
+            variant_index: Some(3),
+            audio_names: vec!["中文".into(), "English".into()],
+            max_bytes_per_second: Some(512),
+            ..Default::default()
+        });
+        let TaskOptions::Hls(options) =
+            task_proxy_options(&task, &defaults, proxy.clone()).unwrap()
+        else {
+            panic!("lost HLS selections");
+        };
+        assert_eq!(options.variant_index, Some(3));
+        assert_eq!(options.audio_names, ["中文", "English"]);
+        assert_eq!(options.max_bytes_per_second, Some(512));
+        assert_eq!(options.proxy.as_ref(), Some(&proxy));
+        task.options = TaskOptions::Dash(DashOptions {
+            representation_index: Some(2),
+            audio_indices: vec![1, 4],
+            ..Default::default()
+        });
+        let TaskOptions::Dash(options) =
+            task_proxy_options(&task, &defaults, proxy.clone()).unwrap()
+        else {
+            panic!("lost DASH selections");
+        };
+        assert_eq!(options.representation_index, Some(2));
+        assert_eq!(options.audio_indices, [1, 4]);
+        assert_eq!(options.proxy.as_ref(), Some(&proxy));
+        task.options = TaskOptions::Http(HttpOptions {
+            max_connections: 7,
+            max_bytes_per_second: Some(1024),
+            proxy: None,
+        });
+        let TaskOptions::Http(options) =
+            task_proxy_options(&task, &defaults, proxy.clone()).unwrap()
+        else {
+            panic!("lost HTTP options");
+        };
+        assert_eq!(options.max_connections, 7);
+        assert_eq!(options.max_bytes_per_second, Some(1024));
+        task.options = TaskOptions::AutoHttp;
+        assert!(matches!(
+            task_proxy_options(&task, &defaults, proxy.clone()).unwrap(),
+            TaskOptions::Http(_)
+        ));
+        task.options = TaskOptions::Auto;
+        assert!(matches!(
+            task_proxy_options(&task, &defaults, proxy.clone()).unwrap(),
+            TaskOptions::Hls(_)
+        ));
+        task.request.url = "sftp://example.test/file".into();
+        assert!(task_proxy_options(&task, &defaults, proxy).is_err());
     }
 }

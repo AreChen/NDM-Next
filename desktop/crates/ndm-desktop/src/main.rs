@@ -212,6 +212,7 @@ mod asset_tests {
             IconName::File,
             IconName::Pause,
             IconName::Play,
+            IconName::Zap,
             IconName::Square,
             IconName::WindowMinimize,
             IconName::WindowMaximize,

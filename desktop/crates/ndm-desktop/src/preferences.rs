@@ -34,6 +34,7 @@ pub struct Preferences {
     pub last_update_check: Option<u64>,
     pub available_update: Option<String>,
     pub max_kib_per_second: u64,
+    pub proxy_enabled_by_default: bool,
     #[serde(skip)]
     pub proxy: Option<ndm_core::ProxyOptions>,
 }
@@ -56,6 +57,7 @@ impl Default for Preferences {
             last_update_check: None,
             available_update: None,
             max_kib_per_second: 0,
+            proxy_enabled_by_default: false,
             proxy: None,
         }
     }
@@ -105,6 +107,12 @@ impl Preferences {
         Ok(())
     }
 
+    pub fn default_proxy(&self) -> Option<ndm_core::ProxyOptions> {
+        self.proxy_enabled_by_default
+            .then(|| self.proxy.clone())
+            .flatten()
+    }
+
     pub fn scheduler_options(&self) -> ndm_core::SchedulerOptions {
         ndm_core::SchedulerOptions {
             max_active_tasks: self.max_active_tasks,
@@ -116,7 +124,7 @@ impl Preferences {
                 } else {
                     Some(self.max_kib_per_second.saturating_mul(1024))
                 },
-                proxy: self.proxy.clone(),
+                proxy: self.default_proxy(),
             },
         }
     }
@@ -125,6 +133,41 @@ impl Preferences {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn saved_proxy_only_becomes_a_default_after_explicit_opt_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("preferences.json");
+        let mut preferences = Preferences {
+            proxy: Some(ndm_core::ProxyOptions {
+                url: "http://127.0.0.1:18085".into(),
+                username: None,
+                password: None,
+            }),
+            ..Default::default()
+        };
+        preferences.save(&path).unwrap();
+        let loaded = Preferences::load(&path).unwrap();
+        assert!(loaded.proxy.is_some());
+        assert!(loaded.scheduler_options().http.proxy.is_none());
+        preferences.proxy_enabled_by_default = true;
+        preferences.save(&path).unwrap();
+        assert_eq!(
+            Preferences::load(&path)
+                .unwrap()
+                .scheduler_options()
+                .http
+                .proxy,
+            preferences.proxy
+        );
+        // Preferences from versions before the opt-in toggle also start disabled.
+        let mut old: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        old.as_object_mut()
+            .unwrap()
+            .remove("proxy_enabled_by_default");
+        fs::write(&path, serde_json::to_vec(&old).unwrap()).unwrap();
+        assert!(Preferences::load(&path).unwrap().default_proxy().is_none());
+    }
     #[test]
     fn preferences_round_trip_and_default_missing_fields() {
         let dir = tempfile::tempdir().unwrap();

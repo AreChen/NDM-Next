@@ -2,15 +2,23 @@
   let items=[], enabled=false, language='en', frame, fetching=false, refreshAgain=false;
   let host, shadow;
   const buttons=new Map();
+  function raiseHost(force=false) {
+    if (!host?.isConnected || typeof host.showPopover !== 'function') return;
+    try {
+      if (force && host.matches(':popover-open')) host.hidePopover();
+      if (!host.matches(':popover-open')) host.showPopover();
+    } catch { /* Fixed-position fallback for browsers without usable popovers. */ }
+  }
   function ensureHost() {
-    if (host?.isConnected) return;
-    if (host) {document.documentElement.append(host);return;}
+    if (host?.isConnected) {raiseHost();return;}
+    if (host) {document.documentElement.append(host);raiseHost();return;}
     host=document.createElement('div');
-    host.style.cssText='all:initial!important;position:fixed!important;inset:0!important;pointer-events:none!important;z-index:2147483647!important;';
+    host.setAttribute('popover','manual');
+    host.style.cssText='all:initial!important;position:fixed!important;inset:0!important;margin:0!important;border:0!important;padding:0!important;width:100vw!important;height:100vh!important;pointer-events:none!important;z-index:2147483647!important;';
     shadow=host.attachShadow({mode:'closed'});
     const style=document.createElement('style');
-    style.textContent=`:host{color-scheme:dark}button{position:absolute;pointer-events:auto;display:flex;align-items:center;gap:7px;max-width:calc(100vw - 16px);border:1px solid #ffffff30;border-radius:9px;padding:7px 10px;background:#171c2ff2;color:#f5f4ff;box-shadow:0 3px 14px #0005;font:600 12px/1.3 system-ui,sans-serif;cursor:pointer;white-space:nowrap}button[hidden]{display:none!important}button:hover{background:#40377b}button:focus-visible{outline:2px solid #b5a7ff;outline-offset:2px}button:disabled{cursor:wait;opacity:.8}.arrow{color:#c1b5ff;font-size:16px}.size{font-weight:400;color:#c6c7d8;font-size:11px}.notice{white-space:normal;max-width:280px}`;
-    shadow.append(style); document.documentElement.append(host);
+    style.textContent=`:host{color-scheme:dark}:host::backdrop{background:transparent!important;pointer-events:none!important}button{position:absolute;pointer-events:auto;display:flex;align-items:center;gap:7px;max-width:calc(100vw - 16px);border:1px solid #ffffff30;border-radius:9px;padding:7px 10px;background:#171c2ff2;color:#f5f4ff;box-shadow:0 3px 14px #0005;font:600 12px/1.3 system-ui,sans-serif;cursor:pointer;white-space:nowrap}button[hidden]{display:none!important}button:hover{background:#40377b}button:focus-visible{outline:2px solid #b5a7ff;outline-offset:2px}button:disabled{cursor:wait;opacity:.8}.arrow{color:#c1b5ff;font-size:16px}.size{font-weight:400;color:#c6c7d8;font-size:11px}.notice{white-space:normal;max-width:280px}`;
+    shadow.append(style); document.documentElement.append(host);raiseHost();
   }
   function schedule() { if (!frame) frame=requestAnimationFrame(() => {frame=undefined;render();}); }
   const resizeObserver=new ResizeObserver(schedule);
@@ -38,6 +46,7 @@
           } catch {button.textContent=mediaMessage('manager_unavailable',language);}
           button.classList.add('notice');button.disabled=false;
           button.setAttribute('aria-label',button.textContent);
+          schedule();
         });
         shadow.append(button);
       }
@@ -53,8 +62,9 @@
       const rect=player.getBoundingClientRect();
       const shown=rect.width>=100 && rect.height>=24 && rect.bottom>0 && rect.right>0 && rect.top<innerHeight && rect.left<innerWidth && getComputedStyle(player).visibility!=='hidden';
       button.hidden=!shown;
-      button.style.left=`${Math.max(8,Math.min(rect.right-button.offsetWidth-8,innerWidth-button.offsetWidth-8))}px`;
-      button.style.top=`${Math.max(8,rect.top+8)}px`;
+      const position=mediaButtonPosition(rect,button.offsetWidth,button.offsetHeight,innerWidth,innerHeight);
+      button.style.left=`${position.left}px`;
+      button.style.top=`${position.top}px`;
     }
     if (!buttons.size) {host?.remove();host=undefined;}
   }
@@ -70,6 +80,8 @@
   }
   new MutationObserver(schedule).observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['src']});
   for (const event of ['loadedmetadata','loadstart','emptied','play']) document.addEventListener(event,schedule,true);
+  document.addEventListener('fullscreenchange',()=>{raiseHost(true);schedule();});
+  document.addEventListener('toggle',event=>{if(event.target!==host && event.newState==='open'){raiseHost(true);schedule();}},true);
   addEventListener('scroll',schedule,{passive:true,capture:true});addEventListener('resize',schedule,{passive:true});
   chrome.runtime.onMessage.addListener(message=>{if(message.action==='mediaChanged') refresh();});
   chrome.storage.onChanged.addListener((changes,area)=>{if(area==='local' && Object.keys(changes).some(key=>Object.hasOwn(DEFAULTS,key))) refresh();});

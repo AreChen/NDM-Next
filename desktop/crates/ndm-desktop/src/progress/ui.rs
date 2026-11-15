@@ -1,6 +1,6 @@
 use super::*;
 use gpui_kit::component::{
-    IconName, Sizable, ThemeMode,
+    Disableable, IconName, Sizable, ThemeMode,
     button::{Button, ButtonVariants},
 };
 
@@ -405,6 +405,7 @@ impl Render for ProgressWindow {
                     row.child(
                         Button::new("progress-action")
                             .small()
+                            .disabled(self.proxy_switching)
                             .primary()
                             .icon(icon)
                             .label(label)
@@ -429,6 +430,51 @@ impl Render for ProgressWindow {
                             .on_click(cx.listener(|this, _, _, cx| this.open_file(cx))),
                     )
                 })
+                .when(
+                    matches!(
+                        state,
+                        TaskState::Queued
+                            | TaskState::Running
+                            | TaskState::Paused
+                            | TaskState::Failed
+                    ) && task.as_ref().is_some_and(|task| {
+                        reqwest::Url::parse(&task.request.url)
+                            .is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
+                    }),
+                    |row| {
+                        row.child(
+                            Button::new("progress-proxy")
+                                .small()
+                                .icon(gpui_kit::assets::IconName::Zap)
+                                .loading(self.proxy_switching)
+                                .when(
+                                    task.as_ref().is_some_and(|task| match &task.options {
+                                        ndm_core::TaskOptions::Http(options) => {
+                                            options.proxy.is_some()
+                                        }
+                                        ndm_core::TaskOptions::Hls(options) => {
+                                            options.proxy.is_some()
+                                        }
+                                        ndm_core::TaskOptions::Dash(options) => {
+                                            options.proxy.is_some()
+                                        }
+                                        _ => false,
+                                    }),
+                                    |button| button.primary(),
+                                )
+                                .disabled(self.proxy_switching)
+                                .tooltip(if self.proxy_switching {
+                                    self.text("正在切换代理…", "Switching proxy…")
+                                } else {
+                                    self.text(
+                                        "仅对此任务使用已配置代理",
+                                        "Use configured proxy for this download only",
+                                    )
+                                })
+                                .on_click(cx.listener(|this, _, _, cx| this.enable_task_proxy(cx))),
+                        )
+                    },
+                )
                 .child(div().flex_1())
                 .child(
                     Button::new("progress-details")

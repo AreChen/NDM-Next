@@ -54,7 +54,7 @@ impl Desktop {
         self.save_preferences(cx);
         cx.notify();
         let runtime = self.runtime.clone();
-        let proxy = self.preferences.proxy.clone();
+        let proxy = self.preferences.default_proxy();
         cx.spawn(async move |view, cx| {
             let outcome = runtime.spawn(updates::check(proxy)).await;
             let _ = view.update(cx, |this, cx| {
@@ -93,7 +93,7 @@ impl Desktop {
             .parent()
             .unwrap_or(std::path::Path::new("."))
             .join("updates");
-        let proxy = self.preferences.proxy.clone();
+        let proxy = self.preferences.default_proxy();
         let runtime = self.runtime.clone();
         cx.notify();
         cx.spawn(async move |view, cx| {

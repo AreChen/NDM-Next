@@ -317,13 +317,29 @@ impl Store {
     }
 
     pub fn resume(&self, id: TaskId) -> Result<()> {
+        self.requeue(id, None)
+    }
+
+    pub(crate) fn resume_with_options(&self, id: TaskId, options: &TaskOptions) -> Result<()> {
+        self.requeue(id, Some(options))
+    }
+
+    fn requeue(&self, id: TaskId, options: Option<&TaskOptions>) -> Result<()> {
         let _admission = self.admit_work()?;
         let mut conn = self.connection()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let changed = tx.execute(
+        let changed = if let Some(options) = options {
+            let encrypted = secrets::protect(&serde_json::to_vec(options)?)?;
+            tx.execute(
+                "UPDATE tasks SET state = 'queued', error = NULL, options = ?1 WHERE id = ?2 AND state IN ('paused','failed')",
+                params![encrypted, id.to_string()],
+            )?
+        } else {
+            tx.execute(
             "UPDATE tasks SET state = 'queued', error = NULL WHERE id = ?1 AND state IN ('paused','failed')",
             [id.to_string()],
-        )?;
+        )?
+        };
         if changed == 1 {
             tx.execute(
                 "DELETE FROM sftp_pending_hosts WHERE id = ?1",

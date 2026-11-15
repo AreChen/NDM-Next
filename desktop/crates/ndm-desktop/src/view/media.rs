@@ -72,7 +72,7 @@ impl Desktop {
             expected_size: None,
             headers: BTreeMap::new(),
         };
-        let proxy = self.preferences.proxy.clone();
+        let proxy = self.preferences.default_proxy();
         self.inspecting_hls = true;
         self.clear_notice();
         let result = self.runtime.spawn(async move {
