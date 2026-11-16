@@ -177,7 +177,13 @@ impl Desktop {
             Some("NDMNext"),
         )]);
         let url_input = cx.new(|cx| InputState::new(window, cx).placeholder("https://…"));
-        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索 / Search"));
+        let search_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(if preferences.language == Language::Chinese {
+                "搜索"
+            } else {
+                "Search"
+            })
+        });
         cx.observe(&search_input, |this, input, cx| {
             let query = input.read(cx).value().to_string();
             if this.search_query != query {

@@ -16,7 +16,8 @@ pub(crate) fn open(
     parent: WeakEntity<Desktop>,
     cx: &mut App,
 ) -> Result<AnyWindowHandle, ()> {
-    let bounds = Bounds::centered(None, size(px(480.), px(235.)), cx);
+    let height = if name.is_some() { 156. } else { 132. };
+    let bounds = Bounds::centered(None, size(px(480.), px(height)), cx);
     let (handle, _) = gpui_kit::open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -79,7 +80,6 @@ impl Render for ConfirmDelete {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dark = matches!(ComponentTheme::global(cx).mode, ThemeMode::Dark);
         let fg = if dark { 0xf0f3ff } else { 0x19253b };
-        let muted = if dark { 0x93a2bb } else { 0x71809a };
         let title = if self.ids.len() == 1 {
             self.text("删除下载任务？", "Delete this download?")
                 .to_owned()
@@ -91,23 +91,74 @@ impl Render for ConfirmDelete {
                 self.text("个下载任务？", "downloads?")
             )
         };
-        div().size_full().flex().flex_col().bg(rgb(if dark { 0x101726 } else { 0xf8f9fd })).text_color(rgb(fg))
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(rgb(if dark { 0x101726 } else { 0xf8f9fd }))
+            .text_color(rgb(fg))
             .child(chrome::title_bar("NDM Next", dark))
-            .child(div().flex_1().px_5().py_4().flex().flex_col().gap_2()
-                .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(title))
-                .when_some(self.name.clone(), |panel, name| panel.child(div().text_sm().truncate().child(name)))
-                .child(div().text_xs().text_color(rgb(muted)).child(self.text(
-                    "下载中的任务会先暂停。选择删除文件时，成品移至回收站，临时文件直接删除。",
-                    "Active tasks pause first. Deleting files recycles completed files and removes temporary parts.",
-                )))
-                .child(div().flex_1())
-                .child(div().flex().items_center().gap_2()
-                    .child(Button::new("delete-cancel").small().label(self.text("取消", "Cancel"))
-                        .on_click(cx.listener(|_, _, window, _| window.remove_window())))
-                    .child(div().flex_1())
-                    .child(Button::new("delete-keep").small().label(self.text("仅删除记录", "Keep files"))
-                        .on_click(cx.listener(|this, _, window, cx| this.confirm(false, window, cx))))
-                    .child(Button::new("delete-files").small().danger().label(self.text("删除文件和记录", "Delete files"))
-                        .on_click(cx.listener(|this, _, window, cx| this.confirm(true, window, cx))))))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .px_4()
+                    .py_3()
+                    .flex()
+                    .flex_col()
+                    .justify_between()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_shrink_0()
+                            .min_w_0()
+                            .gap(px(6.))
+                            .child(
+                                div()
+                                    .text_base()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(title),
+                            )
+                            .when_some(self.name.clone(), |panel, name| {
+                                panel.child(div().text_sm().truncate().child(name))
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .h(px(28.))
+                            .flex_shrink_0()
+                            .gap_2()
+                            .child(
+                                Button::new("delete-cancel")
+                                    .small()
+                                    .label(self.text("取消", "Cancel"))
+                                    .on_click(
+                                        cx.listener(|_, _, window, _| window.remove_window()),
+                                    ),
+                            )
+                            .child(div().flex_1())
+                            .child(
+                                Button::new("delete-keep")
+                                    .small()
+                                    .label(self.text("仅删除记录", "Keep files"))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.confirm(false, window, cx)
+                                    })),
+                            )
+                            .child(
+                                Button::new("delete-files")
+                                    .small()
+                                    .danger()
+                                    .label(self.text("删除文件和记录", "Delete files"))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.confirm(true, window, cx)
+                                    })),
+                            ),
+                    ),
+            )
     }
 }

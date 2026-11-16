@@ -134,7 +134,7 @@ impl Desktop {
                     } else {
                         "中文"
                     })
-                    .on_click(cx.listener(|this, _, _, cx| {
+                    .on_click(cx.listener(|this, _, window, cx| {
                         this.clear_notice();
                         this.preferences.language =
                             if this.preferences.language == Language::Chinese {
@@ -142,6 +142,10 @@ impl Desktop {
                             } else {
                                 Language::Chinese
                             };
+                        let placeholder = this.text("搜索", "Search");
+                        this.search_input.update(cx, |input, cx| {
+                            input.set_placeholder(placeholder, window, cx);
+                        });
                         #[cfg(any(windows, target_os = "macos"))]
                         if let Some(tray) = &this.tray {
                             tray.set_language(this.preferences.language);
