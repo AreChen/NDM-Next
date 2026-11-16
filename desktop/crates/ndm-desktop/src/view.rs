@@ -81,6 +81,8 @@ pub(crate) struct Desktop {
     update_cache_lease: Option<tokio::sync::OwnedMutexGuard<()>>,
     active_input: Entity<InputState>,
     connections_input: Entity<InputState>,
+    #[cfg(target_os = "macos")]
+    extension_id_input: Entity<InputState>,
     speed_input: Entity<InputState>,
     proxy_url_input: Entity<InputState>,
     proxy_user_input: Entity<InputState>,
@@ -198,6 +200,9 @@ impl Desktop {
         let connections_input = cx.new(|cx| {
             InputState::new(window, cx).default_value(preferences.max_connections.to_string())
         });
+        #[cfg(target_os = "macos")]
+        let extension_id_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("chrome://extensions → ID"));
         let speed_input = cx.new(|cx| {
             InputState::new(window, cx).default_value(preferences.max_kib_per_second.to_string())
         });
@@ -378,6 +383,8 @@ impl Desktop {
             update_cache_lease: None,
             active_input,
             connections_input,
+            #[cfg(target_os = "macos")]
+            extension_id_input,
             speed_input,
             proxy_url_input,
             proxy_user_input,
@@ -893,6 +900,8 @@ impl Desktop {
         match crate::startup::set(enabled) {
             Ok(()) => {
                 self.startup_enabled = enabled;
+                self.preferences.start_at_login = Some(enabled);
+                self.save_preferences(cx);
                 self.set_notice(
                     self.text("开机自启设置已更新。", "Startup setting updated.")
                         .into(),
@@ -909,6 +918,36 @@ impl Desktop {
             ),
         }
         cx.notify();
+    }
+    #[cfg(target_os = "macos")]
+    fn repair_browser_integration(&mut self, cx: &mut Context<Self>) {
+        let id = self.extension_id_input.read(cx).value().trim().to_owned();
+        if id.len() != 32 || !id.bytes().all(|byte| (b'a'..=b'p').contains(&byte)) {
+            self.set_notice(
+                self.text(
+                    "请输入扩展管理页显示的 32 位扩展 ID。",
+                    "Enter the 32-character ID from your browser's extensions page.",
+                )
+                .into(),
+                cx,
+            );
+            return;
+        }
+        let result = std::env::current_exe().and_then(|path| {
+            ndm_host::macos::register_browser_hosts(&path.with_file_name("ndm-host"), &[id])
+        });
+        let message = if result.is_ok() {
+            self.text(
+                "已授权此扩展。请在扩展中选择 NDM Next，然后重试下载。",
+                "Extension allowed. Select NDM Next in the extension and retry your download.",
+            )
+        } else {
+            self.text(
+                "连接修复失败，请检查应用安装位置和浏览器目录权限。",
+                "Repair failed. Check the app location and browser directory permissions.",
+            )
+        };
+        self.set_notice(message.into(), cx);
     }
     fn task_action(&mut self, id: TaskId, state: TaskState) {
         if matches!(self.update_state, UpdateState::Installing) {

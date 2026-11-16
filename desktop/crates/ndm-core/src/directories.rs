@@ -93,7 +93,7 @@ fn resolve(
 pub fn application_data_directory() -> PathBuf {
     #[cfg(target_os = "macos")]
     {
-        return macos_home().join("Library/Application Support/NDM Next");
+        macos_home().join("Library/Application Support/NDM Next")
     }
     #[cfg(not(target_os = "macos"))]
     std::env::var_os("LOCALAPPDATA")
@@ -114,7 +114,7 @@ pub(crate) fn macos_home() -> PathBuf {
 pub fn default_cache_directory() -> PathBuf {
     #[cfg(target_os = "macos")]
     {
-        return macos_home().join("Library/Caches/com.ndmnext.desktop");
+        macos_home().join("Library/Caches/com.ndmnext.desktop")
     }
     #[cfg(not(target_os = "macos"))]
     std::env::var_os("LOCALAPPDATA")

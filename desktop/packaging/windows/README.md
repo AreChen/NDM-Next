@@ -17,13 +17,13 @@ Find the store links in **Settings → Browser extension**:
 
 The store pages may not be available yet; use manual installation below if needed. Store-installed extensions are already allowed by the desktop installer. Choose **NDM Next** in the extension settings when migrating from Neat Download Manager.
 
-Download the source archive from the desktop GitHub release and extract it, or clone this repository. Load its `extension/` directory as an unpacked extension in the browser's developer mode. Allow its displayed extension ID in the installed host:
+Download the companion extension ZIP from the same desktop GitHub Release and extract it. Load the extracted folder as an unpacked extension in the browser's developer mode. The repository's `extension/` directory works too. Starting with extension 1.1.4, the fixed ID is already authorized by desktop 0.1.9 and later. See the [installation guide](../../../docs/extension-install.md). Only older or custom builds without that fixed ID need the helper:
 
 ```powershell
-pwsh -File .\desktop\packaging\windows\enable-dev-extension.ps1 -ExtensionId <extension-id>
+pwsh -File .\enable-dev-extension.ps1 -ExtensionId <extension-id>
 ```
 
-Run `desktop/packaging/windows/enable-dev-extension.ps1` from the extracted source or checkout. The command adds that one local extension to the native messaging manifest. Reload the extension and select **NDM Next** as its backend. Setup preserves existing valid extension IDs across upgrades, including when changing the installation directory. The existing extension store release has a separate version stream.
+Use `enable-dev-extension.ps1` inside the extension ZIP (or `desktop/packaging/windows/enable-dev-extension.ps1` in a source checkout). The command adds that one local extension to the native messaging manifest. Reload the extension and select **NDM Next** as its backend. Setup preserves existing valid extension IDs across upgrades, including when changing the installation directory. The existing extension store release has a separate version stream.
 
 Update the companion extension as well as the desktop app to receive media-button fixes. Reload open webpages after updating the extension. Media buttons appear above the player where space allows, with a viewport-clamped fallback near its top edge. A non-modal top-layer host avoids ordinary page stacking and clipping; controls stay within their own iframe. **Settings → Buttons beside media** hides the page buttons immediately; detected media remains available in the popup. Complete file sizes appear when the server supplies them; playlist and segment lengths are not presented as a whole video's size.
 
@@ -36,7 +36,7 @@ Saving a proxy does not activate it. Enable **Proxy for new downloads** and save
 ## Release checklist
 
 - Run the Rust workspace suite, media integration tests, extension tests, formatting and clippy checks.
-- Update the workspace version and push a matching `desktop-v{version}` tag. The [release workflow](../../../.github/workflows/release.yml) builds the Windows installer and both macOS DMGs on GitHub, then publishes their artifacts after the builds succeed. The packages include the corresponding media source and license notices.
+- Update the workspace version and push a matching `desktop-v{version}` tag. The [release workflow](../../../.github/workflows/release.yml) builds the Windows installer and both macOS DMGs on GitHub, packages the matching extension from the same commit, and publishes the complete draft after all builds and tests succeed. Release assets include the installer, DMGs, companion ZIP (with the installation guide and browser-integration helper), and `SHA256SUMS`. The desktop packages include the corresponding media source and license notices.
 - Write every release announcement in both **English and 简体中文**, with matching changes and installation instructions in each language.
 - Verify successful build runs and compare published package sizes and SHA-256 digests with their GitHub build artifacts before considering the release ready for automatic updates.
 

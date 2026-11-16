@@ -36,16 +36,20 @@ Get your installer from [**GitHub Releases →**](https://github.com/AreChen/NDM
 
 The app checks GitHub for updates. Click **Upgrade** to download a verified package: Windows installs when idle; macOS opens the DMG for app replacement.
 
+New profiles use 16 download connections and startup at login. Existing saved choices are preserved.
+
 ## Browser extension
 
 Connect **Chrome, Edge or Brave** to capture downloads and discover webpage media. Optional download buttons appear beside media; the separate media library lets you search, select and download resources in batches.
 
-**Setup:** [Windows](desktop/packaging/windows/README.md#browser-extension) · [macOS](desktop/packaging/macos/README.md#browser-extension). Select **NDM Next** as the extension backend. The extension also supports Neat Download Manager.
+Each release includes its matching versioned extension ZIP. Follow the [extension installation guide](docs/extension-install.md).
+
+**Platform details:** [Windows](desktop/packaging/windows/README.md#browser-extension) · [macOS](desktop/packaging/macos/README.md#browser-extension). Select **NDM Next** as the extension backend. The extension also supports Neat Download Manager.
 
 <details>
 <summary><strong>Build & release</strong></summary>
 
-GitHub Actions builds the Windows installer and both macOS DMGs. Pushing a `desktop-vX.Y.Z` tag runs the [release workflow](.github/workflows/release.yml), which publishes the packages after the builds succeed.
+GitHub Actions builds the Windows installer and both macOS DMGs. Pushing a `desktop-vX.Y.Z` tag runs the [release workflow](.github/workflows/release.yml), which publishes the packages and matching companion extension after all builds and tests succeed.
 
 Local build guides: [Windows](desktop/packaging/windows/README.md) · [macOS](desktop/packaging/macos/README.md).
 

@@ -34,6 +34,9 @@ pub struct Preferences {
     pub last_cache_cleanup: Option<u64>,
     pub max_active_tasks: usize,
     pub max_connections: usize,
+    // Missing in older profiles: preserve their existing OS startup setting.
+    #[serde(default)]
+    pub start_at_login: Option<bool>,
     pub auto_resume: bool,
     pub auto_update: bool,
     pub last_update_check: Option<u64>,
@@ -58,7 +61,8 @@ impl Default for Preferences {
             cache_retention_days: 7,
             last_cache_cleanup: None,
             max_active_tasks: 3,
-            max_connections: 4,
+            max_connections: 16,
+            start_at_login: Some(true),
             auto_resume: true,
             auto_update: true,
             last_update_check: None,
@@ -208,10 +212,26 @@ mod tests {
         fs::write(&path, br#"{"theme":"Light"}"#).unwrap();
         let restored = Preferences::load(&path).unwrap();
         assert_eq!(restored.theme, Theme::Light);
-        assert_eq!(restored.max_connections, 4);
+        assert_eq!(restored.max_connections, 16);
+        assert_eq!(restored.start_at_login, None);
         assert!(restored.auto_update);
         assert_eq!(restored.last_update_check, None);
         assert_eq!(restored.available_update, None);
+    }
+
+    #[test]
+    fn fresh_profiles_enable_startup_and_preserve_explicit_choices() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("preferences.json");
+        let mut preferences = Preferences::load(&path).unwrap();
+        assert_eq!(preferences.start_at_login, Some(true));
+        assert_eq!(preferences.scheduler_options().http.max_connections, 16);
+        preferences.start_at_login = Some(false);
+        preferences.max_connections = 4;
+        preferences.save(&path).unwrap();
+        let loaded = Preferences::load(&path).unwrap();
+        assert_eq!(loaded.start_at_login, Some(false));
+        assert_eq!(loaded.max_connections, 4);
     }
 
     #[cfg(windows)]

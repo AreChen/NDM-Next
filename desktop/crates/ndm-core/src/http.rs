@@ -311,7 +311,7 @@ pub async fn execute_http(
 impl Default for HttpOptions {
     fn default() -> Self {
         Self {
-            max_connections: 4,
+            max_connections: 16,
             max_bytes_per_second: None,
             proxy: None,
         }

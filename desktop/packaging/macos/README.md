@@ -20,7 +20,9 @@ The media build verifies the FFmpeg archive checksum and developer signature, di
 
 ## Browser extension
 
-Use the same browser extension as Windows. Download and extract the source archive from the GitHub release, or clone the repository, then load its `extension/` directory as an unpacked extension. Store releases can also be used when available. Native messaging registration runs when NDM Next starts. Allow an unpacked extension's displayed ID in **Settings → Browser extension**, reload the extension, and select **NDM Next** as its backend.
+Use the matching extension ZIP from the same GitHub Release, the repository's `extension/` directory, or the store release. Release extension 1.1.4 and later has a fixed ID that the app already authorizes. Native messaging registration runs when NDM Next starts. For older unpacked extensions, copy the ID from `chrome://extensions` into **Settings → Browser extension → Repair connection**. Reload the extension after starting the app and select **NDM Next** as its backend. See the [installation guide](../../../docs/extension-install.md).
+
+New profiles enable startup at login and use 16 download connections. Upgrading preserves saved connection counts and the existing startup choice.
 
 ## Updates
 

@@ -36,16 +36,20 @@
 
 应用通过 GitHub 检查更新。点击**升级**下载并校验安装包：Windows 在空闲时安装，macOS 打开 DMG，由用户替换应用。
 
+新安装默认使用 16 个下载连接并开启开机自启，已有设置会保留。
+
 ## 浏览器扩展
 
 连接 **Chrome、Edge 或 Brave**，接管下载并嗅探网页媒体。可选开启媒体旁的下载按钮，也可打开独立媒体资源窗口，搜索、选择并批量下载。
 
-**安装说明：** [Windows](desktop/packaging/windows/README.md#browser-extension) · [macOS](desktop/packaging/macos/README.md#browser-extension)。扩展后端请选择 **NDM Next**；扩展也支持连接 Neat Download Manager。
+每次 Release 均附带对应版本的扩展 ZIP。按照[扩展安装说明](docs/extension-install.md)连接浏览器。
+
+**平台说明：** [Windows](desktop/packaging/windows/README.md#browser-extension) · [macOS](desktop/packaging/macos/README.md#browser-extension)。扩展后端请选择 **NDM Next**；扩展也支持连接 Neat Download Manager。
 
 <details>
 <summary><strong>构建与发布</strong></summary>
 
-GitHub Actions 负责构建 Windows 安装包及 macOS 双架构 DMG。推送 `desktop-vX.Y.Z` 标签后，[发布工作流](.github/workflows/release.yml)会在构建成功后自动发布安装包。
+GitHub Actions 负责构建 Windows 安装包及 macOS 双架构 DMG。推送 `desktop-vX.Y.Z` 标签后，[发布工作流](.github/workflows/release.yml)会在各平台构建和测试成功后自动发布安装包及对应扩展。
 
 本地构建说明：[Windows](desktop/packaging/windows/README.md) · [macOS](desktop/packaging/macos/README.md)。
 

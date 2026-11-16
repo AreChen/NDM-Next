@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "NDM Next",
-  "version": "1.1.3",
+  "version": "1.1.4",
   "description": "A thoughtful browser companion for NDM Next and Neat Download Manager.",
   "permissions": [
     "downloads",
@@ -20,12 +20,21 @@
   "background": {
     "service_worker": "background.js"
   },
-  "content_scripts": [{
-    "matches": ["http://*/*", "https://*/*"],
-    "js": ["rules.js", "media-ui.js", "content.js"],
-    "run_at": "document_idle",
-    "all_frames": true
-  }],
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "rules.js",
+        "media-ui.js",
+        "content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
   "action": {
     "default_popup": "popup.html",
     "default_title": "NDM Next",
@@ -41,5 +50,6 @@
     "32": "icons/icon-32.png",
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
-  }
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAp05DJohNGYDSgX6v6iq3Sq4EoNZnLkqIqc8zj5Oqwuvu1w3QK3hmj9L2IdlosEDN3Q7nvtjJ5AwYDyNgPxlN9hqiATp8C3dcJquuI3mO8TGatuQ8w46rdhj8gY+JNBV3mrzNUxffn23/pE685DkrNEIOB8EPauBiufLElshqN+/z3tSgd0HvJg55utQSnev/dksSR7ZeBKjd23uMkHZ0mY2I2LU2xUFGK2R7w6Rl5aDDGq2MLvFr4tyzqcXHBsN8w3XfmQ4MFR/2WhoRNNnm7U8k2p3sfaWBGi7QVI4dNmAISB9qjoSTcuxG54vIgWWrolUPktr6cCzub6nZnbjkCQIDAQAB"
 }

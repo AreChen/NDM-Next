@@ -86,6 +86,12 @@ jobs:
             -Nsis "${env:ProgramFiles(x86)}\NSIS\makensis.exe" `
             -CargoAbout "$env:RUNNER_TEMP/ndm-packaging-tools/bin/cargo-about.exe" `
             -MediaToolDir "$env:RUNNER_TEMP/ndm-media"
+      - name: Run workspace tests
+        shell: pwsh
+        working-directory: desktop
+        run: |
+          cargo +1.100.0 test --locked --workspace
+          if ($LASTEXITCODE -ne 0) { throw 'Workspace tests failed.' }
       - name: Upload unsigned installer
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:

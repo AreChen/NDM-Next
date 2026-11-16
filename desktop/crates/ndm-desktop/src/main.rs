@@ -76,7 +76,7 @@ fn main() {
         Err(error) => panic!("create instance lock: {error}"),
     };
     let preferences_path = data_dir.join("preferences.json");
-    let preferences = match Preferences::load(&preferences_path) {
+    let mut preferences = match Preferences::load(&preferences_path) {
         Ok(preferences) => preferences,
         Err(_) => {
             #[cfg(windows)]
@@ -99,6 +99,23 @@ fn main() {
             return;
         }
     };
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        let result = (|| -> std::io::Result<()> {
+            let current = startup::enabled()?;
+            if let Some(desired) = preferences.start_at_login {
+                if desired != current {
+                    startup::set(desired)?;
+                }
+            } else {
+                preferences.start_at_login = Some(current);
+            }
+            preferences.save(&preferences_path)
+        })();
+        if let Err(error) = result {
+            eprintln!("Could not initialize startup preference: {error}");
+        }
+    }
     let store = Arc::new(Store::open(&data_dir.join("tasks.db")).expect("open task database"));
     let prepared_at_launch = store
         .list()

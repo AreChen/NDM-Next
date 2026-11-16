@@ -146,11 +146,11 @@ pub(crate) fn publish_update_reservation(
     #[cfg(target_os = "macos")]
     {
         let file = crate::macos_instance::lock_file(data_dir, "updating.lock")?;
-        return match file.try_lock() {
+        match file.try_lock() {
             Ok(()) => Ok(Some(DesktopUpdateGuard { _file: file })),
             Err(std::fs::TryLockError::WouldBlock) => Ok(None),
             Err(std::fs::TryLockError::Error(error)) => Err(error),
-        };
+        }
     }
     #[cfg(not(target_os = "macos"))]
     let namespace = update_namespace(data_dir);

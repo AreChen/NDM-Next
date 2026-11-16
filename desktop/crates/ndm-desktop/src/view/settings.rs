@@ -5,11 +5,8 @@ const CHROME_EXTENSION_URL: &str =
     "https://chromewebstore.google.com/detail/ndm-next/caegebfdojcdlkkiaiokeoadefdooamd";
 const EDGE_EXTENSION_URL: &str =
     "https://microsoftedge.microsoft.com/addons/detail/ndm-next/hiblommiheggidolemmnnlocmocebckp";
-#[cfg(not(target_os = "macos"))]
-const EXTENSION_GUIDE_URL: &str = "https://github.com/AreChen/NDM-Next/blob/main/desktop/packaging/windows/README.md#browser-extension";
-
-#[cfg(target_os = "macos")]
-const EXTENSION_GUIDE_URL: &str = "https://github.com/AreChen/NDM-Next/blob/main/desktop/packaging/macos/README.md#browser-extension";
+const EXTENSION_GUIDE_URL: &str =
+    "https://github.com/AreChen/NDM-Next/blob/main/docs/extension-install.md";
 
 impl Desktop {
     fn settings_group(
@@ -280,6 +277,19 @@ impl Desktop {
                             .on_click(cx.listener(|_, _, _, cx| cx.open_url(EXTENSION_GUIDE_URL))),
                     ),
             );
+        #[cfg(target_os = "macos")]
+        let extensions = extensions.child(
+            div().flex().flex_col().gap_2()
+                .child(div().text_xs().text_color(rgb(muted)).child(self.text(
+                    "旧版手动安装的扩展：复制扩展 ID 到下方，授权后即可连接。新版 Release 扩展已自动授权。",
+                    "Older unpacked extensions: paste their ID below to allow the connection. New release extensions are already allowed.",
+                )))
+                .child(div().flex().items_center().gap_2()
+                    .child(Input::new(&self.extension_id_input).small().flex_1())
+                    .child(Button::new("repair-browser-integration").small()
+                        .label(self.text("修复连接", "Repair connection"))
+                        .on_click(cx.listener(|this, _, _, cx| this.repair_browser_integration(cx))))),
+        );
         let about = div()
             .flex()
             .flex_col()

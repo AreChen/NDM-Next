@@ -31,6 +31,7 @@ RequestExecutionLevel user
 !ifndef NDM_CHROME_ID
   !define NDM_CHROME_ID "caegebfdojcdlkkiaiokeoadefdooamd"
 !endif
+!define NDM_UNPACKED_ID "cpapmfpgmpbpnjgibdgkfkdeblamiodm"
 !ifndef NDM_EDGE_ID
   !ifndef NDM_TEST_INSTALL
     !define NDM_EDGE_ID "hiblommiheggidolemmnnlocmocebckp"
@@ -261,16 +262,16 @@ Section "Install"
   StrCmp $OldDesktop "$INSTDIR\ndm-desktop.exe" manifest_without_migration
   ; Migration is explicitly tied to the registered previous desktop image.
   !ifdef NDM_EDGE_ID
-    nsExec::ExecToStack '"$INSTDIR\ndm-host.exe" --write-manifest "${NDM_HOST_NAME}" --preserve-origins --migrate-origins-from "$OldDesktop" "${NDM_CHROME_ID}" "${NDM_EDGE_ID}"'
+    nsExec::ExecToStack '"$INSTDIR\ndm-host.exe" --write-manifest "${NDM_HOST_NAME}" --preserve-origins --migrate-origins-from "$OldDesktop" "${NDM_CHROME_ID}" "${NDM_EDGE_ID}" "${NDM_UNPACKED_ID}"'
   !else
-    nsExec::ExecToStack '"$INSTDIR\ndm-host.exe" --write-manifest "${NDM_HOST_NAME}" --preserve-origins --migrate-origins-from "$OldDesktop" "${NDM_CHROME_ID}"'
+    nsExec::ExecToStack '"$INSTDIR\ndm-host.exe" --write-manifest "${NDM_HOST_NAME}" --preserve-origins --migrate-origins-from "$OldDesktop" "${NDM_CHROME_ID}" "${NDM_UNPACKED_ID}"'
   !endif
   Goto manifest_result
   manifest_without_migration:
   !ifdef NDM_EDGE_ID
-    nsExec::ExecToStack '"$INSTDIR\ndm-host.exe" --write-manifest "${NDM_HOST_NAME}" --preserve-origins "${NDM_CHROME_ID}" "${NDM_EDGE_ID}"'
+    nsExec::ExecToStack '"$INSTDIR\ndm-host.exe" --write-manifest "${NDM_HOST_NAME}" --preserve-origins "${NDM_CHROME_ID}" "${NDM_EDGE_ID}" "${NDM_UNPACKED_ID}"'
   !else
-    nsExec::ExecToStack '"$INSTDIR\ndm-host.exe" --write-manifest "${NDM_HOST_NAME}" --preserve-origins "${NDM_CHROME_ID}"'
+    nsExec::ExecToStack '"$INSTDIR\ndm-host.exe" --write-manifest "${NDM_HOST_NAME}" --preserve-origins "${NDM_CHROME_ID}" "${NDM_UNPACKED_ID}"'
   !endif
   manifest_result:
   Pop $0

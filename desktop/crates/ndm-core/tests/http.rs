@@ -461,6 +461,8 @@ async fn changed_link_does_not_mix_old_partial_content_even_if_etag_matches() {
 async fn paused_download_resumes_the_existing_segments() {
     let dir = TempDir::new().unwrap();
     let expected = data(6);
+    let connections = HttpOptions::default().max_connections;
+    let segment_bytes = expected.len() as u64 / connections as u64;
     let (server, url) = fixture(Mode::Ranges, expected.clone(), true).await;
     let req = request(dir.path(), url);
     let id = TaskId::new_v4();
@@ -484,14 +486,14 @@ async fn paused_download_resumes_the_existing_segments() {
     cancel.cancel();
     assert!(pending.await.unwrap().is_err());
     let part_dir = dir.path().join(format!(".ndm-next-{id}"));
-    let partial_lengths: Vec<_> = (0..4)
+    let partial_lengths: Vec<_> = (0..connections)
         .map(|i| {
             std::fs::metadata(part_dir.join(format!("segment-{i}.part")))
                 .unwrap()
                 .len()
         })
         .collect();
-    assert!(partial_lengths.iter().any(|&n| n > 0 && n < 131_072));
+    assert!(partial_lengths.iter().any(|&n| n > 0 && n < segment_bytes));
     let old_count = server.ranges.lock().unwrap().len();
 
     let output = download_http(&req, id, &HttpOptions::default(), CancellationToken::new())
@@ -502,11 +504,11 @@ async fn paused_download_resumes_the_existing_segments() {
     assert!(
         partial_lengths.iter().enumerate().any(|(i, &length)| {
             length > 0
-                && length < 131_072
+                && length < segment_bytes
                 && ranges[old_count..].contains(&format!(
                     "bytes={}-{}",
-                    i as u64 * 131_072 + length,
-                    (i as u64 + 1) * 131_072 - 1
+                    i as u64 * segment_bytes + length,
+                    (i as u64 + 1) * segment_bytes - 1
                 ))
         }),
         "resume should request bytes after a saved partial segment"
@@ -591,7 +593,7 @@ async fn progress_reports_real_parallel_segment_bytes_and_completion() {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let snapshot = progress.snapshot();
-            if snapshot.segments.len() == 4
+            if snapshot.segments.len() == HttpOptions::default().max_connections
                 && snapshot
                     .segments
                     .iter()
@@ -612,7 +614,10 @@ async fn progress_reports_real_parallel_segment_bytes_and_completion() {
     .expect("parallel segment progress should become visible");
     task.await.unwrap().unwrap();
     let snapshot = progress.snapshot();
-    assert_eq!(snapshot.segments.len(), 4);
+    assert_eq!(
+        snapshot.segments.len(),
+        HttpOptions::default().max_connections
+    );
     assert_eq!(
         snapshot
             .segments
