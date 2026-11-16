@@ -1,11 +1,12 @@
 use semver::Version;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use std::{
-    path::{Path, PathBuf},
-    time::Duration,
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use std::{path::PathBuf, time::Duration};
+use tokio::io::AsyncReadExt;
 
 const RELEASES_API: &str = "https://api.github.com/repos/AreChen/NDM-Next/releases?per_page=100";
 const MAX_RESPONSE: usize = 2 * 1024 * 1024;
@@ -28,13 +29,40 @@ pub(crate) struct UpdateRelease {
     pub version: Version,
     name: String,
     url: String,
-    bytes: u64,
+    pub bytes: u64,
     sha256: [u8; 32],
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ReadyUpdate {
     pub release: UpdateRelease,
     path: PathBuf,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum UpdateFailure {
+    Check(Option<u16>),
+    Download,
+    Storage,
+    Integrity,
+    Launch(Option<i32>),
+    Installer(Option<i32>),
+}
+#[derive(Clone)]
+pub(crate) struct UpdateTransfer {
+    pub progress: ndm_core::DownloadProgress,
+    pub expected: u64,
+    pub verifying: Arc<AtomicBool>,
+}
+impl UpdateTransfer {
+    pub fn new(expected: u64) -> Self {
+        Self {
+            progress: Default::default(),
+            expected,
+            verifying: Arc::new(AtomicBool::new(false)),
+        }
+    }
+    pub fn is_verifying(&self) -> bool {
+        self.verifying.load(Ordering::Acquire)
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum UpdateState {
@@ -45,7 +73,7 @@ pub(crate) enum UpdateState {
     Downloading,
     Ready(ReadyUpdate),
     Installing,
-    Failed,
+    Failed(UpdateFailure),
 }
 
 impl UpdateState {
@@ -163,6 +191,7 @@ fn client(proxy: Option<&ndm_core::ProxyOptions>) -> Result<reqwest::Client, ()>
     let mut builder = reqwest::Client::builder()
         .user_agent(concat!("NDM-Next/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30 * 60))
         .read_timeout(Duration::from_secs(45))
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
             if attempt.previous().len() >= 5 || !trusted_download_url(attempt.url()) {
@@ -182,35 +211,43 @@ fn client(proxy: Option<&ndm_core::ProxyOptions>) -> Result<reqwest::Client, ()>
 }
 pub(crate) async fn check(
     proxy: Option<ndm_core::ProxyOptions>,
-) -> Result<Option<UpdateRelease>, ()> {
-    let current = Version::parse(env!("CARGO_PKG_VERSION")).map_err(|_| ())?;
+) -> Result<Option<UpdateRelease>, UpdateFailure> {
+    let current =
+        Version::parse(env!("CARGO_PKG_VERSION")).map_err(|_| UpdateFailure::Check(None))?;
     check_version(proxy, &current).await
 }
 async fn check_version(
     proxy: Option<ndm_core::ProxyOptions>,
     current: &Version,
-) -> Result<Option<UpdateRelease>, ()> {
-    let mut response = client(proxy.as_ref())?
+) -> Result<Option<UpdateRelease>, UpdateFailure> {
+    let mut response = client(proxy.as_ref())
+        .map_err(|_| UpdateFailure::Check(None))?
         .get(RELEASES_API)
         .timeout(Duration::from_secs(20))
         .send()
         .await
-        .map_err(|_| ())?;
-    if response.status() != reqwest::StatusCode::OK
-        || response
-            .content_length()
-            .is_some_and(|size| size > MAX_RESPONSE as u64)
+        .map_err(|_| UpdateFailure::Check(None))?;
+    if response.status() != reqwest::StatusCode::OK {
+        return Err(UpdateFailure::Check(Some(response.status().as_u16())));
+    }
+    if response
+        .content_length()
+        .is_some_and(|size| size > MAX_RESPONSE as u64)
     {
-        return Err(());
+        return Err(UpdateFailure::Check(None));
     }
     let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|_| ())? {
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| UpdateFailure::Check(None))?
+    {
         if body.len().saturating_add(chunk.len()) > MAX_RESPONSE {
-            return Err(());
+            return Err(UpdateFailure::Check(None));
         }
         body.extend_from_slice(&chunk);
     }
-    find_update(&body, current).map_err(|_| ())
+    find_update(&body, current).map_err(|_| UpdateFailure::Check(None))
 }
 fn plain_file(metadata: &std::fs::Metadata) -> bool {
     #[cfg(windows)]
@@ -222,72 +259,95 @@ fn plain_file(metadata: &std::fs::Metadata) -> bool {
     }
     metadata.is_file() && !metadata.is_symlink()
 }
-async fn receive_installer(
-    mut response: reqwest::Response,
-    release: UpdateRelease,
-    directory: &Path,
-) -> Result<ReadyUpdate, ()> {
-    if response.status() != reqwest::StatusCode::OK
-        || release.bytes == 0
-        || release.bytes > MAX_INSTALLER
-        || response
-            .content_length()
-            .is_some_and(|bytes| bytes != release.bytes)
-    {
-        return Err(());
-    }
-    tokio::fs::create_dir_all(directory).await.map_err(|_| ())?;
-    let directory_metadata = tokio::fs::symlink_metadata(directory)
-        .await
-        .map_err(|_| ())?;
-    if !directory_metadata.is_dir() || directory_metadata.is_symlink() {
-        return Err(());
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        if directory_metadata.file_attributes() & 0x400 != 0 {
-            return Err(());
-        }
-    }
-    let temporary = tempfile::Builder::new()
-        .prefix(".ndm-update-")
-        .suffix(".part")
-        .tempfile_in(directory)
-        .map_err(|_| ())?;
-    let (file, temporary) = temporary.into_parts();
-    let mut file = tokio::fs::File::from_std(file);
-    let mut count = 0u64;
-    let mut digest = Sha256::new();
-    while let Some(chunk) = response.chunk().await.map_err(|_| ())? {
-        count = count.checked_add(chunk.len() as u64).ok_or(())?;
-        if count > release.bytes {
-            return Err(());
-        }
-        digest.update(&chunk);
-        file.write_all(&chunk).await.map_err(|_| ())?;
-    }
-    if count != release.bytes || <[u8; 32]>::from(digest.finalize()) != release.sha256 {
-        return Err(());
-    }
-    file.sync_all().await.map_err(|_| ())?;
-    drop(file);
-    let path = directory.join(&release.name);
-    temporary.persist(&path).map_err(|_| ())?;
-    Ok(ReadyUpdate { release, path })
-}
 pub(crate) async fn download(
     release: UpdateRelease,
     directory: PathBuf,
     proxy: Option<ndm_core::ProxyOptions>,
-) -> Result<ReadyUpdate, ()> {
-    let response = client(proxy.as_ref())?
-        .get(&release.url)
-        .timeout(Duration::from_secs(30 * 60))
-        .send()
+    connections: usize,
+    transfer: UpdateTransfer,
+) -> Result<ReadyUpdate, UpdateFailure> {
+    let client = client(proxy.as_ref()).map_err(|_| UpdateFailure::Download)?;
+    download_with_client(release, directory, client, connections, transfer).await
+}
+
+async fn download_with_client(
+    release: UpdateRelease,
+    directory: PathBuf,
+    client: reqwest::Client,
+    connections: usize,
+    transfer: UpdateTransfer,
+) -> Result<ReadyUpdate, UpdateFailure> {
+    if release.bytes == 0 || release.bytes > MAX_INSTALLER {
+        return Err(UpdateFailure::Integrity);
+    }
+    tokio::fs::create_dir_all(&directory)
         .await
-        .map_err(|_| ())?;
-    receive_installer(response, release, &directory).await
+        .map_err(|_| UpdateFailure::Storage)?;
+    let metadata = tokio::fs::symlink_metadata(&directory)
+        .await
+        .map_err(|_| UpdateFailure::Storage)?;
+    if !metadata.is_dir() || metadata.is_symlink() {
+        return Err(UpdateFailure::Storage);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            return Err(UpdateFailure::Storage);
+        }
+    }
+    // A previous installation failure must not force another network transfer.
+    // Cached files are trusted only against fresh release metadata and SHA-256.
+    let cached = ReadyUpdate {
+        path: directory.join(&release.name),
+        release: release.clone(),
+    };
+    if verify_cached(&cached).await.is_ok() {
+        return Ok(cached);
+    }
+    let staging = tempfile::Builder::new()
+        .prefix(".ndm-update-")
+        .suffix(".part")
+        .tempdir_in(&directory)
+        .map_err(|_| UpdateFailure::Storage)?;
+    let request = ndm_core::NewTask {
+        url: release.url.clone(),
+        destination: staging.path().to_owned(),
+        suggested_filename: Some(release.name.clone()),
+        source_url: None,
+        expected_size: Some(release.bytes),
+        headers: Default::default(),
+    };
+    let path = ndm_core::download_http_with_client(
+        &request,
+        ndm_core::TaskId::new_v4(),
+        &ndm_core::HttpOptions {
+            max_connections: connections.clamp(1, 16),
+            ..Default::default()
+        },
+        tokio_util::sync::CancellationToken::new(),
+        transfer.progress.clone(),
+        client,
+    )
+    .await
+    .map_err(|error| match error {
+        ndm_core::Error::Io(_) => UpdateFailure::Storage,
+        ndm_core::Error::InvalidHttpResponse => UpdateFailure::Integrity,
+        _ => UpdateFailure::Download,
+    })?;
+    transfer.verifying.store(true, Ordering::Release);
+    let staged = ReadyUpdate { release, path };
+    verify_cached(&staged)
+        .await
+        .map_err(|_| UpdateFailure::Integrity)?;
+    let final_path = directory.join(&staged.release.name);
+    tokio::fs::rename(&staged.path, &final_path)
+        .await
+        .map_err(|_| UpdateFailure::Storage)?;
+    Ok(ReadyUpdate {
+        release: staged.release,
+        path: final_path,
+    })
 }
 async fn verify_cached(update: &ReadyUpdate) -> Result<(), ()> {
     let metadata = tokio::fs::symlink_metadata(&update.path)
@@ -317,21 +377,50 @@ async fn verify_cached(update: &ReadyUpdate) -> Result<(), ()> {
     }
     Ok(())
 }
-pub(crate) async fn install(update: ReadyUpdate) -> Result<(), ()> {
-    verify_cached(&update).await?;
+#[cfg(windows)]
+async fn wait_for_installer_handoff(
+    child: &mut tokio::process::Child,
+    data_dir: &std::path::Path,
+) -> Result<(), UpdateFailure> {
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| UpdateFailure::Launch(error.raw_os_error()))?
+        {
+            return if status.success() {
+                Ok(())
+            } else {
+                Err(UpdateFailure::Installer(status.code()))
+            };
+        }
+        if ndm_core::windows_installer_active(data_dir)
+            .map_err(|error| UpdateFailure::Launch(error.raw_os_error()))?
+        {
+            // The installer waits for this process to exit before replacing files.
+            // Return once its guard protects the handoff, so the GUI can exit
+            // without retaining an update future that waits for the installer.
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+pub(crate) async fn install(update: ReadyUpdate, _data_dir: PathBuf) -> Result<(), UpdateFailure> {
+    verify_cached(&update)
+        .await
+        .map_err(|_| UpdateFailure::Integrity)?;
     #[cfg(windows)]
     {
         use std::process::Stdio;
-        let status = tokio::process::Command::new(&update.path)
+        let mut child = tokio::process::Command::new(&update.path)
             .args(["/S", "/UPDATE"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .kill_on_drop(false)
-            .status()
-            .await
-            .map_err(|_| ())?;
-        if status.success() { Ok(()) } else { Err(()) }
+            .spawn()
+            .map_err(|error| UpdateFailure::Launch(error.raw_os_error()))?;
+        wait_for_installer_handoff(&mut child, &_data_dir).await
     }
     #[cfg(target_os = "macos")]
     {
@@ -340,12 +429,16 @@ pub(crate) async fn install(update: ReadyUpdate) -> Result<(), ()> {
             .arg(&update.path)
             .status()
             .await
-            .map_err(|_| ())?;
-        if status.success() { Ok(()) } else { Err(()) }
+            .map_err(|error| UpdateFailure::Launch(error.raw_os_error()))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(UpdateFailure::Installer(status.code()))
+        }
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     {
-        Err(())
+        Err(UpdateFailure::Launch(None))
     }
 }
 #[cfg(test)]

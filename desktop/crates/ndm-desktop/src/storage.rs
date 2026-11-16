@@ -93,6 +93,13 @@ fn owned_update_name(name: &str) -> bool {
         .and_then(|name| name.strip_suffix("-x64.exe"))
         .is_some_and(|version| semver::Version::parse(version).is_ok())
         || name
+            .strip_prefix("NDM-Next-")
+            .and_then(|name| {
+                name.strip_suffix("-macos-arm64.dmg")
+                    .or_else(|| name.strip_suffix("-macos-x64.dmg"))
+            })
+            .is_some_and(|version| semver::Version::parse(version).is_ok())
+        || name
             .strip_prefix(".ndm-update-")
             .and_then(|name| name.strip_suffix(".part"))
             .is_some_and(|token| {
@@ -141,6 +148,20 @@ fn update_cache(
         let Ok(metadata) = fs::symlink_metadata(entry.path()) else {
             continue;
         };
+        if metadata.is_dir()
+            && !reparse(&metadata)
+            && entry.file_name().to_string_lossy().ends_with(".part")
+        {
+            let expired = cutoff
+                .is_none_or(|cutoff| metadata.modified().is_ok_and(|modified| modified <= cutoff));
+            update_staging(
+                &entry.path(),
+                remove && expired && !protected,
+                protected,
+                report,
+            );
+            continue;
+        }
         if !metadata.is_file() || reparse(&metadata) {
             report.skipped_directories += 1;
             continue;
@@ -163,6 +184,46 @@ fn update_cache(
                 Err(_) => report.skipped_directories += 1,
             }
         }
+    }
+}
+
+// Staging roots have the same owned random name as temporary update files.
+// Descend only into real directories; cache cleanup never follows links/junctions.
+fn update_staging(directory: &Path, remove: bool, protected: bool, report: &mut CacheReport) {
+    let Ok(entries) = fs::read_dir(directory) else {
+        report.skipped_directories += 1;
+        return;
+    };
+    for entry in entries {
+        let Ok(entry) = entry else { continue };
+        let Ok(metadata) = fs::symlink_metadata(entry.path()) else {
+            continue;
+        };
+        if reparse(&metadata) {
+            report.skipped_directories += 1;
+        } else if metadata.is_dir() {
+            update_staging(&entry.path(), remove, protected, report);
+        } else if metadata.is_file() {
+            report.bytes = report.bytes.saturating_add(metadata.len());
+            if protected {
+                report.protected_bytes = report.protected_bytes.saturating_add(metadata.len());
+            } else {
+                report.reclaimable_bytes = report.reclaimable_bytes.saturating_add(metadata.len());
+                if remove {
+                    match fs::remove_file(entry.path()) {
+                        Ok(()) => {
+                            report.removed_bytes =
+                                report.removed_bytes.saturating_add(metadata.len());
+                            report.removed_files += 1;
+                        }
+                        Err(_) => report.skipped_directories += 1,
+                    }
+                }
+            }
+        }
+    }
+    if remove {
+        let _ = fs::remove_dir(directory);
     }
 }
 
@@ -275,6 +336,39 @@ mod tests {
         );
         assert!(!installer.exists());
         assert_eq!(fs::read(unrelated).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn staging_cleanup_respects_age_and_the_updater_lease() {
+        let temporary = tempfile::tempdir().unwrap();
+        let staging = temporary.path().join(".ndm-update-test123.part");
+        let parts = staging.join(".ndm-next-parts");
+        fs::create_dir_all(&parts).unwrap();
+        fs::write(parts.join("segment.part"), [0; 512]).unwrap();
+        let mut report = CacheReport::default();
+        update_cache(temporary.path(), None, true, true, &mut report);
+        assert_eq!(report.protected_bytes, 512);
+        assert!(parts.exists());
+        update_cache(
+            temporary.path(),
+            Some(SystemTime::UNIX_EPOCH),
+            true,
+            false,
+            &mut report,
+        );
+        assert!(parts.exists());
+        update_cache(temporary.path(), None, true, false, &mut report);
+        assert!(!staging.exists());
+        assert_eq!(report.removed_bytes, 512);
+    }
+
+    #[test]
+    fn cache_ownership_includes_both_macos_architectures_without_matching_other_disk_images() {
+        use super::owned_update_name;
+        assert!(owned_update_name("NDM-Next-0.1.10-macos-arm64.dmg"));
+        assert!(owned_update_name("NDM-Next-0.1.10-macos-x64.dmg"));
+        assert!(!owned_update_name("NDM-Next-not-a-version-macos-x64.dmg"));
+        assert!(!owned_update_name("personal.dmg"));
     }
 
     #[test]

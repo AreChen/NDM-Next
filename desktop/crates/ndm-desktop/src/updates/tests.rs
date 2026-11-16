@@ -1,5 +1,6 @@
 use super::*;
 use serde_json::{Value, json};
+use tokio::io::AsyncWriteExt;
 
 fn release(version: &str) -> Value {
     let name = asset_name(&Version::parse(version).unwrap());
@@ -144,7 +145,7 @@ fn redirects_require_exact_trusted_https_hosts_without_embedded_credentials() {
         );
     }
 }
-async fn response(body: &'static [u8], advertised: usize) -> reqwest::Response {
+async fn response(body: &'static [u8], advertised: usize) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -162,15 +163,25 @@ async fn response(body: &'static [u8], advertised: usize) -> reqwest::Response {
             .unwrap();
         socket.write_all(body).await.unwrap();
     });
-    reqwest::Client::builder()
-        .no_proxy()
-        .build()
-        .unwrap()
-        .get(format!("http://{address}/installer"))
-        .send()
-        .await
-        .unwrap()
+    format!("http://{address}/installer")
 }
+async fn receive_installer(
+    url: String,
+    mut release: UpdateRelease,
+    directory: &std::path::Path,
+) -> Result<ReadyUpdate, UpdateFailure> {
+    release.url = url;
+    let transfer = UpdateTransfer::new(release.bytes);
+    download_with_client(
+        release,
+        directory.to_owned(),
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        4,
+        transfer,
+    )
+    .await
+}
+
 fn fixture(bytes: &[u8]) -> UpdateRelease {
     let mut release = select(json!([release("0.2.0")])).unwrap();
     release.bytes = bytes.len() as u64;
@@ -229,14 +240,261 @@ async fn published_github_installer_downloads_and_verifies_without_execution() {
         .unwrap()
         .expect("published desktop installer");
     let directory = tempfile::tempdir().unwrap();
-    let ready = download(release, directory.path().to_owned(), proxy)
-        .await
-        .unwrap();
+    let transfer = UpdateTransfer::new(release.bytes);
+    let ready = download(
+        release.clone(),
+        directory.path().to_owned(),
+        proxy,
+        16,
+        transfer.clone(),
+    )
+    .await
+    .unwrap();
     verify_cached(&ready).await.unwrap();
     println!(
-        "Verified desktop {}: {} bytes, {:x}",
+        "Verified desktop {}: {} bytes, {:x}; {} download segments",
         ready.release.version,
         ready.release.bytes,
-        Sha256::digest(std::fs::read(&ready.path).unwrap())
+        Sha256::digest(std::fs::read(&ready.path).unwrap()),
+        transfer.progress.snapshot().segments.len()
     );
+}
+
+#[tokio::test]
+async fn updater_uses_parallel_ranges_and_live_progress_then_reuses_verified_cache() {
+    use std::sync::atomic::AtomicUsize;
+    let body = Arc::new(vec![73u8; 128 * 1024]);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let active = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let server = {
+        let (body, requests, active, peak) =
+            (body.clone(), requests.clone(), active.clone(), peak.clone());
+        tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let (body, requests, active, peak) =
+                    (body.clone(), requests.clone(), active.clone(), peak.clone());
+                tokio::spawn(async move {
+                    let mut raw = Vec::new();
+                    let mut buffer = [0; 2048];
+                    while !raw.windows(4).any(|part| part == b"\r\n\r\n") {
+                        let n = socket.read(&mut buffer).await.unwrap();
+                        if n == 0 {
+                            return;
+                        }
+                        raw.extend_from_slice(&buffer[..n]);
+                    }
+                    let request = String::from_utf8(raw).unwrap().to_ascii_lowercase();
+                    let range = request
+                        .lines()
+                        .find_map(|line| line.strip_prefix("range: bytes="))
+                        .unwrap();
+                    let (start, end) = range.trim().split_once('-').unwrap();
+                    let (start, end): (usize, usize) =
+                        (start.parse().unwrap(), end.parse().unwrap());
+                    requests.fetch_add(1, Ordering::SeqCst);
+                    let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(current, Ordering::SeqCst);
+                    socket.write_all(format!("HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{end}/{}\r\nETag: \"stable\"\r\nConnection: close\r\n\r\n",end-start+1,body.len()).as_bytes()).await.unwrap();
+                    for chunk in body[start..=end].chunks(1024) {
+                        socket.write_all(chunk).await.unwrap();
+                        tokio::time::sleep(Duration::from_millis(2)).await;
+                    }
+                    active.fetch_sub(1, Ordering::SeqCst);
+                });
+            }
+        })
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let mut release = fixture(&body);
+    release.url = format!("http://{address}/installer");
+    let transfer = UpdateTransfer::new(release.bytes);
+    let task = tokio::spawn(download_with_client(
+        release.clone(),
+        directory.path().to_owned(),
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        4,
+        transfer.clone(),
+    ));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let state = transfer.progress.snapshot();
+            if state.downloaded > 0 && state.downloaded < release.bytes {
+                break;
+            }
+            assert!(
+                !task.is_finished(),
+                "transfer finished without publishing intermediate progress"
+            );
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let ready = task.await.unwrap().unwrap();
+    assert_eq!(std::fs::read(&ready.path).unwrap(), *body);
+    assert!(peak.load(Ordering::SeqCst) > 1);
+    assert_eq!(requests.load(Ordering::SeqCst), 5);
+    assert_eq!(transfer.progress.snapshot().downloaded, release.bytes);
+    assert!(transfer.is_verifying());
+    let cached = download_with_client(
+        release.clone(),
+        directory.path().to_owned(),
+        reqwest::Client::new(),
+        4,
+        UpdateTransfer::new(release.bytes),
+    )
+    .await
+    .unwrap();
+    assert_eq!(cached.path, ready.path);
+    assert_eq!(requests.load(Ordering::SeqCst), 5);
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    let wrong_directory = tempfile::tempdir().unwrap();
+    let mut wrong = release.clone();
+    wrong.bytes += 1;
+    let result = download_with_client(
+        wrong.clone(),
+        wrong_directory.path().to_owned(),
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        4,
+        UpdateTransfer::new(wrong.bytes),
+    )
+    .await;
+    assert_eq!(result, Err(UpdateFailure::Integrity));
+    assert_eq!(
+        requests.load(Ordering::SeqCst),
+        6,
+        "a mismatched range total must fail before segment requests"
+    );
+    assert_eq!(
+        std::fs::read_dir(wrong_directory.path()).unwrap().count(),
+        0
+    );
+    server.abort();
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "subprocess fixture only"]
+fn installer_handoff_fixture() {
+    if let Ok(code) = std::env::var("NDM_TEST_INSTALLER_EXIT") {
+        std::process::exit(code.parse().unwrap());
+    }
+    use windows_sys::Win32::{Foundation::CloseHandle, System::Threading::CreateMutexW};
+    let profile = std::env::var_os("NDM_TEST_HANDOFF_PROFILE").expect("fixture profile");
+    let profile = std::path::PathBuf::from(profile);
+    let name: Vec<u16> = ndm_core::desktop_installation_namespace(&profile)
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
+    let guard = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+    assert!(!guard.is_null());
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !profile.join("parent-released").exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "parent waited for the installer to exit instead of completing handoff"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    unsafe {
+        CloseHandle(guard);
+    }
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn windows_handoff_returns_before_installer_exit_and_ignores_own_reservation() {
+    let profile = tempfile::tempdir().unwrap();
+    let store = ndm_core::Store::open(&profile.path().join("tasks.db")).unwrap();
+    let reservation = store.reserve_update_if_idle().unwrap().unwrap();
+    assert!(ndm_core::desktop_installation_active(profile.path()).unwrap());
+    assert!(!ndm_core::windows_installer_active(profile.path()).unwrap());
+    let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "updates::tests::installer_handoff_fixture",
+            "--ignored",
+        ])
+        .env("NDM_TEST_HANDOFF_PROFILE", profile.path())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        wait_for_installer_handoff(&mut child, profile.path()),
+    )
+    .await
+    .expect("parent must stop waiting once the installer owns its guard")
+    .unwrap();
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "installer must still be waiting for parent exit"
+    );
+    drop(reservation);
+    assert!(ndm_core::windows_installer_active(profile.path()).unwrap());
+    assert!(ndm_core::desktop_installation_active(profile.path()).unwrap());
+    std::fs::write(profile.path().join("parent-released"), b"exit").unwrap();
+    assert!(child.wait().await.unwrap().success());
+    assert!(!ndm_core::desktop_installation_active(profile.path()).unwrap());
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn failed_windows_installer_reports_exit_without_quitting_parent() {
+    let profile = tempfile::tempdir().unwrap();
+    let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "updates::tests::installer_handoff_fixture",
+            "--ignored",
+        ])
+        .env("NDM_TEST_INSTALLER_EXIT", "4")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    assert_eq!(
+        wait_for_installer_handoff(&mut child, profile.path()).await,
+        Err(UpdateFailure::Installer(Some(4)))
+    );
+    assert!(!ndm_core::windows_installer_active(profile.path()).unwrap());
+}
+
+#[tokio::test]
+async fn restricted_update_client_rejects_redirects_before_contacting_untrusted_target() {
+    let target = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target_address = target.local_addr().unwrap();
+    let source = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = source.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut socket, _) = source.accept().await.unwrap();
+        let mut request = [0; 4096];
+        let _ = socket.read(&mut request).await;
+        socket.write_all(format!("HTTP/1.1 302 Found\r\nLocation: http://{target_address}/blocked\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let mut release = fixture(b"installer");
+    release.url = format!("http://{address}/installer");
+    let result = download_with_client(
+        release.clone(),
+        directory.path().to_owned(),
+        client(None).unwrap(),
+        4,
+        UpdateTransfer::new(release.bytes),
+    )
+    .await;
+    assert_eq!(result, Err(UpdateFailure::Download));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), target.accept())
+            .await
+            .is_err()
+    );
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
 }

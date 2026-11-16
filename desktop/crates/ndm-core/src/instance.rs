@@ -207,6 +207,12 @@ pub fn desktop_installation_active(data_dir: &Path) -> std::io::Result<bool> {
     )
 }
 
+/// The installer's guard, excluding the desktop's own update reservation.
+#[cfg(windows)]
+pub fn windows_installer_active(data_dir: &Path) -> std::io::Result<bool> {
+    named_mutex_exists(&desktop_installation_namespace(data_dir))
+}
+
 #[cfg(not(any(windows, target_os = "macos")))]
 pub fn desktop_installation_active(data_dir: &Path) -> std::io::Result<bool> {
     Ok(PORTABLE_RESERVATIONS

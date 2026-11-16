@@ -32,12 +32,14 @@ pub use hls::{
 };
 pub use http::{
     DownloadProgress, HttpOptions, ProgressPhase, ProgressSnapshot, ProxyOptions, SegmentSnapshot,
-    download_http, execute_http,
+    download_http, download_http_with_client, execute_http,
 };
 #[cfg(windows)]
 pub use installation::shutdown_desktop_installation;
 #[cfg(any(windows, target_os = "macos"))]
 pub use instance::desktop_is_running;
+#[cfg(windows)]
+pub use instance::windows_installer_active;
 pub use instance::{
     DesktopUpdateGuard, desktop_installation_active, desktop_installation_namespace,
     desktop_instance_namespace, with_desktop_startup,

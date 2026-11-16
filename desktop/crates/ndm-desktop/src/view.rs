@@ -125,6 +125,9 @@ pub(crate) struct Desktop {
     notice: crate::notice::Notice,
     notice_timer: Option<gpui_kit::Task<()>>,
     update_state: UpdateState,
+    update_transfer: Option<updates::UpdateTransfer>,
+    update_speed: SpeedMeter,
+    update_bytes_per_second: u64,
     install_update_when_idle: bool,
     install_wait: Option<InstallWait>,
 }
@@ -268,27 +271,19 @@ impl Desktop {
                 while let Some(command) = commands.recv().await {
                     match command {
                         crate::tray::Command::Show => {
-                            if view
-                                .update_in(cx, |_, window, _| crate::tray::show(window))
-                                .is_err()
-                            {
-                                break;
-                            }
+                            let _ = view.update_in(cx, |_, window, _| crate::tray::show(window));
                         }
                         crate::tray::Command::Refresh => {
-                            if view
-                                .update(cx, |this, cx| this.discover_new_tasks(cx))
-                                .is_err()
-                            {
-                                break;
-                            }
+                            let _ = view.update(cx, |this, cx| this.discover_new_tasks(cx));
                         }
                         crate::tray::Command::Quit => {
                             let scheduler = scheduler.clone();
                             let _ = runtime
                                 .spawn(async move { scheduler.shutdown().await })
                                 .await;
-                            let _ = view.update_in(cx, |_, _, cx| cx.quit());
+                            // Quitting must still work if the originating window/view
+                            // has disappeared. Never silently drop an installer's request.
+                            AsyncApp::update(cx, |cx| cx.quit());
                             break;
                         }
                     }
@@ -427,6 +422,9 @@ impl Desktop {
             notice: crate::notice::Notice::default(),
             notice_timer: None,
             update_state: UpdateState::NotChecked,
+            update_transfer: None,
+            update_speed: SpeedMeter::default(),
+            update_bytes_per_second: 0,
             install_update_when_idle: false,
             install_wait: None,
         };
@@ -1840,7 +1838,8 @@ impl Render for Desktop {
                         | UpdateState::Ready(_)
                         | UpdateState::Installing
                 ) || self.remembered_update()
-                    || (self.update_state == UpdateState::Failed && self.install_update_when_idle),
+                    || (matches!(self.update_state, UpdateState::Failed(_))
+                        && self.install_update_when_idle),
                 |bar| {
                     bar.child(crate::chrome::title_bar_action(
                         self.title_update_button(cx),

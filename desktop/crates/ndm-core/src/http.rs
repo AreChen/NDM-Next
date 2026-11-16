@@ -281,6 +281,7 @@ pub async fn execute_http(
         cancel,
         progress.clone(),
         Some(&task.work_directory()),
+        None,
     )
     .await
     {
@@ -356,8 +357,23 @@ pub async fn download_http(
         cancel,
         DownloadProgress::default(),
         None,
+        None,
     )
     .await
+}
+
+/// Download with the same range, retry, merge and progress engine as normal tasks.
+/// The client supplies proxy settings and can follow redirects with a custom host
+/// policy. With redirects disabled on the client, normal explicit core redirects apply.
+pub async fn download_http_with_client(
+    request: &NewTask,
+    id: TaskId,
+    options: &HttpOptions,
+    cancel: CancellationToken,
+    progress: DownloadProgress,
+    client: Client,
+) -> Result<PathBuf> {
+    download_http_with_progress(request, id, options, cancel, progress, None, Some(client)).await
 }
 
 async fn download_http_with_progress(
@@ -367,12 +383,16 @@ async fn download_http_with_progress(
     cancel: CancellationToken,
     progress: DownloadProgress,
     work_directory: Option<&std::path::Path>,
+    client: Option<Client>,
 ) -> Result<PathBuf> {
     progress.0.downloaded.store(0, Ordering::Relaxed);
     progress.0.transferred.store(0, Ordering::Relaxed);
     progress.0.phase.store(0, Ordering::Release);
     progress.set_total(None);
-    let client = network_client(options.proxy.as_ref())?;
+    let client = match client {
+        Some(client) => client,
+        None => network_client(options.proxy.as_ref())?,
+    };
     let headers = request_headers(request)?;
     fs::create_dir_all(&request.destination).await?;
     let work_dir = work_directory
@@ -424,6 +444,12 @@ async fn download_http_with_progress(
 
     let assembled = work_dir.join("assembled.part");
     if let Some((total, validator, resource_url)) = ranged {
+        if request
+            .expected_size
+            .is_some_and(|expected| expected != total)
+        {
+            return Err(Error::InvalidHttpResponse);
+        }
         drop(probe);
         progress.set_total(Some(total));
         let connections = options

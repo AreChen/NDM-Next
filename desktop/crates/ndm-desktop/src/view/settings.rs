@@ -305,6 +305,7 @@ impl Desktop {
                     .child(
                         div()
                             .flex_1()
+                            .min_w_0()
                             .text_xs()
                             .text_color(rgb(muted))
                             .child(self.update_status()),
@@ -321,6 +322,14 @@ impl Desktop {
                             cx.open_url(&url);
                         }))),
             )
+            .when(matches!(self.update_state, UpdateState::Downloading), |panel| {
+                let ratio = self.update_transfer.as_ref().map_or(0., |transfer| {
+                    transfer.progress.snapshot().downloaded as f32 / transfer.expected.max(1) as f32
+                }).clamp(0., 1.);
+                panel.child(div().h(px(3.)).w_full().rounded_full()
+                    .bg(rgb(if dark { 0x28344b } else { 0xe3e8f2 }))
+                    .child(div().h_full().w(relative(ratio)).rounded_full().bg(rgb(0x7c68ff))))
+            })
             .child(
                 div()
                     .flex()

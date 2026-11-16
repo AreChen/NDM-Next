@@ -178,10 +178,13 @@ mod platform {
             let stopping = self.stopping.clone();
             let requested = self.shutdown_requested.clone();
             self.shutdown_worker = Some(thread::spawn(move || {
-                // SAFETY: Instance owns both handles until this worker has joined.
-                if unsafe { WaitForSingleObject(event as HANDLE, INFINITE) } == WAIT_OBJECT_0
-                    && !stopping.load(Ordering::Acquire)
-                {
+                loop {
+                    // SAFETY: Instance owns both handles until this worker has joined.
+                    if unsafe { WaitForSingleObject(event as HANDLE, INFINITE) } != WAIT_OBJECT_0
+                        || stopping.load(Ordering::Acquire)
+                    {
+                        break;
+                    }
                     requested.store(true, Ordering::Release);
                     unsafe {
                         ResetEvent(ready as HANDLE);
@@ -357,6 +360,9 @@ mod platform {
             assert!(!receive.recv_timeout(Duration::from_secs(2)).unwrap());
             instance.mark_ready().unwrap();
             assert!(!ndm_core::wait_for_desktop_ready(dir.path(), Duration::ZERO).unwrap());
+            // A timed-out installer may retry while the desktop is still alive.
+            assert!(ndm_core::request_desktop_shutdown(dir.path()).unwrap());
+            assert!(!receive.recv_timeout(Duration::from_secs(2)).unwrap());
         }
     }
 }
