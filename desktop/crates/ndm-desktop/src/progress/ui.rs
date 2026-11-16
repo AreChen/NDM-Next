@@ -1,8 +1,5 @@
 use super::*;
-use gpui_kit::component::{
-    Disableable, IconName, Sizable, ThemeMode,
-    button::{Button, ButtonVariants},
-};
+use gpui_kit::component::{Disableable, IconName, ThemeMode, button::ButtonVariants};
 
 impl Render for ProgressWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -228,13 +225,37 @@ impl Render for ProgressWindow {
             }
             _ => None,
         };
+        use gpui_motion_kit::core::{Motion, Target, Transition};
+        let presentation = self.bar_motion.frame(
+            Motion::new(
+                Target::default().width(ratio.unwrap_or(if state == TaskState::Running {
+                    1.
+                } else {
+                    0.
+                })),
+            )
+            .transition(
+                if state == TaskState::Running && window.is_window_active() && window.is_visible() {
+                    crate::motion::tween(160)
+                } else {
+                    Transition::Instant
+                },
+            ),
+            window,
+            cx,
+        );
+        let ambient = self.ambient.sample(
+            self.ambient_epoch.elapsed(),
+            state == TaskState::Running
+                && window.is_visible()
+                && window.is_window_active()
+                && !cx.reduce_motion(),
+        );
         let fill = div()
             .h_full()
-            .w(relative(ratio.unwrap_or(if state == TaskState::Running {
-                1.
-            } else {
-                0.
-            })))
+            .w(relative(
+                presentation.target().width_px().unwrap_or(0.).clamp(0., 1.),
+            ))
             .rounded_full()
             .bg(linear_gradient(
                 90.,
@@ -248,18 +269,13 @@ impl Render for ProgressWindow {
                     1.,
                 ),
             ));
-        let fill = if ratio.is_none() && state == TaskState::Running {
-            fill.with_animation(
-                "unknown-size-progress",
-                Animation::new(Duration::from_secs(2))
-                    .repeat()
-                    .with_easing(pulsating_between(0.15, 0.75)),
-                |bar, opacity| bar.opacity(opacity),
-            )
-            .into_any_element()
-        } else {
-            fill.into_any_element()
-        };
+        let fill = fill.opacity(
+            if ratio.is_none() && state == TaskState::Running && !cx.reduce_motion() {
+                0.6 + 0.2 * (self.ambient_epoch.elapsed().as_secs_f32() * 1.8).sin()
+            } else {
+                1.
+            },
+        );
         let mut content = div()
             .flex_1()
             .min_h_0()
@@ -382,8 +398,8 @@ impl Render for ProgressWindow {
             div()
                 .flex()
                 .items_center()
-                .h(px(18.))
-                .gap_3()
+                .h(px(28.))
+                .gap_2()
                 .text_xs()
                 .text_color(rgb(muted))
                 .child(
@@ -400,40 +416,32 @@ impl Render for ProgressWindow {
                         .child(self.text("平均", "Average"))
                         .child(div().text_color(rgb(fg)).child(average)),
                 )
-                .child(graph),
-        );
-        content = content.child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(6.))
+                .child(div().flex_1())
                 .when_some(action, |row, (icon, label)| {
                     row.child(
-                        Button::new("progress-action")
-                            .small()
+                        chrome::icon_button("progress-action", icon, label)
                             .disabled(self.proxy_switching)
-                            .primary()
-                            .icon(icon)
-                            .label(label)
                             .on_click(
                                 cx.listener(move |this, _, _, cx| this.change_state(state, cx)),
                             ),
                     )
                 })
                 .child(
-                    Button::new("progress-folder")
-                        .small()
-                        .icon(IconName::FolderOpen)
-                        .label(self.text("文件夹", "Folder"))
-                        .on_click(cx.listener(|this, _, _, cx| this.open_folder(cx))),
+                    chrome::icon_button(
+                        "progress-folder",
+                        IconName::FolderOpen,
+                        self.text("打开文件夹", "Open folder"),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.open_folder(cx))),
                 )
                 .when(state == TaskState::Completed, |row| {
                     row.child(
-                        Button::new("progress-file")
-                            .small()
-                            .icon(IconName::ExternalLink)
-                            .label(self.text("打开文件", "Open file"))
-                            .on_click(cx.listener(|this, _, _, cx| this.open_file(cx))),
+                        chrome::icon_button(
+                            "progress-file",
+                            IconName::ExternalLink,
+                            self.text("打开文件", "Open file"),
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.open_file(cx))),
                     )
                 })
                 .when(
@@ -449,52 +457,50 @@ impl Render for ProgressWindow {
                     }),
                     |row| {
                         row.child(
-                            Button::new("progress-proxy")
-                                .small()
-                                .icon(gpui_kit::assets::IconName::Zap)
-                                .loading(self.proxy_switching)
-                                .when(
-                                    task.as_ref().is_some_and(|task| match &task.options {
-                                        ndm_core::TaskOptions::Http(options) => {
-                                            options.proxy.is_some()
-                                        }
-                                        ndm_core::TaskOptions::Hls(options) => {
-                                            options.proxy.is_some()
-                                        }
-                                        ndm_core::TaskOptions::Dash(options) => {
-                                            options.proxy.is_some()
-                                        }
-                                        _ => false,
-                                    }),
-                                    |button| button.primary(),
+                            chrome::icon_button(
+                                "progress-proxy",
+                                gpui_kit::component::Icon::new(gpui_kit::assets::IconName::Zap),
+                                self.text(
+                                    "仅对此任务使用已配置代理",
+                                    "Use configured proxy for this download only",
+                                ),
+                            )
+                            .when(
+                                task.as_ref().is_some_and(|task| match &task.options {
+                                    ndm_core::TaskOptions::Http(options) => options.proxy.is_some(),
+                                    ndm_core::TaskOptions::Hls(options) => options.proxy.is_some(),
+                                    ndm_core::TaskOptions::Dash(options) => options.proxy.is_some(),
+                                    _ => false,
+                                }),
+                                |button| button.primary(),
+                            )
+                            .disabled(self.proxy_switching)
+                            .tooltip(if self.proxy_switching {
+                                self.text("正在切换代理…", "Switching proxy…")
+                            } else {
+                                self.text(
+                                    "仅对此任务使用已配置代理",
+                                    "Use configured proxy for this download only",
                                 )
-                                .disabled(self.proxy_switching)
-                                .tooltip(if self.proxy_switching {
-                                    self.text("正在切换代理…", "Switching proxy…")
-                                } else {
-                                    self.text(
-                                        "仅对此任务使用已配置代理",
-                                        "Use configured proxy for this download only",
-                                    )
-                                })
-                                .on_click(cx.listener(|this, _, _, cx| this.enable_task_proxy(cx))),
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| this.enable_task_proxy(cx))),
                         )
                     },
                 )
-                .child(div().flex_1())
                 .child(
-                    Button::new("progress-details")
-                        .small()
-                        .label(self.text("详情", "Details"))
-                        .icon(if self.expanded {
+                    chrome::icon_button(
+                        "progress-details",
+                        if self.expanded {
                             IconName::ChevronUp
                         } else {
                             IconName::ChevronDown
-                        })
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.expanded = !this.expanded;
-                            cx.notify();
-                        })),
+                        },
+                        self.text("展开／收起详情", "Expand / collapse details"),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.expanded = !this.expanded;
+                        cx.notify();
+                    })),
                 ),
         );
         if let Some(notice) = &self.notice {
@@ -518,6 +524,7 @@ impl Render for ProgressWindow {
                     .border_color(rgb(edge))
                     .bg(rgb(panel))
                     .p_2()
+                    .child(graph)
                     .child(details),
             );
         }
@@ -529,7 +536,35 @@ impl Render for ProgressWindow {
             .bg(rgb(page))
             .text_color(rgb(fg))
             .child(chrome::title_bar("NDM Next", dark))
-            .child(content)
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .when_some(ambient, |body, x| {
+                        body.child(
+                            div()
+                                .absolute()
+                                .top_0()
+                                .left(relative(x))
+                                .w(relative(0.75))
+                                .h_full()
+                                .rounded_full()
+                                .bg(linear_gradient(
+                                    105.,
+                                    linear_color_stop(rgba(0x885dff00), 0.),
+                                    linear_color_stop(
+                                        rgba(if dark { 0x37c9f514 } else { 0x885dff0d }),
+                                        1.,
+                                    ),
+                                )),
+                        )
+                    })
+                    .child(content),
+            )
     }
 }
 

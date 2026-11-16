@@ -1,4 +1,5 @@
 use super::*;
+use gpui_kit::component::menu::PopupMenuItem;
 
 impl Desktop {
     pub(super) fn task_row(
@@ -111,96 +112,95 @@ impl Desktop {
                 .is_ok_and(|url| matches!(url.scheme(), "http" | "https"));
         let zh = self.preferences.language == Language::Chinese;
         let view = cx.entity().downgrade();
-        let more = Button::new(SharedString::from(format!("more-task-{id}")))
-            .small()
-            .ghost()
-            .icon(IconName::Ellipsis)
-            .tooltip(self.text("更多操作", "More actions"))
-            .accessibility_label(self.text("更多操作", "More actions"))
-            .dropdown_menu(move |mut menu, _, _| {
-                if let Some(error) = &error {
-                    menu = menu.item(PopupMenuItem::new(error.clone()).disabled(true));
-                }
-                if can_edit {
-                    let view = view.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new(if zh {
-                            "更换下载链接"
-                        } else {
-                            "Change download link"
-                        })
-                        .on_click(move |_, window, cx| {
-                            let _ = view.update(cx, |this, cx| {
-                                if matches!(this.update_state, UpdateState::Installing) {
-                                    return;
-                                }
-                                this.replacement_input
-                                    .update(cx, |input, cx| input.set_value("", window, cx));
-                                this.editing_url = Some(id);
-                                cx.notify();
-                            });
-                        }),
-                    );
-                }
-                if state == TaskState::Running && is_hls {
-                    let view = view.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new(if zh {
-                            "停止直播并保存"
-                        } else {
-                            "Stop and save live media"
-                        })
-                        .on_click(move |_, _, cx| {
-                            let _ = view.update(cx, |this, cx| {
-                                if this.scheduler.stop_live(id).is_err() {
-                                    this.set_notice(
-                                        this.text(
-                                            "无法停止该媒体任务。",
-                                            "Could not stop the media task.",
-                                        )
-                                        .into(),
-                                        cx,
-                                    );
-                                }
-                                cx.notify();
-                            });
-                        }),
-                    );
-                }
-                if pending_key {
-                    let view = view.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new(if zh {
-                            "核对 SFTP 主机密钥"
-                        } else {
-                            "Review SFTP host key"
-                        })
-                        .on_click(move |_, _, cx| {
-                            let _ = view.update(cx, |this, cx| {
-                                if matches!(this.update_state, UpdateState::Installing) {
-                                    return;
-                                }
-                                this.confirming_host_key = Some(id);
-                                cx.notify();
-                            });
-                        }),
-                    );
-                }
-                if state != TaskState::Prepared {
-                    let view = view.clone();
-                    menu = menu.separator().item(
-                        PopupMenuItem::new(if zh {
-                            "删除任务…"
-                        } else {
-                            "Delete download…"
-                        })
-                        .on_click(move |_, _, cx| {
-                            let _ = view.update(cx, |this, cx| this.confirm_delete(vec![id], cx));
-                        }),
-                    );
-                }
-                menu
-            });
+        let more = crate::chrome::icon_button(
+            SharedString::from(format!("more-task-{id}")),
+            IconName::Ellipsis,
+            self.text("更多操作", "More actions"),
+        )
+        .dropdown_menu(move |mut menu, _, _| {
+            if let Some(error) = &error {
+                menu = menu.item(PopupMenuItem::new(error.clone()).disabled(true));
+            }
+            if can_edit {
+                let view = view.clone();
+                menu = menu.item(
+                    PopupMenuItem::new(if zh {
+                        "更换下载链接"
+                    } else {
+                        "Change download link"
+                    })
+                    .on_click(move |_, window, cx| {
+                        let _ = view.update(cx, |this, cx| {
+                            if matches!(this.update_state, UpdateState::Installing) {
+                                return;
+                            }
+                            this.replacement_input
+                                .update(cx, |input, cx| input.set_value("", window, cx));
+                            this.editing_url = Some(id);
+                            cx.notify();
+                        });
+                    }),
+                );
+            }
+            if state == TaskState::Running && is_hls {
+                let view = view.clone();
+                menu = menu.item(
+                    PopupMenuItem::new(if zh {
+                        "停止直播并保存"
+                    } else {
+                        "Stop and save live media"
+                    })
+                    .on_click(move |_, _, cx| {
+                        let _ = view.update(cx, |this, cx| {
+                            if this.scheduler.stop_live(id).is_err() {
+                                this.set_notice(
+                                    this.text(
+                                        "无法停止该媒体任务。",
+                                        "Could not stop the media task.",
+                                    )
+                                    .into(),
+                                    cx,
+                                );
+                            }
+                            cx.notify();
+                        });
+                    }),
+                );
+            }
+            if pending_key {
+                let view = view.clone();
+                menu = menu.item(
+                    PopupMenuItem::new(if zh {
+                        "核对 SFTP 主机密钥"
+                    } else {
+                        "Review SFTP host key"
+                    })
+                    .on_click(move |_, _, cx| {
+                        let _ = view.update(cx, |this, cx| {
+                            if matches!(this.update_state, UpdateState::Installing) {
+                                return;
+                            }
+                            this.confirming_host_key = Some(id);
+                            cx.notify();
+                        });
+                    }),
+                );
+            }
+            if state != TaskState::Prepared {
+                let view = view.clone();
+                menu = menu.separator().item(
+                    PopupMenuItem::new(if zh {
+                        "删除任务…"
+                    } else {
+                        "Delete download…"
+                    })
+                    .on_click(move |_, _, cx| {
+                        let _ = view.update(cx, |this, cx| this.confirm_delete(vec![id], cx));
+                    }),
+                );
+            }
+            menu
+        });
         let action = match state {
             TaskState::Queued | TaskState::Running => {
                 Some((IconName::Pause, self.text("暂停", "Pause")))
@@ -265,6 +265,12 @@ impl Desktop {
         }
         div().h(px(58.)).pb(px(6.)).child(
             div()
+                .id(SharedString::from(format!("task-selection-area-{id}")))
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                    this.page_focus.focus(window, cx);
+                    this.select_task(id, event.modifiers().shift, cx);
+                }))
                 .w_full()
                 .h_full()
                 .min_w_0()
@@ -274,7 +280,11 @@ impl Desktop {
                 .px(px(10.))
                 .rounded_lg()
                 .border_1()
-                .border_color(rgb(edge))
+                .border_color(rgb(if self.selected_tasks.contains(&id) {
+                    0x967bff
+                } else {
+                    edge
+                }))
                 .bg(linear_gradient(
                     105.,
                     linear_color_stop(rgb(start), 0.),
@@ -290,11 +300,10 @@ impl Desktop {
                             IconName::Square
                         })
                         .accessibility_label(self.text("选择任务", "Select download"))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if !this.selected_tasks.insert(id) {
-                                this.selected_tasks.remove(&id);
-                            }
-                            cx.notify();
+                        .tooltip(self.text("选择 · Shift 连选", "Select · Shift for a range"))
+                        .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                            cx.stop_propagation();
+                            this.select_task(id, event.modifiers().shift, cx);
                         })),
                 )
                 .child(
@@ -344,56 +353,59 @@ impl Desktop {
                         .child(status),
                 )
                 .child(metrics)
-                .when_some(action, |row, (icon, label)| {
-                    row.child(
-                        Button::new(SharedString::from(format!("task-action-{id}")))
-                            .small()
-                            .ghost()
-                            .icon(icon)
-                            .tooltip(label)
-                            .accessibility_label(label)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.task_action(id, state);
-                                cx.notify();
-                            })),
-                    )
-                })
                 .child(
-                    Button::new(SharedString::from(format!("task-progress-{id}")))
-                        .small()
-                        .ghost()
-                        .icon(IconName::ChartPie)
-                        .tooltip(self.text("下载详情", "Download details"))
-                        .accessibility_label(self.text("下载详情", "Download details"))
-                        .on_click(cx.listener(move |this, _, _, cx| this.show_progress(id, cx))),
-                )
-                .child(
-                    Button::new(SharedString::from(format!("task-folder-{id}")))
-                        .small()
-                        .ghost()
-                        .icon(IconName::FolderOpen)
-                        .tooltip(self.text("打开文件夹", "Open folder"))
-                        .accessibility_label(self.text("打开文件夹", "Open folder"))
-                        .on_click(
-                            cx.listener(move |this, _, _, cx| this.open_task_path(id, false, cx)),
-                        ),
-                )
-                .when(state == TaskState::Completed, |row| {
-                    row.child(
-                        Button::new(SharedString::from(format!("task-open-{id}")))
-                            .small()
-                            .ghost()
-                            .icon(IconName::ExternalLink)
-                            .tooltip(self.text("打开文件", "Open file"))
-                            .accessibility_label(self.text("打开文件", "Open file"))
+                    crate::chrome::task_actions(SharedString::from(format!("task-actions-{id}")))
+                        .when_some(action, |row, (icon, label)| {
+                            row.child(
+                                crate::chrome::icon_button(
+                                    SharedString::from(format!("task-action-{id}")),
+                                    icon,
+                                    label,
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        this.task_action(id, state);
+                                        cx.notify();
+                                    },
+                                )),
+                            )
+                        })
+                        .child(
+                            crate::chrome::icon_button(
+                                SharedString::from(format!("task-progress-{id}")),
+                                IconName::ChartPie,
+                                self.text("下载详情", "Download details"),
+                            )
+                            .on_click(
+                                cx.listener(move |this, _, _, cx| this.show_progress(id, cx)),
+                            ),
+                        )
+                        .child(
+                            crate::chrome::icon_button(
+                                SharedString::from(format!("task-folder-{id}")),
+                                IconName::FolderOpen,
+                                self.text("打开文件夹", "Open folder"),
+                            )
                             .on_click(
                                 cx.listener(move |this, _, _, cx| {
-                                    this.open_task_path(id, true, cx)
+                                    this.open_task_path(id, false, cx)
                                 }),
                             ),
-                    )
-                })
-                .child(more),
+                        )
+                        .when(state == TaskState::Completed, |row| {
+                            row.child(
+                                crate::chrome::icon_button(
+                                    SharedString::from(format!("task-open-{id}")),
+                                    IconName::ExternalLink,
+                                    self.text("打开文件", "Open file"),
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| this.open_task_path(id, true, cx),
+                                )),
+                            )
+                        })
+                        .child(more),
+                ),
         )
     }
 }

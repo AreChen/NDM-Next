@@ -17,8 +17,8 @@ use std::{
 };
 
 pub(crate) const WINDOW_WIDTH: f32 = 480.;
-pub(crate) const COMPACT_HEIGHT: f32 = 192.;
-pub(crate) const FINISHED_HEIGHT: f32 = 160.;
+pub(crate) const COMPACT_HEIGHT: f32 = 168.;
+pub(crate) const FINISHED_HEIGHT: f32 = 136.;
 pub(crate) const EXPANDED_HEIGHT: f32 = 430.;
 
 fn should_track(state: Option<TaskState>, has_worker: bool) -> bool {
@@ -104,6 +104,9 @@ pub(crate) struct ProgressWindow {
     tracking: bool,
     notice: Option<String>,
     layout_height: f32,
+    bar_motion: gpui_motion_kit::MotionState,
+    ambient: crate::motion::Ambient,
+    ambient_epoch: Instant,
 }
 
 impl ProgressWindow {
@@ -182,6 +185,9 @@ impl ProgressWindow {
             tracking: false,
             notice: None,
             layout_height: COMPACT_HEIGHT,
+            bar_motion: Default::default(),
+            ambient: Default::default(),
+            ambient_epoch: Instant::now(),
         };
         if should_track(
             this.task.as_ref().map(|task| task.state),

@@ -26,6 +26,7 @@ pub struct Preferences {
     pub language: Language,
     pub theme: Theme,
     pub sidebar_collapsed: bool,
+    pub ui_animations: bool,
     pub download_dir: PathBuf,
     pub use_system_download_dir: bool,
     pub cache_dir: PathBuf,
@@ -54,6 +55,7 @@ impl Default for Preferences {
             language: Language::Chinese,
             theme: Theme::System,
             sidebar_collapsed: false,
+            ui_animations: true,
             download_dir,
             use_system_download_dir: true,
             cache_dir: ndm_core::default_cache_directory(),
@@ -226,12 +228,15 @@ mod tests {
         let mut preferences = Preferences::load(&path).unwrap();
         assert_eq!(preferences.start_at_login, Some(true));
         assert_eq!(preferences.scheduler_options().http.max_connections, 16);
+        assert!(preferences.ui_animations);
         preferences.start_at_login = Some(false);
         preferences.max_connections = 4;
+        preferences.ui_animations = false;
         preferences.save(&path).unwrap();
         let loaded = Preferences::load(&path).unwrap();
         assert_eq!(loaded.start_at_login, Some(false));
         assert_eq!(loaded.max_connections, 4);
+        assert!(!loaded.ui_animations);
     }
 
     #[cfg(windows)]

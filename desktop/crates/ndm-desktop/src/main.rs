@@ -9,10 +9,12 @@ mod filenames;
 mod files;
 mod instance;
 mod library;
+mod motion;
 mod notice;
 mod preferences;
 mod progress;
 mod protocol_auth;
+mod selection;
 mod speed;
 #[cfg(windows)]
 mod startup;

@@ -1,5 +1,86 @@
 use gpui_kit::{component::TitleBar, prelude::*, *};
 
+pub(crate) fn page_focus(window: &mut Window, cx: &mut App) -> FocusHandle {
+    let handle = cx.focus_handle();
+    handle.focus(window, cx);
+    handle
+}
+
+pub(crate) fn download_search(
+    input: &Entity<gpui_kit::component::input::InputState>,
+    page_focus: &FocusHandle,
+    label: &'static str,
+) -> impl IntoElement {
+    use gpui_kit::component::{Icon, IconName, Sizable, input::Input};
+    let state = input.clone();
+    let page_focus = page_focus.clone();
+    div()
+        .id("search-container")
+        .flex_1()
+        .min_w_0()
+        .on_mouse_down_out(move |_, window, cx| {
+            if state.read(cx).focus_handle(cx).is_focused(window) {
+                page_focus.focus(window, cx);
+            }
+        })
+        .child(
+            Input::new(input)
+                .small()
+                .id("search-downloads")
+                .w_full()
+                .prefix(Icon::new(IconName::Search).small())
+                .aria_label(label),
+        )
+}
+
+/// Shared by task rows and the compact progress window.
+pub(crate) fn icon_button(
+    id: impl Into<ElementId>,
+    icon: impl Into<gpui_kit::component::Icon>,
+    label: &'static str,
+) -> gpui_kit::component::button::Button {
+    use gpui_kit::component::{
+        Sizable,
+        button::{Button, ButtonVariants},
+    };
+    Button::new(id)
+        .small()
+        .ghost()
+        .size(px(28.))
+        .flex_shrink_0()
+        .icon(Into::<gpui_kit::component::Icon>::into(icon))
+        .tooltip(label)
+        .accessibility_label(label)
+}
+
+pub(crate) fn task_actions(id: impl Into<ElementId>) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .flex_shrink_0()
+        .on_click(|_, _, cx| cx.stop_propagation())
+}
+
+pub(crate) fn choice_item(
+    label: &'static str,
+    selected: bool,
+    dark: bool,
+) -> gpui_kit::component::menu::PopupMenuItem {
+    gpui_kit::component::menu::PopupMenuItem::element(move |_, _| {
+        div()
+            .w_full()
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .when(selected, |row| {
+                row.bg(rgb(if dark { 0x302b50 } else { 0xede9ff }))
+                    .text_color(rgb(if dark { 0xd9d1ff } else { 0x523fa7 }))
+            })
+            .child(label)
+    })
+}
+
 pub(crate) fn title_bar(title: impl Into<SharedString>, dark: bool) -> TitleBar {
     TitleBar::new()
         .bg(rgb(if dark { 0x111827 } else { 0xf8f9fd }))
@@ -65,8 +146,9 @@ mod tests {
     use super::title_bar_action;
     use gpui::component::{Sizable, button::Button};
     use gpui::{
-        Context, Hitbox, HitboxBehavior, IntoElement, Modifiers, ParentElement, Render, Styled,
-        Window, WindowControlArea, canvas, div, point, px,
+        Context, Hitbox, HitboxBehavior, InteractiveElement, IntoElement, Modifiers, ParentElement,
+        Render, StatefulInteractiveElement, Styled, Window, WindowControlArea, canvas, div, point,
+        px,
     };
     use gpui_kit as gpui;
     use std::{
@@ -77,6 +159,113 @@ mod tests {
     struct ActionHarness {
         drag: Rc<RefCell<Option<Hitbox>>>,
         clicks: Rc<Cell<usize>>,
+    }
+
+    struct SearchHarness {
+        input: gpui::Entity<gpui::component::input::InputState>,
+        page_focus: gpui::FocusHandle,
+    }
+
+    #[gpui::test]
+    fn task_action_clicks_do_not_toggle_row_selection(cx: &mut gpui::TestAppContext) {
+        struct Harness(Rc<Cell<usize>>, Rc<Cell<usize>>);
+        impl Render for Harness {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let selections = self.0.clone();
+                let actions = self.1.clone();
+                div()
+                    .id("row")
+                    .flex()
+                    .items_center()
+                    .w(px(240.))
+                    .h(px(52.))
+                    .on_click(move |_, _, _| selections.set(selections.get() + 1))
+                    .child(
+                        super::task_actions("actions").child(
+                            super::icon_button(
+                                "folder",
+                                gpui::component::IconName::FolderOpen,
+                                "Open folder",
+                            )
+                            .on_click(move |_, _, _| actions.set(actions.get() + 1)),
+                        ),
+                    )
+            }
+        }
+        cx.update(gpui::init);
+        let selections = Rc::new(Cell::new(0));
+        let actions = Rc::new(Cell::new(0));
+        let (_, cx) = cx.add_window_view({
+            let selections = selections.clone();
+            let actions = actions.clone();
+            move |_, _| Harness(selections, actions)
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.simulate_click(point(px(14.), px(14.)), Modifiers::default());
+        assert_eq!(actions.get(), 1);
+        assert_eq!(selections.get(), 0);
+        cx.simulate_click(
+            point(px(140.), px(14.)),
+            Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(selections.get(), 1);
+    }
+
+    impl Render for SearchHarness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .track_focus(&self.page_focus)
+                .flex()
+                .flex_col()
+                .w(px(400.))
+                .h(px(120.))
+                .child(super::download_search(
+                    &self.input,
+                    &self.page_focus,
+                    "Search",
+                ))
+                .child(div().h(px(40.)).w_full())
+        }
+    }
+
+    #[gpui::test]
+    fn search_only_keeps_focus_until_the_user_clicks_outside(cx: &mut gpui::TestAppContext) {
+        use gpui::{AppContext, Focusable};
+        cx.update(gpui::init);
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            let input = cx.new(|cx| gpui::component::input::InputState::new(window, cx));
+            let page_focus = super::page_focus(window, cx);
+            SearchHarness { input, page_focus }
+        });
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+            assert!(view.read(cx).page_focus.is_focused(window));
+            assert!(
+                !view
+                    .read(cx)
+                    .input
+                    .read(cx)
+                    .focus_handle(cx)
+                    .is_focused(window)
+            );
+        });
+        cx.simulate_click(point(px(40.), px(14.)), Modifiers::default());
+        cx.update(|window, cx| {
+            assert!(
+                view.read(cx)
+                    .input
+                    .read(cx)
+                    .focus_handle(cx)
+                    .is_focused(window)
+            );
+        });
+        cx.simulate_click(point(px(40.), px(110.)), Modifiers::default());
+        cx.update(|window, cx| {
+            assert!(view.read(cx).page_focus.is_focused(window));
+        });
     }
 
     impl Render for ActionHarness {

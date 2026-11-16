@@ -21,8 +21,8 @@
 | Downloads & media | Everyday controls |
 | :--- | :--- |
 | **Fast transfers** — HTTP(S), FTP(S) and SFTP, with multi-connection HTTP(S) downloads. | **Browser integration** — Capture downloads with file type, size and domain filters. |
-| **Media downloads** — HLS and static DASH, plus a searchable resource library and batch downloads. | **Organized tasks** — Multilingual search, category filters, and quick file and folder actions. |
-| **Storage & network** — Custom download/cache folders, cache cleanup and per-task proxy controls. | **Native interface** — Compact progress windows, light/dark themes, and English/Chinese support. |
+| **Media downloads** — HLS and static DASH, plus a searchable resource library and batch downloads. | **Organized tasks** — Multilingual search, category filters, Shift-click range selection, and quick file actions. |
+| **Storage & network** — Custom download/cache folders, cache cleanup and per-task proxy controls. | **Native interface** — Smooth motion, compact progress windows, light/dark themes, and English/Chinese support. |
 
 ## Download
 

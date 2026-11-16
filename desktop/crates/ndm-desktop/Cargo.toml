@@ -8,6 +8,8 @@ license.workspace = true
 [dependencies]
 caseless = "0.2"
 gpui-kit.workspace = true
+# Upstream Kit adapter, with its Kit pin updated to our 0.10 backend.
+gpui-motion-kit = { path = "../../vendor/gpui-motion-kit", version = "=0.5.0" }
 ndm-core = { path = "../ndm-core" }
 percent-encoding.workspace = true
 reqwest.workspace = true

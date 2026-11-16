@@ -109,6 +109,22 @@ impl Desktop {
                     .selected(self.preferences.theme == Theme::Dark)
                     .on_click(cx.listener(|this, _, _, cx| this.set_theme(Theme::Dark, cx))),
             )
+            .child(
+                Button::new("ui-animations")
+                    .small()
+                    .ghost()
+                    .label(if self.preferences.ui_animations {
+                        self.text("动效：开", "Motion: on")
+                    } else {
+                        self.text("动效：关", "Motion: off")
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.preferences.ui_animations = !this.preferences.ui_animations;
+                        cx.set_reduce_motion(!this.preferences.ui_animations);
+                        this.save_preferences(cx);
+                        cx.notify();
+                    })),
+            )
             .child(div().flex_1())
             .child(
                 Button::new("language")

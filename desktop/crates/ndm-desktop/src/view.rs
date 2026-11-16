@@ -12,7 +12,7 @@ use gpui_kit::{
         Icon, IconName, Sizable,
         button::{Button, ButtonVariants},
         input::{Input, InputState},
-        menu::{DropdownMenu, PopupMenuItem},
+        menu::DropdownMenu,
     },
     prelude::*,
     *,
@@ -101,6 +101,10 @@ pub(crate) struct Desktop {
     delete_dialog: Option<AnyWindowHandle>,
     deleting: bool,
     selected_tasks: HashSet<TaskId>,
+    selection_anchor: Option<TaskId>,
+    page_focus: FocusHandle,
+    sidebar_motion: gpui_motion_kit::MotionState,
+    content_motion: gpui_motion_kit::MotionState,
     sidebar_collapsed: bool,
     new_download_open: bool,
     hls_catalog: Option<(String, HlsCatalog)>,
@@ -353,6 +357,8 @@ impl Desktop {
         let mut task_index = TaskIndex::default();
         task_index.rebuild(&tasks);
         let matching_tasks = task_index.filter("", Category::All, SortOrder::Recent);
+        let page_focus = crate::chrome::page_focus(window, cx);
+        cx.set_reduce_motion(!preferences.ui_animations);
         let mut this = Self {
             store,
             scheduler,
@@ -398,6 +404,10 @@ impl Desktop {
             delete_dialog: None,
             deleting: false,
             selected_tasks: HashSet::new(),
+            selection_anchor: None,
+            page_focus,
+            sidebar_motion: Default::default(),
+            content_motion: Default::default(),
             sidebar_collapsed,
             new_download_open: false,
             hls_catalog: None,
@@ -533,6 +543,13 @@ impl Desktop {
             self.sort_order,
             &totals,
         );
+        let visible: HashSet<_> = self
+            .visible_task_indices()
+            .into_iter()
+            .map(|i| self.tasks[i].id)
+            .collect();
+        self.selected_tasks.retain(|id| visible.contains(id));
+        self.selection_anchor = self.selection_anchor.filter(|id| visible.contains(id));
     }
     fn discover_new_tasks(&mut self, cx: &mut Context<Self>) {
         self.reload();
@@ -1296,6 +1313,42 @@ impl Desktop {
         }
         panel
     }
+    fn visible_task_indices(&self) -> Vec<usize> {
+        self.matching_tasks
+            .iter()
+            .copied()
+            .filter(|index| {
+                let task = &self.tasks[*index];
+                task.state != TaskState::Prepared
+                    && match self.section {
+                        Section::All => true,
+                        Section::Active => matches!(
+                            task.state,
+                            TaskState::Queued | TaskState::Running | TaskState::Paused
+                        ),
+                        Section::Completed => task.state == TaskState::Completed,
+                        Section::Settings => false,
+                    }
+            })
+            .collect()
+    }
+
+    fn select_task(&mut self, id: TaskId, shift: bool, cx: &mut Context<Self>) {
+        let visible: Vec<_> = self
+            .visible_task_indices()
+            .into_iter()
+            .map(|i| self.tasks[i].id)
+            .collect();
+        crate::selection::select(
+            &mut self.selected_tasks,
+            &mut self.selection_anchor,
+            &visible,
+            id,
+            shift,
+        );
+        cx.notify();
+    }
+
     fn nav_item(
         &self,
         label: &'static str,
@@ -1310,6 +1363,32 @@ impl Desktop {
             Section::Settings => IconName::Settings2,
         };
         let dark = self.is_dark(cx);
+        let count = match section {
+            Section::All => Some(
+                self.tasks
+                    .iter()
+                    .filter(|task| task.state != TaskState::Prepared)
+                    .count(),
+            ),
+            Section::Active => Some(
+                self.tasks
+                    .iter()
+                    .filter(|task| {
+                        matches!(
+                            task.state,
+                            TaskState::Queued | TaskState::Running | TaskState::Paused
+                        )
+                    })
+                    .count(),
+            ),
+            Section::Completed => Some(
+                self.tasks
+                    .iter()
+                    .filter(|task| task.state == TaskState::Completed)
+                    .count(),
+            ),
+            Section::Settings => None,
+        };
         let row = div()
             .w_full()
             .flex()
@@ -1317,7 +1396,16 @@ impl Desktop {
             .gap_2()
             .when(self.sidebar_collapsed, |row| row.justify_center())
             .child(Icon::new(icon).with_size(px(15.)))
-            .when(!self.sidebar_collapsed, |row| row.child(label));
+            .when(!self.sidebar_collapsed, |row| row.child(label))
+            .when_some(count.filter(|_| !self.sidebar_collapsed), |row, count| {
+                row.child(
+                    div()
+                        .ml_auto()
+                        .text_xs()
+                        .opacity(0.7)
+                        .child(count.to_string()),
+                )
+            });
         let button = Button::new(("nav", section as usize))
             .small()
             .w_full()
@@ -1329,6 +1417,8 @@ impl Desktop {
             .on_click(cx.listener(move |this, _, _, cx| {
                 if this.section != section {
                     this.selected_tasks.clear();
+                    this.selection_anchor = None;
+                    this.content_motion = Default::default();
                     this.new_download_open = false;
                     this.clear_notice();
                 }
@@ -1346,36 +1436,28 @@ impl Desktop {
 }
 
 impl Render for Desktop {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dark = self.is_dark(cx);
         let page = if dark { 0x0c1120 } else { 0xf4f6fb };
         let side = if dark { 0x111625 } else { 0xf8f9fd };
         let fg = if dark { 0xf0f3ff } else { 0x19253b };
         let muted = if dark { 0x8999b4 } else { 0x6e7d98 };
         let border = if dark { 0x28344b } else { 0xe3e8f2 };
-        let visible: Vec<_> = self
-            .matching_tasks
-            .iter()
-            .copied()
-            .filter(|index| {
-                let task = &self.tasks[*index];
-                task.state != TaskState::Prepared
-                    && match self.section {
-                        Section::All => true,
-                        Section::Active => matches!(
-                            task.state,
-                            TaskState::Queued | TaskState::Running | TaskState::Paused
-                        ),
-                        Section::Completed => task.state == TaskState::Completed,
-                        Section::Settings => false,
-                    }
-            })
-            .collect();
-        let count_active = self
-            .tasks
-            .iter()
-            .filter(|task| task.state == TaskState::Running)
-            .count();
+        use gpui_motion_kit::core::{Motion, Target};
+        let visible = self.visible_task_indices();
+        let sidebar = self.sidebar_motion.frame(
+            Motion::new(Target::default().width(if self.sidebar_collapsed { 60. } else { 180. }))
+                .transition(crate::motion::tween(220)),
+            window,
+            cx,
+        );
+        let content_frame = self.content_motion.frame(
+            Motion::new(Target::default().opacity(1.).y(0.))
+                .initial(Target::default().opacity(0.).y(4.))
+                .transition(crate::motion::tween(160)),
+            window,
+            cx,
+        );
         let title = match self.section {
             Section::All => self.text("全部下载", "All downloads"),
             Section::Active => self.text("正在进行", "In progress"),
@@ -1403,40 +1485,20 @@ impl Render for Desktop {
                 .gap_3()
                 .child(
                     div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child(
-                            div()
-                                .text_lg()
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(rgb(fg))
-                                .child(title),
-                        )
-                        .child(div().text_xs().text_color(rgb(muted)).child(format!(
-                            "{} {}",
-                            count_active,
-                            self.text("个任务正在运行", "active")
-                        ))),
+                        .text_lg()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(fg))
+                        .child(title),
                 )
                 .when(self.section != Section::Settings, |row| {
-                    row.child(
-                        div().flex_1().min_w_0().child(
-                            Input::new(&self.search_input)
-                                .small()
-                                .id("search-downloads")
-                                .w_full()
-                                .prefix(Icon::new(IconName::Search).small())
-                                .aria_label(self.text(
-                                    "搜索文件名、来源或链接",
-                                    "Search filename, source or URL",
-                                )),
-                        ),
-                    )
+                    row.child(crate::chrome::download_search(
+                        &self.search_input,
+                        &self.page_focus,
+                        self.text("搜索文件名、来源或链接", "Search filename, source or URL"),
+                    ))
                     .child(
                         Button::new("category-filter")
                             .small()
-                            .icon(Icon::new(gpui_kit::assets::IconName::ListFilter))
                             .label(current_category.label(zh))
                             .dropdown_caret(true)
                             .dropdown_menu(move |menu, _, _| {
@@ -1444,16 +1506,22 @@ impl Render for Desktop {
                                     let category = *category;
                                     let view = category_view.clone();
                                     menu.item(
-                                        PopupMenuItem::new(category.label(zh))
-                                            .checked(category == current_category)
-                                            .on_click(move |_, _, cx| {
+                                        crate::chrome::choice_item(
+                                            category.label(zh),
+                                            category == current_category,
+                                            dark,
+                                        )
+                                        .on_click(
+                                            move |_, _, cx| {
                                                 let _ = view.update(cx, |this, cx| {
                                                     this.category = category;
                                                     this.refilter();
                                                     this.selected_tasks.clear();
+                                                    this.selection_anchor = None;
                                                     cx.notify();
                                                 });
-                                            }),
+                                            },
+                                        ),
                                     )
                                 })
                             }),
@@ -1469,15 +1537,20 @@ impl Render for Desktop {
                                     let sort = *sort;
                                     let view = sort_view.clone();
                                     menu.item(
-                                        PopupMenuItem::new(sort.label(zh))
-                                            .checked(sort == current_sort)
-                                            .on_click(move |_, _, cx| {
+                                        crate::chrome::choice_item(
+                                            sort.label(zh),
+                                            sort == current_sort,
+                                            dark,
+                                        )
+                                        .on_click(
+                                            move |_, _, cx| {
                                                 let _ = view.update(cx, |this, cx| {
                                                     this.sort_order = sort;
                                                     this.refilter();
                                                     cx.notify();
                                                 });
-                                            }),
+                                            },
+                                        ),
                                     )
                                 })
                             }),
@@ -1728,6 +1801,7 @@ impl Render for Desktop {
                                             this.selected_tasks.insert(*id);
                                         }
                                     }
+                                    this.selection_anchor = None;
                                     cx.notify();
                                 })),
                         )
@@ -1815,6 +1889,7 @@ impl Render for Desktop {
         }
         div()
             .size_full()
+            .track_focus(&self.page_focus)
             .key_context("NDMNext")
             .on_action(cx.listener(|this, _: &FocusSearch, window, cx| {
                 if this.section == Section::Settings {
@@ -1853,7 +1928,9 @@ impl Render for Desktop {
                     .flex()
                     .child(
                         div()
-                            .w(px(if self.sidebar_collapsed { 60. } else { 180. }))
+                            .w(px(sidebar.target().width_px().unwrap_or(180.)))
+                            .flex_shrink_0()
+                            .overflow_hidden()
                             .flex()
                             .flex_col()
                             .gap_1()
@@ -1934,7 +2011,7 @@ impl Render for Desktop {
                                 cx,
                             )),
                     )
-                    .child(content),
+                    .child(content_frame.apply(content)),
             )
     }
 }

@@ -1,0 +1,13 @@
+[package]
+name = "gpui-motion-kit"
+version = "0.5.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+description = "Declarative, interruptible animations and text motion for GPUI Kit"
+repository = "https://github.com/1bye/gpui-motion"
+publish = false
+
+[dependencies]
+gpui-ce-motion = { version = "=0.4.0", default-features = false, features = ["text", "svg-path"] }
+gpui-kit = { version = "=0.10.0", default-features = false }
