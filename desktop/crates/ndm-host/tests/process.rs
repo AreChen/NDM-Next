@@ -520,6 +520,14 @@ mod shutdown {
 
     #[test]
     fn shutdown_releases_only_installed_hosts_and_descendant_media() {
+        // Windows termination is asynchronous; exercise the retained host in
+        // consecutive collection passes while its image may be tearing down.
+        for _ in 0..3 {
+            assert_shutdown_releases_only_installed_hosts_and_descendant_media();
+        }
+    }
+
+    fn assert_shutdown_releases_only_installed_hosts_and_descendant_media() {
         let dir = tempfile::tempdir().unwrap();
         let image = dir.path().join("install/ndm-desktop.exe");
         let media = dir.path().join("install/ffmpeg/ffmpeg.exe");

@@ -2,6 +2,7 @@
 //! determine which processes this installation owns.
 
 use std::{
+    cell::Cell,
     collections::{BTreeMap, BTreeSet, HashMap},
     fs, io,
     path::{Path, PathBuf},
@@ -40,6 +41,7 @@ struct Process {
     pid: u32,
     image: String,
     handle: Handle,
+    termination_requested: Cell<bool>,
 }
 impl Process {
     fn exited(&self) -> io::Result<bool> {
@@ -51,7 +53,7 @@ impl Process {
         }
     }
     fn terminate(&self) -> io::Result<()> {
-        if self.exited()? {
+        if self.termination_requested.get() || self.exited()? {
             return Ok(());
         }
         // Keep the original process handle alive, preventing its PID from being
@@ -81,6 +83,10 @@ impl Process {
         if unsafe { TerminateProcess(handle.0, 0) } == 0 && !self.exited()? {
             return Err(io::Error::last_os_error());
         }
+        // TerminateProcess is asynchronous. Later shutdown passes retain this
+        // handle and wait for exit rather than querying or terminating it again
+        // while Windows is tearing down the process image.
+        self.termination_requested.set(true);
         Ok(())
     }
 }
@@ -311,6 +317,7 @@ fn snapshot() -> io::Result<Snapshot> {
                         pid: entry.th32ProcessID,
                         image,
                         handle: process,
+                        termination_requested: Cell::new(false),
                     });
                 }
             }
