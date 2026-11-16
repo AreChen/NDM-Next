@@ -111,6 +111,7 @@ impl Desktop {
             && reqwest::Url::parse(&task.request.url)
                 .is_ok_and(|url| matches!(url.scheme(), "http" | "https"));
         let zh = self.preferences.language == Language::Chinese;
+        let download_url = task.request.url.clone();
         let view = cx.entity().downgrade();
         let more = crate::chrome::icon_button(
             SharedString::from(format!("more-task-{id}")),
@@ -118,6 +119,18 @@ impl Desktop {
             self.text("更多操作", "More actions"),
         )
         .dropdown_menu(move |mut menu, _, _| {
+            let url = download_url.clone();
+            menu = menu.item(
+                PopupMenuItem::new(if zh {
+                    "复制下载链接"
+                } else {
+                    "Copy download link"
+                })
+                .icon(gpui_kit::component::Icon::new(
+                    gpui_kit::assets::IconName::Copy,
+                ))
+                .on_click(move |_, _, cx| crate::chrome::copy_download_link(&url, cx)),
+            );
             if let Some(error) = &error {
                 menu = menu.item(PopupMenuItem::new(error.clone()).disabled(true));
             }

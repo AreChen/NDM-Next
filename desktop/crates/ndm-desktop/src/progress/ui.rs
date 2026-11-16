@@ -244,13 +244,6 @@ impl Render for ProgressWindow {
             window,
             cx,
         );
-        let ambient = self.ambient.sample(
-            self.ambient_epoch.elapsed(),
-            state == TaskState::Running
-                && window.is_visible()
-                && window.is_window_active()
-                && !cx.reduce_motion(),
-        );
         let fill = div()
             .h_full()
             .w(relative(
@@ -271,7 +264,7 @@ impl Render for ProgressWindow {
             ));
         let fill = fill.opacity(
             if ratio.is_none() && state == TaskState::Running && !cx.reduce_motion() {
-                0.6 + 0.2 * (self.ambient_epoch.elapsed().as_secs_f32() * 1.8).sin()
+                0.6 + 0.2 * (self.bar_epoch.elapsed().as_secs_f32() * 1.8).sin()
             } else {
                 1.
             },
@@ -319,15 +312,7 @@ impl Render for ProgressWindow {
                             .child(percent),
                     ),
             )
-            .child(
-                div()
-                    .w_full()
-                    .h(px(4.))
-                    .rounded_full()
-                    .overflow_hidden()
-                    .bg(rgb(edge))
-                    .child(fill),
-            );
+            .child(progress_track(fill, edge));
         if active {
             let mut chips = div().flex().items_center().gap(px(6.));
             if phase == ProgressPhase::Finalizing {
@@ -417,6 +402,13 @@ impl Render for ProgressWindow {
                         .child(div().text_color(rgb(fg)).child(average)),
                 )
                 .child(div().flex_1())
+                .when_some(task.as_ref(), |row, task| {
+                    row.child(chrome::copy_link_button(
+                        "progress-copy-link",
+                        task.request.url.clone(),
+                        self.text("复制下载链接", "Copy download link"),
+                    ))
+                })
                 .when_some(action, |row, (icon, label)| {
                     row.child(
                         chrome::icon_button("progress-action", icon, label)
@@ -536,36 +528,20 @@ impl Render for ProgressWindow {
             .bg(rgb(page))
             .text_color(rgb(fg))
             .child(chrome::title_bar("NDM Next", dark))
-            .child(
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .flex_col()
-                    .overflow_hidden()
-                    .when_some(ambient, |body, x| {
-                        body.child(
-                            div()
-                                .absolute()
-                                .top_0()
-                                .left(relative(x))
-                                .w(relative(0.75))
-                                .h_full()
-                                .rounded_full()
-                                .bg(linear_gradient(
-                                    105.,
-                                    linear_color_stop(rgba(0x885dff00), 0.),
-                                    linear_color_stop(
-                                        rgba(if dark { 0x37c9f514 } else { 0x885dff0d }),
-                                        1.,
-                                    ),
-                                )),
-                        )
-                    })
-                    .child(content),
-            )
+            .child(content)
     }
+}
+
+fn progress_track(fill: impl IntoElement, edge: u32) -> Stateful<Div> {
+    div()
+        .id("progress-track")
+        .w_full()
+        .h(px(4.))
+        .flex_shrink_0()
+        .rounded_full()
+        .overflow_hidden()
+        .bg(rgb(edge))
+        .child(fill)
 }
 
 fn metric_chip(label: &'static str, value: String, edge: u32, muted: u32) -> impl IntoElement {
@@ -585,4 +561,53 @@ fn metric_chip(label: &'static str, value: String, edge: u32, muted: u32) -> imp
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(value),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::progress_track;
+    use gpui::{
+        Context, InteractiveElement, IntoElement, ParentElement, Render, Styled, Window, div,
+        prelude::FluentBuilder, px,
+    };
+    use gpui_kit as gpui;
+
+    #[gpui::test]
+    fn progress_track_keeps_its_height_in_compact_and_expanded_layouts(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        struct Harness(bool);
+        impl Render for Harness {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div()
+                    .w(px(300.))
+                    .h(px(if self.0 { 300. } else { 64. }))
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .child(div().h(px(42.)))
+                    .child(
+                        progress_track(div().size_full(), 0)
+                            .debug_selector(|| "progress-track".into()),
+                    )
+                    .child(div().h(px(28.)))
+                    .when(self.0, |body| body.child(div().flex_1().min_h_0()))
+            }
+        }
+        cx.update(gpui::init);
+        let (view, cx) = cx.add_window_view(|_, _| Harness(false));
+        for expanded in [false, true, false] {
+            cx.update(|window, cx| {
+                view.update(cx, |this, cx| {
+                    this.0 = expanded;
+                    cx.notify();
+                });
+                window.draw(cx).clear(cx);
+            });
+            assert_eq!(
+                cx.debug_bounds("progress-track").unwrap().size.height,
+                px(4.)
+            );
+        }
+    }
 }

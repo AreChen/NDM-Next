@@ -105,8 +105,7 @@ pub(crate) struct ProgressWindow {
     notice: Option<String>,
     layout_height: f32,
     bar_motion: gpui_motion_kit::MotionState,
-    ambient: crate::motion::Ambient,
-    ambient_epoch: Instant,
+    bar_epoch: Instant,
 }
 
 impl ProgressWindow {
@@ -186,8 +185,7 @@ impl ProgressWindow {
             notice: None,
             layout_height: COMPACT_HEIGHT,
             bar_motion: Default::default(),
-            ambient: Default::default(),
-            ambient_epoch: Instant::now(),
+            bar_epoch: Instant::now(),
         };
         if should_track(
             this.task.as_ref().map(|task| task.state),

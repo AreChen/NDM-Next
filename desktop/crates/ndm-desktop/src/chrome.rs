@@ -62,17 +62,38 @@ pub(crate) fn task_actions(id: impl Into<ElementId>) -> Stateful<Div> {
         .on_click(|_, _, cx| cx.stop_propagation())
 }
 
+pub(crate) fn copy_download_link(url: &str, cx: &mut App) {
+    cx.write_to_clipboard(ClipboardItem::new_string(url.to_owned()));
+}
+
+pub(crate) fn copy_link_button(
+    id: impl Into<ElementId>,
+    url: String,
+    label: &'static str,
+) -> gpui_kit::component::button::Button {
+    icon_button(
+        id,
+        gpui_kit::component::Icon::new(gpui_kit::assets::IconName::Copy),
+        label,
+    )
+    .on_click(move |_, _, cx| copy_download_link(&url, cx))
+}
+
 pub(crate) fn choice_item(
     label: &'static str,
     selected: bool,
     dark: bool,
 ) -> gpui_kit::component::menu::PopupMenuItem {
-    gpui_kit::component::menu::PopupMenuItem::element(move |_, _| {
+    use gpui_kit::component::ActiveTheme;
+    gpui_kit::component::menu::PopupMenuItem::element(move |_, cx| {
         div()
-            .w_full()
+            // PopupMenu already pads the outer, hoverable row by 0.5rem.
+            // Extend this background over that same area, without double padding.
+            .flex_1()
+            .mx_neg_2()
             .px_2()
             .py_1()
-            .rounded_md()
+            .rounded(cx.theme().radius.min(px(8.)))
             .when(selected, |row| {
                 row.bg(rgb(if dark { 0x302b50 } else { 0xede9ff }))
                     .text_color(rgb(if dark { 0xd9d1ff } else { 0x523fa7 }))
@@ -85,6 +106,9 @@ pub(crate) fn title_bar(title: impl Into<SharedString>, dark: bool) -> TitleBar 
     TitleBar::new()
         .bg(rgb(if dark { 0x111827 } else { 0xf8f9fd }))
         .border_color(rgb(if dark { 0x263247 } else { 0xe5e9f2 }))
+        // Native macOS controls are on the left; there is no right control group
+        // to separate the last title action from the window edge.
+        .when(cfg!(target_os = "macos"), |bar| bar.pr_3())
         .child(
             div()
                 .flex()
@@ -164,6 +188,29 @@ mod tests {
     struct SearchHarness {
         input: gpui::Entity<gpui::component::input::InputState>,
         page_focus: gpui::FocusHandle,
+    }
+
+    #[gpui::test]
+    fn copy_link_action_preserves_the_entire_download_url(cx: &mut gpui::TestAppContext) {
+        const URL: &str = "https://example.test/%E4%B8%8B%E8%BD%BD.zip?token=test%2Fvalue&x=1#part";
+        struct Harness;
+        impl Render for Harness {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                super::copy_link_button("copy-link", URL.into(), "Copy download link")
+            }
+        }
+        cx.update(gpui::init);
+        let (_, cx) = cx.add_window_view(|_, _| Harness);
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.simulate_click(point(px(14.), px(14.)), Modifiers::default());
+        cx.update(|_, cx| {
+            assert_eq!(
+                cx.read_from_clipboard()
+                    .and_then(|item| item.text())
+                    .as_deref(),
+                Some(URL)
+            )
+        });
     }
 
     #[gpui::test]
