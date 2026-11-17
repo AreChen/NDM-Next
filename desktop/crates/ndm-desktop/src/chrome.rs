@@ -16,6 +16,7 @@ pub(crate) fn download_search(
     let page_focus = page_focus.clone();
     div()
         .id("search-container")
+        .debug_selector(|| "download-search".into())
         .flex_1()
         .min_w_0()
         .on_mouse_down_out(move |_, window, cx| {
@@ -102,12 +103,66 @@ pub(crate) fn choice_item(
     })
 }
 
-pub(crate) fn title_bar(title: impl Into<SharedString>, dark: bool) -> TitleBar {
+pub(crate) const TOOLBAR_HEIGHT: f32 = 48.;
+
+pub(crate) fn window_options(toolbar: bool) -> WindowOptions {
+    let mut options = TitleBar::window_options();
+    if toolbar && let Some(titlebar) = &mut options.titlebar {
+        // Keep AppKit's traffic lights centered in the integrated toolbar.
+        titlebar.traffic_light_position = Some(point(px(12.), px(16.)));
+    }
+    options
+}
+
+pub(crate) fn toolbar(dark: bool) -> TitleBar {
     TitleBar::new()
-        .bg(rgb(if dark { 0x111827 } else { 0xf8f9fd }))
+        .h(px(TOOLBAR_HEIGHT))
+        .bg(rgb(if dark { 0x111625 } else { 0xf8f9fd }))
         .border_color(rgb(if dark { 0x263247 } else { 0xe5e9f2 }))
         // Native macOS controls are on the left; there is no right control group
         // to separate the last title action from the window edge.
+        .when(cfg!(target_os = "macos"), |bar| bar.pr_3())
+}
+
+pub(crate) fn main_toolbar(
+    title: &'static str,
+    collapse: gpui_kit::component::button::Button,
+    controls: impl IntoElement,
+    dark: bool,
+) -> TitleBar {
+    toolbar(dark)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .flex_shrink_0()
+                .gap_2()
+                .pr_3()
+                .child(crate::branding::logo(px(24.)))
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::BOLD)
+                        .child("NDM Next"),
+                )
+                .child(title_bar_action("sidebar-title-action", collapse))
+                .child(
+                    div()
+                        .w(px(108.))
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .truncate()
+                        .child(title),
+                ),
+        )
+        .child(title_bar_action("toolbar-actions", controls).flex_1())
+}
+
+pub(crate) fn floating_header(title: impl IntoElement, dark: bool) -> TitleBar {
+    TitleBar::new()
+        .h(px(34.))
+        .bg(rgba(0))
+        .border_b_0()
         .when(cfg!(target_os = "macos"), |bar| bar.pr_3())
         .child(
             div()
@@ -117,17 +172,92 @@ pub(crate) fn title_bar(title: impl Into<SharedString>, dark: bool) -> TitleBar 
                 .text_xs()
                 .text_color(rgb(if dark { 0xaebbd1 } else { 0x61718a }))
                 .child(crate::branding::logo(px(18.)))
-                .child(title.into()),
+                .child(title),
         )
 }
 
-pub(crate) fn title_bar_action(action: impl IntoElement) -> impl IntoElement {
+pub(crate) fn floating_surface(dark: bool) -> Background {
+    // One static gradient, shared underneath header and body; no extra frames.
+    linear_gradient(
+        110.,
+        linear_color_stop(rgb(if dark { 0x151a2e } else { 0xf8f7ff }), 0.),
+        linear_color_stop(rgb(if dark { 0x101d27 } else { 0xf2f8fb }), 1.),
+    )
+}
+
+/// Match the *client* area, not an assumed outer frame. A fixed-size modal
+/// has different native insets from a resizable window, especially across DPI.
+#[cfg(windows)]
+pub(crate) fn fit_content(window: &mut Window, content: Size<Pixels>, cx: &App) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows_sys::Win32::{
+        Foundation::RECT,
+        UI::WindowsAndMessaging::{
+            GetClientRect, GetWindowRect, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SetWindowPos,
+        },
+    };
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return;
+    };
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return;
+    };
+    let hwnd = handle.hwnd.get() as _;
+    let physical = content.to_device_pixels(window.scale_factor());
+    let handle = Window::window_handle(window);
+    let mut app = cx.to_async();
+    // SetWindowPos synchronously delivers WM_SIZE. Run outside the current App /
+    // Window borrow, as GPUI's native resize does, or its callback can reenter us.
+    cx.foreground_executor()
+        .spawn(async move {
+            if handle.update(&mut app, |_, _, _| ()).is_err() {
+                return;
+            }
+            let mut outer = RECT::default();
+            let mut client = RECT::default();
+            // SAFETY: the live window owns hwnd; the output rectangles remain valid.
+            unsafe {
+                if GetWindowRect(hwnd, &mut outer) == 0 || GetClientRect(hwnd, &mut client) == 0 {
+                    return;
+                }
+                if client.right - client.left == physical.width.0
+                    && client.bottom - client.top == physical.height.0
+                {
+                    return;
+                }
+                let width =
+                    physical.width.0 + (outer.right - outer.left) - (client.right - client.left);
+                let height =
+                    physical.height.0 + (outer.bottom - outer.top) - (client.bottom - client.top);
+                SetWindowPos(
+                    hwnd,
+                    std::ptr::null_mut(),
+                    0,
+                    0,
+                    width,
+                    height,
+                    SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOZORDER,
+                );
+            }
+        })
+        .detach();
+}
+
+#[cfg(not(windows))]
+pub(crate) fn fit_content(window: &mut Window, content: Size<Pixels>, _: &App) {
+    window.resize(content);
+}
+
+pub(crate) fn title_bar_action(
+    id: impl Into<ElementId>,
+    action: impl IntoElement,
+) -> Stateful<Div> {
     div()
-        .id("title-bar-action")
+        .id(id)
         .flex()
         .items_center()
         .h_full()
-        .flex_shrink_0()
+        .min_w_0()
         // Exclude the ancestor's native Drag hitbox, including its scroll IDs.
         // A normal button (or block_mouse_except_scroll) still becomes HTCAPTION.
         .occlude()
@@ -170,9 +300,9 @@ mod tests {
     use super::title_bar_action;
     use gpui::component::{Sizable, button::Button};
     use gpui::{
-        Context, Hitbox, HitboxBehavior, InteractiveElement, IntoElement, Modifiers, ParentElement,
-        Render, StatefulInteractiveElement, Styled, Window, WindowControlArea, canvas, div, point,
-        px,
+        AppContext, Context, Focusable, Hitbox, HitboxBehavior, InteractiveElement, IntoElement,
+        Modifiers, ParentElement, Render, StatefulInteractiveElement, Styled, Window,
+        WindowControlArea, canvas, div, point, px,
     };
     use gpui_kit as gpui;
     use std::{
@@ -188,6 +318,106 @@ mod tests {
     struct SearchHarness {
         input: gpui::Entity<gpui::component::input::InputState>,
         page_focus: gpui::FocusHandle,
+    }
+
+    struct ToolbarHarness {
+        input: gpui::Entity<gpui::component::input::InputState>,
+        focus: gpui::FocusHandle,
+        clicks: Rc<Cell<usize>>,
+    }
+
+    impl Render for ToolbarHarness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let clicked = self.clicks.clone();
+            let mut controls = div()
+                .flex()
+                .flex_1()
+                .min_w_0()
+                .items_center()
+                .gap_2()
+                .pr_3()
+                .child(super::download_search(&self.input, &self.focus, "Search"));
+            for (id, label) in [
+                ("type", "Applications"),
+                ("sort", "↓"),
+                ("new", "+"),
+                ("update", "99% · 9.9 MB/s"),
+            ] {
+                let clicked = self.clicks.clone();
+                controls = controls.child(
+                    Button::new(id)
+                        .small()
+                        .label(label)
+                        .debug_selector(move || id.into())
+                        .on_click(move |_, _, _| clicked.set(clicked.get() + 1)),
+                );
+            }
+            div()
+                .size_full()
+                .track_focus(&self.focus)
+                .child(super::main_toolbar(
+                    "All downloads",
+                    super::icon_button(
+                        "collapse",
+                        gpui::component::IconName::PanelLeftClose,
+                        "Collapse sidebar",
+                    )
+                    .debug_selector(|| "collapse".into())
+                    .on_click(move |_, _, _| clicked.set(clicked.get() + 1)),
+                    controls,
+                    true,
+                ))
+        }
+    }
+
+    #[gpui::test]
+    fn integrated_toolbar_keeps_search_and_actions_accessible_at_minimum_width(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(gpui::init);
+        let clicks = Rc::new(Cell::new(0));
+        let (view, cx) = cx.add_window_view({
+            let clicks = clicks.clone();
+            move |window, cx| ToolbarHarness {
+                input: cx.new(|cx| {
+                    gpui::component::input::InputState::new(window, cx).placeholder("Search")
+                }),
+                focus: super::page_focus(window, cx),
+                clicks,
+            }
+        });
+        for width in [880., 1000.] {
+            cx.simulate_resize(gpui::size(px(width), px(500.)));
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+            for id in ["collapse", "type", "sort", "new", "update"] {
+                let bounds = cx.debug_bounds(id).unwrap();
+                assert!(bounds.bottom() <= px(super::TOOLBAR_HEIGHT));
+                assert!(
+                    bounds.right() <= px(width - 12.),
+                    "{id} is clipped: {bounds:?}"
+                );
+                let before = clicks.get();
+                cx.simulate_click(bounds.center(), Modifiers::default());
+                assert_eq!(clicks.get(), before + 1, "{id} cannot be clicked");
+            }
+            let search = cx.debug_bounds("download-search").unwrap();
+            assert!(
+                search.size.width >= px(140.),
+                "Search collapsed: {search:?}"
+            );
+            cx.simulate_click(search.center(), Modifiers::default());
+            cx.update(|window, cx| {
+                assert!(
+                    view.read(cx)
+                        .input
+                        .read(cx)
+                        .focus_handle(cx)
+                        .is_focused(window)
+                );
+            });
+            cx.simulate_click(point(px(400.), px(120.)), Modifiers::default());
+            cx.update(|window, cx| assert!(view.read(cx).focus.is_focused(window)));
+        }
     }
 
     #[gpui::test]
@@ -340,6 +570,7 @@ mod tests {
                     .size_full(),
                 )
                 .child(title_bar_action(
+                    "test-title-action",
                     Button::new("update")
                         .small()
                         .label("Upgrade")

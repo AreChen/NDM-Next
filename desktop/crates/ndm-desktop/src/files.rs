@@ -4,15 +4,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
-fn completed_output(task: &Task) -> io::Result<PathBuf> {
+fn completed_output(task: &Task) -> io::Result<Option<PathBuf>> {
     if task.state != TaskState::Completed {
         return Err(io::Error::other("download is not complete"));
     }
-    let path = task
-        .output_path
-        .as_ref()
-        .ok_or_else(|| io::Error::other("download has no output file"))?;
-    let metadata = std::fs::symlink_metadata(path)?;
+    let Some(path) = task.output_path.as_ref() else {
+        return Ok(None);
+    };
+    let metadata = match std::fs::symlink_metadata(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        result => result?,
+    };
     #[cfg(windows)]
     let reparse = {
         use std::os::windows::fs::MetadataExt;
@@ -31,11 +33,21 @@ fn completed_output(task: &Task) -> io::Result<PathBuf> {
             "download output is outside its destination",
         ));
     }
-    std::path::absolute(path)
+    std::path::absolute(path).map(Some)
 }
 
 fn delete_output_with(task: &Task, remove: impl FnOnce(&Path) -> io::Result<()>) -> io::Result<()> {
-    remove(&completed_output(task)?)
+    let Some(path) = completed_output(task)? else {
+        return Ok(());
+    };
+    match remove(&path) {
+        // Another process can remove the file after validation, or the shell
+        // can report failure after removing it. Only an actual absence counts.
+        Err(_) if matches!(std::fs::symlink_metadata(&path), Err(error) if error.kind() == io::ErrorKind::NotFound) => {
+            Ok(())
+        }
+        result => result,
+    }
 }
 
 pub(crate) fn delete_output(task: &Task) -> io::Result<()> {
@@ -43,11 +55,17 @@ pub(crate) fn delete_output(task: &Task) -> io::Result<()> {
 }
 
 pub(crate) fn open_file(task: &Task) -> io::Result<()> {
-    open_path(&completed_output(task)?)
+    let path = completed_output(task)?
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "download output is missing"))?;
+    open_path(&path)
 }
 
 pub(crate) fn open_folder(task: &Task) -> io::Result<()> {
-    let directory = std::path::absolute(&task.request.destination)?;
+    open_directory(&task.request.destination)
+}
+
+pub(crate) fn open_directory(path: &Path) -> io::Result<()> {
+    let directory = std::path::absolute(path)?;
     if !directory.is_dir() {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
@@ -203,5 +221,32 @@ mod tests {
             .is_err()
         );
         assert!(destination.path().is_dir());
+    }
+
+    #[test]
+    fn missing_outputs_are_idempotent_but_real_file_errors_are_preserved() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("missing.bin");
+        let mut item = task(directory.path(), output.clone(), TaskState::Completed);
+        delete_output_with(&item, |_| {
+            panic!("Missing file must not reach the recycler")
+        })
+        .unwrap();
+        item.output_path = None;
+        delete_output_with(&item, |_| panic!("No file to recycle")).unwrap();
+        item.output_path = Some(output.clone());
+        std::fs::write(&output, b"keep").unwrap();
+        assert!(
+            delete_output_with(&item, |_| Err(io::Error::from(
+                io::ErrorKind::PermissionDenied
+            )))
+            .is_err()
+        );
+        assert!(output.exists());
+        delete_output_with(&item, |path| {
+            std::fs::remove_file(path)?;
+            Err(io::Error::other("shell reported failure after removal"))
+        })
+        .unwrap();
     }
 }

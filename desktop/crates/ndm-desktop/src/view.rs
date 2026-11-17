@@ -105,7 +105,7 @@ pub(crate) struct Desktop {
     page_focus: FocusHandle,
     sidebar_motion: gpui_motion_kit::MotionState,
     content_motion: gpui_motion_kit::MotionState,
-    sidebar_collapsed: bool,
+    sidebar: crate::sidebar::Sidebar,
     new_download_open: bool,
     hls_catalog: Option<(String, HlsCatalog)>,
     hls_variant: Option<usize>,
@@ -254,7 +254,10 @@ impl Desktop {
         let auth_passphrase_input = cx.new(|cx| InputState::new(window, cx).masked(true));
         let pending_auto_resume = preferences.auto_resume;
         let pending_proxy_enabled = preferences.proxy_enabled_by_default;
-        let sidebar_collapsed = preferences.sidebar_collapsed;
+        let sidebar = crate::sidebar::Sidebar::new(
+            preferences.sidebar_collapsed,
+            f32::from(preferences.sidebar_width),
+        );
         #[cfg(any(windows, target_os = "macos"))]
         let startup_enabled = crate::startup::enabled().unwrap_or(false);
         #[cfg(any(windows, target_os = "macos"))]
@@ -414,7 +417,7 @@ impl Desktop {
             page_focus,
             sidebar_motion: Default::default(),
             content_motion: Default::default(),
-            sidebar_collapsed,
+            sidebar,
             new_download_open: false,
             hls_catalog: None,
             hls_variant: None,
@@ -595,7 +598,7 @@ impl Desktop {
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(size(px(460.), px(136.))),
-                ..gpui_kit::component::TitleBar::window_options()
+                ..crate::chrome::window_options(false)
             },
             cx,
             move |window, cx| {
@@ -1020,6 +1023,15 @@ impl Desktop {
         }
         cx.notify();
     }
+    fn finish_sidebar_resize(&mut self, cx: &mut Context<Self>) {
+        if self.sidebar.finish() {
+            self.preferences.sidebar_width = self.sidebar.width.round() as u16;
+            self.preferences.sidebar_collapsed = self.sidebar.collapsed;
+            self.save_preferences(cx);
+            cx.notify();
+        }
+    }
+
     fn confirm_delete(&mut self, ids: Vec<TaskId>, cx: &mut Context<Self>) {
         if matches!(self.update_state, UpdateState::Installing) || self.deleting || ids.is_empty() {
             return;
@@ -1042,17 +1054,17 @@ impl Desktop {
         if ids.is_empty() {
             return;
         }
-        let name = (ids.len() == 1)
+        let preview = (ids.len() == 1)
             .then(|| {
                 self.tasks
                     .iter()
                     .find(|task| task.id == ids[0])
-                    .and_then(crate::filenames::display_name)
+                    .map(crate::confirm_delete::FilePreview::from_task)
             })
             .flatten();
         match crate::confirm_delete::open(
             ids,
-            name,
+            preview,
             self.preferences.language,
             cx.entity().downgrade(),
             cx,
@@ -1400,10 +1412,10 @@ impl Desktop {
             .flex()
             .items_center()
             .gap_2()
-            .when(self.sidebar_collapsed, |row| row.justify_center())
+            .when(self.sidebar.collapsed, |row| row.justify_center())
             .child(Icon::new(icon).with_size(px(15.)))
-            .when(!self.sidebar_collapsed, |row| row.child(label))
-            .when_some(count.filter(|_| !self.sidebar_collapsed), |row, count| {
+            .when(!self.sidebar.collapsed, |row| row.child(label))
+            .when_some(count.filter(|_| !self.sidebar.collapsed), |row, count| {
                 row.child(
                     div()
                         .ml_auto()
@@ -1452,8 +1464,13 @@ impl Render for Desktop {
         use gpui_motion_kit::core::{Motion, Target};
         let visible = self.visible_task_indices();
         let sidebar = self.sidebar_motion.frame(
-            Motion::new(Target::default().width(if self.sidebar_collapsed { 60. } else { 180. }))
-                .transition(crate::motion::tween(220)),
+            Motion::new(Target::default().width(self.sidebar.display_width())).transition(
+                if self.sidebar.is_resizing() {
+                    gpui_motion_kit::core::Transition::Instant
+                } else {
+                    crate::motion::tween(220)
+                },
+            ),
             window,
             cx,
         );
@@ -1484,108 +1501,117 @@ impl Render for Desktop {
         let current_sort = self.sort_order;
         let category_view = cx.entity().downgrade();
         let sort_view = cx.entity().downgrade();
-        content = content.child(
-            div()
-                .flex()
-                .items_center()
-                .gap_3()
+        let toolbar_controls = div()
+            .flex()
+            .items_center()
+            .flex_1()
+            .min_w_0()
+            .gap_2()
+            .pr_3()
+            .when(self.section != Section::Settings, |row| {
+                row.child(crate::chrome::download_search(
+                    &self.search_input,
+                    &self.page_focus,
+                    self.text("搜索文件名、来源或链接", "Search filename, source or URL"),
+                ))
                 .child(
-                    div()
-                        .text_lg()
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(fg))
-                        .child(title),
+                    Button::new("category-filter")
+                        .small()
+                        .label(current_category.label(zh))
+                        .dropdown_caret(true)
+                        .dropdown_menu(move |menu, _, _| {
+                            Category::ALL.iter().fold(menu, |menu, category| {
+                                let category = *category;
+                                let view = category_view.clone();
+                                menu.item(
+                                    crate::chrome::choice_item(
+                                        category.label(zh),
+                                        category == current_category,
+                                        dark,
+                                    )
+                                    .on_click(
+                                        move |_, _, cx| {
+                                            let _ = view.update(cx, |this, cx| {
+                                                this.category = category;
+                                                this.refilter();
+                                                this.selected_tasks.clear();
+                                                this.selection_anchor = None;
+                                                cx.notify();
+                                            });
+                                        },
+                                    ),
+                                )
+                            })
+                        }),
                 )
-                .when(self.section != Section::Settings, |row| {
-                    row.child(crate::chrome::download_search(
-                        &self.search_input,
-                        &self.page_focus,
-                        self.text("搜索文件名、来源或链接", "Search filename, source or URL"),
-                    ))
-                    .child(
-                        Button::new("category-filter")
-                            .small()
-                            .label(current_category.label(zh))
-                            .dropdown_caret(true)
-                            .dropdown_menu(move |menu, _, _| {
-                                Category::ALL.iter().fold(menu, |menu, category| {
-                                    let category = *category;
-                                    let view = category_view.clone();
-                                    menu.item(
-                                        crate::chrome::choice_item(
-                                            category.label(zh),
-                                            category == current_category,
-                                            dark,
-                                        )
-                                        .on_click(
-                                            move |_, _, cx| {
-                                                let _ = view.update(cx, |this, cx| {
-                                                    this.category = category;
-                                                    this.refilter();
-                                                    this.selected_tasks.clear();
-                                                    this.selection_anchor = None;
-                                                    cx.notify();
-                                                });
-                                            },
-                                        ),
+                .child(
+                    Button::new("sort-downloads")
+                        .small()
+                        .icon(IconName::ArrowDown)
+                        .tooltip(self.text("排序", "Sort"))
+                        .accessibility_label(self.text("排序", "Sort"))
+                        .dropdown_menu(move |menu, _, _| {
+                            SortOrder::ALL.iter().fold(menu, |menu, sort| {
+                                let sort = *sort;
+                                let view = sort_view.clone();
+                                menu.item(
+                                    crate::chrome::choice_item(
+                                        sort.label(zh),
+                                        sort == current_sort,
+                                        dark,
                                     )
-                                })
-                            }),
-                    )
-                    .child(
-                        Button::new("sort-downloads")
-                            .small()
-                            .icon(IconName::ArrowDown)
-                            .tooltip(self.text("排序", "Sort"))
-                            .accessibility_label(self.text("排序", "Sort"))
-                            .dropdown_menu(move |menu, _, _| {
-                                SortOrder::ALL.iter().fold(menu, |menu, sort| {
-                                    let sort = *sort;
-                                    let view = sort_view.clone();
-                                    menu.item(
-                                        crate::chrome::choice_item(
-                                            sort.label(zh),
-                                            sort == current_sort,
-                                            dark,
-                                        )
-                                        .on_click(
-                                            move |_, _, cx| {
-                                                let _ = view.update(cx, |this, cx| {
-                                                    this.sort_order = sort;
-                                                    this.refilter();
-                                                    cx.notify();
-                                                });
-                                            },
-                                        ),
-                                    )
-                                })
-                            }),
-                    )
-                    .child(
-                        Button::new("new-download-toggle")
-                            .small()
-                            .primary()
-                            .icon(if self.new_download_open {
-                                IconName::Close
-                            } else {
-                                IconName::Plus
+                                    .on_click(
+                                        move |_, _, cx| {
+                                            let _ = view.update(cx, |this, cx| {
+                                                this.sort_order = sort;
+                                                this.refilter();
+                                                cx.notify();
+                                            });
+                                        },
+                                    ),
+                                )
                             })
-                            .tooltip(if self.new_download_open {
-                                self.text("关闭新建下载", "Close new download")
-                            } else {
-                                self.text("新建下载", "New download")
-                            })
-                            .accessibility_label(self.text("新建下载", "New download"))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if matches!(this.update_state, UpdateState::Installing) {
-                                    return;
-                                }
-                                this.new_download_open = !this.new_download_open;
-                                cx.notify();
-                            })),
-                    )
-                }),
-        );
+                        }),
+                )
+                .child(
+                    Button::new("new-download-toggle")
+                        .small()
+                        .primary()
+                        .icon(if self.new_download_open {
+                            IconName::Close
+                        } else {
+                            IconName::Plus
+                        })
+                        .tooltip(if self.new_download_open {
+                            self.text("关闭新建下载", "Close new download")
+                        } else {
+                            self.text("新建下载", "New download")
+                        })
+                        .accessibility_label(self.text("新建下载", "New download"))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if matches!(this.update_state, UpdateState::Installing) {
+                                return;
+                            }
+                            this.new_download_open = !this.new_download_open;
+                            cx.notify();
+                        })),
+                )
+            })
+            .when(self.section == Section::Settings, |row| {
+                row.child(div().flex_1())
+            })
+            .when(
+                matches!(
+                    self.update_state,
+                    UpdateState::Available(_)
+                        | UpdateState::Downloading
+                        | UpdateState::Ready(_)
+                        | UpdateState::Installing
+                ) || self.remembered_update()
+                    || (matches!(self.update_state, UpdateState::Failed(_))
+                        && self.install_update_when_idle),
+                |row| row.child(self.title_update_button(cx)),
+            );
         if self.section == Section::Settings {
             content = content
                 .overflow_y_scroll()
@@ -1896,6 +1922,25 @@ impl Render for Desktop {
         div()
             .size_full()
             .track_focus(&self.page_focus)
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                if this.sidebar.is_resizing() {
+                    if event.pressed_button == Some(MouseButton::Left) {
+                        if this.sidebar.resize(event.position.x.as_f32()) {
+                            cx.notify();
+                        }
+                    } else {
+                        this.finish_sidebar_resize(cx);
+                    }
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.finish_sidebar_resize(cx)),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.finish_sidebar_resize(cx)),
+            )
             .key_context("NDMNext")
             .on_action(cx.listener(|this, _: &FocusSearch, window, cx| {
                 if this.section == Section::Settings {
@@ -1911,21 +1956,29 @@ impl Render for Desktop {
             .flex_col()
             .bg(rgb(page))
             .text_color(rgb(fg))
-            .child(crate::chrome::title_bar("NDM Next", dark).when(
-                matches!(
-                    self.update_state,
-                    UpdateState::Available(_)
-                        | UpdateState::Downloading
-                        | UpdateState::Ready(_)
-                        | UpdateState::Installing
-                ) || self.remembered_update()
-                    || (matches!(self.update_state, UpdateState::Failed(_))
-                        && self.install_update_when_idle),
-                |bar| {
-                    bar.child(crate::chrome::title_bar_action(
-                        self.title_update_button(cx),
-                    ))
-                },
+            .child(crate::chrome::main_toolbar(
+                title,
+                crate::chrome::icon_button(
+                    "sidebar-toggle",
+                    if self.sidebar.collapsed {
+                        IconName::PanelLeftOpen
+                    } else {
+                        IconName::PanelLeftClose
+                    },
+                    if self.sidebar.collapsed {
+                        self.text("展开侧边栏", "Expand sidebar")
+                    } else {
+                        self.text("收起侧边栏", "Collapse sidebar")
+                    },
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.sidebar.collapsed = !this.sidebar.collapsed;
+                    this.preferences.sidebar_collapsed = this.sidebar.collapsed;
+                    this.save_preferences(cx);
+                    cx.notify();
+                })),
+                toolbar_controls,
+                dark,
             ))
             .child(
                 div()
@@ -1944,57 +1997,6 @@ impl Render for Desktop {
                             .bg(rgb(side))
                             .border_r_1()
                             .border_color(rgb(border))
-                            .child(
-                                div()
-                                    .w_full()
-                                    .flex()
-                                    .gap_2()
-                                    .items_center()
-                                    .h(px(36.))
-                                    .mb_3()
-                                    .when(self.sidebar_collapsed, |row| row.justify_center())
-                                    .when(!self.sidebar_collapsed, |row| {
-                                        row.child(
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .gap_2()
-                                                .text_sm()
-                                                .font_weight(FontWeight::BOLD)
-                                                .child(crate::branding::logo(px(24.)))
-                                                .child("NDM Next"),
-                                        )
-                                    })
-                                    .when(!self.sidebar_collapsed, |row| row.child(div().flex_1()))
-                                    .child(
-                                        Button::new("sidebar-toggle")
-                                            .small()
-                                            .ghost()
-                                            .w(px(28.))
-                                            .h(px(28.))
-                                            .flex_shrink_0()
-                                            .icon(if self.sidebar_collapsed {
-                                                IconName::PanelLeftOpen
-                                            } else {
-                                                IconName::PanelLeftClose
-                                            })
-                                            .tooltip(if self.sidebar_collapsed {
-                                                self.text("展开侧边栏", "Expand sidebar")
-                                            } else {
-                                                self.text("收起侧边栏", "Collapse sidebar")
-                                            })
-                                            .accessibility_label(
-                                                self.text("切换侧边栏", "Toggle sidebar"),
-                                            )
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.sidebar_collapsed = !this.sidebar_collapsed;
-                                                this.preferences.sidebar_collapsed =
-                                                    this.sidebar_collapsed;
-                                                this.save_preferences(cx);
-                                                cx.notify();
-                                            })),
-                                    ),
-                            )
                             .child(self.nav_item(
                                 self.text("全部任务", "All downloads"),
                                 Section::All,
@@ -2016,6 +2018,24 @@ impl Render for Desktop {
                                 Section::Settings,
                                 cx,
                             )),
+                    )
+                    .child(
+                        div()
+                            .id("sidebar-resize")
+                            .w(px(4.))
+                            .h_full()
+                            .flex_shrink_0()
+                            .cursor(CursorStyle::ResizeLeftRight)
+                            .hover(|style| style.bg(rgb(0x885dff)))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                                    this.sidebar.begin(event.position.x.as_f32());
+                                    window.prevent_default();
+                                    cx.stop_propagation();
+                                    cx.notify();
+                                }),
+                            ),
                     )
                     .child(content_frame.apply(content)),
             )

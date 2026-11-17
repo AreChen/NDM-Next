@@ -7,16 +7,31 @@ use gpui_kit::{
     prelude::*,
     *,
 };
-use ndm_core::TaskId;
+use ndm_core::{Task, TaskId};
+use std::path::PathBuf;
+
+pub(crate) struct FilePreview {
+    name: String,
+    directory: PathBuf,
+}
+
+impl FilePreview {
+    pub(crate) fn from_task(task: &Task) -> Self {
+        Self {
+            name: crate::filenames::display_name(task).unwrap_or_else(|| "—".into()),
+            directory: task.request.destination.clone(),
+        }
+    }
+}
 
 pub(crate) fn open(
     ids: Vec<TaskId>,
-    name: Option<String>,
+    preview: Option<FilePreview>,
     language: Language,
     parent: WeakEntity<Desktop>,
     cx: &mut App,
 ) -> Result<AnyWindowHandle, ()> {
-    let height = if name.is_some() { 156. } else { 132. };
+    let height = dialog_height(preview.is_some());
     let bounds = Bounds::centered(None, size(px(480.), px(height)), cx);
     let (handle, _) = gpui_kit::open_window(
         WindowOptions {
@@ -24,11 +39,12 @@ pub(crate) fn open(
             kind: WindowKind::Dialog,
             is_resizable: false,
             is_minimizable: false,
-            ..gpui_kit::component::TitleBar::window_options()
+            ..chrome::window_options(false)
         },
         cx,
         move |window, cx| {
             chrome::round_window(window);
+            chrome::fit_content(window, size(px(480.), px(height)), cx);
             window.set_window_title("NDM Next · Delete");
             let handle = window.window_handle();
             cx.new(|cx| {
@@ -40,9 +56,11 @@ pub(crate) fn open(
                 .detach();
                 ConfirmDelete {
                     ids,
-                    name,
+                    preview,
+                    folder_error: false,
                     language,
                     parent,
+                    focus: chrome::page_focus(window, cx),
                 }
             })
         },
@@ -53,9 +71,11 @@ pub(crate) fn open(
 
 struct ConfirmDelete {
     ids: Vec<TaskId>,
-    name: Option<String>,
+    preview: Option<FilePreview>,
+    folder_error: bool,
     language: Language,
     parent: WeakEntity<Desktop>,
+    focus: FocusHandle,
 }
 
 impl ConfirmDelete {
@@ -79,7 +99,6 @@ impl ConfirmDelete {
 impl Render for ConfirmDelete {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dark = matches!(ComponentTheme::global(cx).mode, ThemeMode::Dark);
-        let fg = if dark { 0xf0f3ff } else { 0x19253b };
         let title = if self.ids.len() == 1 {
             self.text("删除下载任务？", "Delete this download?")
                 .to_owned()
@@ -91,74 +110,307 @@ impl Render for ConfirmDelete {
                 self.text("个下载任务？", "downloads?")
             )
         };
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .bg(rgb(if dark { 0x101726 } else { 0xf8f9fd }))
-            .text_color(rgb(fg))
-            .child(chrome::title_bar("NDM Next", dark))
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .px_4()
-                    .py_3()
-                    .flex()
-                    .flex_col()
-                    .justify_between()
-                    .gap_3()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .flex_shrink_0()
-                            .min_w_0()
-                            .gap(px(6.))
-                            .child(
-                                div()
-                                    .text_base()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(title),
-                            )
-                            .when_some(self.name.clone(), |panel, name| {
-                                panel.child(div().text_sm().truncate().child(name))
-                            }),
+        delete_dialog(
+            title,
+            self.preview.as_ref().map(|preview| {
+                file_preview(
+                    preview.name.clone(),
+                    preview.directory.to_string_lossy().into_owned(),
+                    self.language == Language::Chinese,
+                    dark,
+                    self.folder_error,
+                    cx.listener(|this, _, _, cx| {
+                        if let Some(preview) = &this.preview {
+                            this.folder_error =
+                                crate::files::open_directory(&preview.directory).is_err();
+                            cx.notify();
+                        }
+                    }),
+                )
+                .into_any_element()
+            }),
+            self.language == Language::Chinese,
+            dark,
+            cx.listener(|_, _, window, _| window.remove_window()),
+            cx.listener(|this, _, window, cx| this.confirm(false, window, cx)),
+            cx.listener(|this, _, window, cx| this.confirm(true, window, cx)),
+        )
+        .track_focus(&self.focus)
+        .on_key_down(|event, window, cx| {
+            if event.keystroke.key == "escape" {
+                cx.stop_propagation();
+                window.remove_window();
+            }
+        })
+    }
+}
+
+fn dialog_height(has_name: bool) -> f32 {
+    if has_name { 144. } else { 112. }
+}
+
+fn delete_dialog(
+    title: String,
+    preview: Option<AnyElement>,
+    zh: bool,
+    dark: bool,
+    cancel: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    keep: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    delete: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    div()
+        .id("delete-confirmation")
+        .size_full()
+        .flex()
+        .flex_col()
+        .bg(chrome::floating_surface(dark))
+        .text_color(rgb(if dark { 0xf0f3ff } else { 0x19253b }))
+        .child(chrome::floating_header(
+            div()
+                .text_sm()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(if dark { 0xf0f3ff } else { 0x19253b }))
+                .child(title),
+            dark,
+        ))
+        .child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .px_4()
+                .pt_1()
+                .pb_4()
+                .flex()
+                .flex_col()
+                .justify_end()
+                .gap_2()
+                .when_some(preview, |body, preview| body.child(preview))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .h(px(32.))
+                        .flex_shrink_0()
+                        .gap_2()
+                        .child(
+                            Button::new("delete-cancel")
+                                .small()
+                                .ghost()
+                                .h(px(32.))
+                                .label(if zh { "取消" } else { "Cancel" })
+                                .debug_selector(|| "delete-cancel".into())
+                                .on_click(cancel),
+                        )
+                        .child(div().flex_1())
+                        .child(
+                            Button::new("delete-keep")
+                                .small()
+                                .h(px(32.))
+                                .label(if zh { "仅删除记录" } else { "Keep files" })
+                                .debug_selector(|| "delete-keep".into())
+                                .on_click(keep),
+                        )
+                        .child(
+                            Button::new("delete-files")
+                                .small()
+                                .danger()
+                                .h(px(32.))
+                                .icon(gpui_kit::component::IconName::Delete)
+                                .label(if zh {
+                                    "删除文件和记录"
+                                } else {
+                                    "Delete files"
+                                })
+                                .debug_selector(|| "delete-files".into())
+                                .on_click(delete),
+                        ),
+                ),
+        )
+}
+
+fn file_preview(
+    name: String,
+    directory: String,
+    zh: bool,
+    dark: bool,
+    failed: bool,
+    open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let path_label = if failed {
+        format!(
+            "{} · {directory}",
+            if zh {
+                "无法打开文件夹"
+            } else {
+                "Could not open folder"
+            }
+        )
+    } else {
+        directory.clone()
+    };
+    div()
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .min_w_0()
+        .gap(px(2.))
+        .child(
+            div()
+                .id("delete-filename")
+                .debug_selector(|| "delete-filename".into())
+                .text_sm()
+                .font_weight(FontWeight::BOLD)
+                .truncate()
+                .child(name),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .h(px(28.))
+                .gap_2()
+                .child(
+                    div()
+                        .id("delete-location")
+                        .debug_selector(|| "delete-location".into())
+                        .flex_1()
+                        .min_w_0()
+                        .text_xs()
+                        .truncate()
+                        .tooltip(move |_, cx| {
+                            cx.new(|_| {
+                                gpui_kit::component::tooltip::Tooltip::new(directory.clone())
+                            })
+                            .into()
+                        })
+                        .text_color(rgb(if failed {
+                            0xd96779
+                        } else if dark {
+                            0x8999b4
+                        } else {
+                            0x6e7d98
+                        }))
+                        .child(path_label),
+                )
+                .child(
+                    chrome::icon_button(
+                        "delete-open-folder",
+                        gpui_kit::component::IconName::FolderOpen,
+                        if zh { "打开文件夹" } else { "Open folder" },
                     )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .h(px(28.))
-                            .flex_shrink_0()
-                            .gap_2()
-                            .child(
-                                Button::new("delete-cancel")
-                                    .small()
-                                    .label(self.text("取消", "Cancel"))
-                                    .on_click(
-                                        cx.listener(|_, _, window, _| window.remove_window()),
-                                    ),
-                            )
-                            .child(div().flex_1())
-                            .child(
-                                Button::new("delete-keep")
-                                    .small()
-                                    .label(self.text("仅删除记录", "Keep files"))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.confirm(false, window, cx)
-                                    })),
-                            )
-                            .child(
-                                Button::new("delete-files")
-                                    .small()
-                                    .danger()
-                                    .label(self.text("删除文件和记录", "Delete files"))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.confirm(true, window, cx)
-                                    })),
-                            ),
-                    ),
+                    .debug_selector(|| "delete-open-folder".into())
+                    .on_click(open),
+                ),
+        )
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::{Context, IntoElement, Modifiers, Render, Window, px, size};
+    use gpui_kit as gpui;
+    use std::{cell::Cell, rc::Rc};
+
+    struct Harness {
+        zh: bool,
+        has_name: bool,
+        clicked: Rc<Cell<u8>>,
+    }
+
+    impl Render for Harness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let cancel = self.clicked.clone();
+            let keep = self.clicked.clone();
+            let delete = self.clicked.clone();
+            let folder = self.clicked.clone();
+            super::delete_dialog(
+                if self.zh {
+                    "删除下载任务？"
+                } else {
+                    "Delete downloads?"
+                }
+                .into(),
+                self.has_name.then(|| {
+                    super::file_preview(
+                        "一个非常长的下载文件名-a-long-download-name.zip".into(),
+                        "C:/Downloads/下载文件/a-very-long-directory-name/another-folder".into(),
+                        self.zh,
+                        true,
+                        false,
+                        move |_, _, _| folder.set(4),
+                    )
+                    .into_any_element()
+                }),
+                self.zh,
+                true,
+                move |_, _, _| cancel.set(1),
+                move |_, _, _| keep.set(2),
+                move |_, _, _| delete.set(3),
             )
+        }
+    }
+
+    #[gpui::test]
+    fn confirmation_actions_fit_and_receive_clicks_in_both_languages(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(gpui::init);
+        let clicked = Rc::new(Cell::new(0));
+        let (view, cx) = cx.add_window_view({
+            let clicked = clicked.clone();
+            move |_, _| Harness {
+                zh: true,
+                has_name: true,
+                clicked,
+            }
+        });
+        for scale in [1., 1.25, 1.5, 2.] {
+            cx.simulate_scale_factor_change(scale);
+            for (zh, has_name) in [(true, true), (false, true), (true, false), (false, false)] {
+                let height = super::dialog_height(has_name);
+                cx.simulate_resize(size(px(480.), px(height)));
+                cx.update(|window, cx| {
+                    view.update(cx, |this, cx| {
+                        this.zh = zh;
+                        this.has_name = has_name;
+                        cx.notify();
+                    });
+                    window.draw(cx).clear(cx);
+                });
+                if has_name {
+                    let name = cx.debug_bounds("delete-filename").unwrap();
+                    let location = cx.debug_bounds("delete-location").unwrap();
+                    let folder = cx.debug_bounds("delete-open-folder").unwrap();
+                    assert!(location.origin.y >= name.bottom());
+                    assert!(location.size.width >= px(300.));
+                    assert!(folder.right() <= px(464.));
+                    clicked.set(0);
+                    cx.simulate_click(folder.center(), Modifiers::default());
+                    assert_eq!(clicked.get(), 4, "Folder preview must not confirm deletion");
+                }
+                for (id, expected) in [
+                    ("delete-cancel", 1),
+                    ("delete-keep", 2),
+                    ("delete-files", 3),
+                ] {
+                    let bounds = cx.debug_bounds(id).unwrap();
+                    assert!(
+                        bounds.origin.y >= px(34.),
+                        "{id} overlaps the draggable header"
+                    );
+                    assert!(
+                        bounds.bottom() <= px(height - 15.),
+                        "{id} is clipped: {bounds:?}"
+                    );
+                    assert!(
+                        bounds.right() <= px(464.),
+                        "{id} extends past the right inset"
+                    );
+                    assert_eq!(bounds.size.height, px(32.));
+                    clicked.set(0);
+                    cx.simulate_click(bounds.center(), Modifiers::default());
+                    assert_eq!(clicked.get(), expected, "{id} did not receive the click");
+                }
+            }
+        }
     }
 }

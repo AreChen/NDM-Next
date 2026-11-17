@@ -26,6 +26,7 @@ pub struct Preferences {
     pub language: Language,
     pub theme: Theme,
     pub sidebar_collapsed: bool,
+    pub sidebar_width: u16,
     pub ui_animations: bool,
     pub download_dir: PathBuf,
     pub use_system_download_dir: bool,
@@ -55,6 +56,7 @@ impl Default for Preferences {
             language: Language::Chinese,
             theme: Theme::System,
             sidebar_collapsed: false,
+            sidebar_width: crate::sidebar::DEFAULT_WIDTH as u16,
             ui_animations: true,
             download_dir,
             use_system_download_dir: true,
@@ -93,6 +95,8 @@ impl Preferences {
                         .and_then(|value| value.as_bool()),
                 );
                 preferences.download_dir = directory;
+                preferences.sidebar_width =
+                    crate::sidebar::valid_width(f32::from(preferences.sidebar_width)) as u16;
                 preferences.use_system_download_dir = automatic;
                 if !preferences.cache_dir.is_absolute() {
                     preferences.cache_dir = ndm_core::default_cache_directory();
@@ -162,6 +166,27 @@ impl Preferences {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sidebar_width_round_trips_defaults_and_clamps() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("preferences.json");
+        let mut preferences = Preferences {
+            sidebar_width: 264,
+            sidebar_collapsed: true,
+            ..Default::default()
+        };
+        preferences.save(&path).unwrap();
+        let loaded = Preferences::load(&path).unwrap();
+        assert_eq!(loaded.sidebar_width, 264);
+        assert!(loaded.sidebar_collapsed);
+        preferences.sidebar_width = 999;
+        preferences.save(&path).unwrap();
+        assert_eq!(Preferences::load(&path).unwrap().sidebar_width, 320);
+        let mut old: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        old.as_object_mut().unwrap().remove("sidebar_width");
+        fs::write(&path, serde_json::to_vec(&old).unwrap()).unwrap();
+        assert_eq!(Preferences::load(&path).unwrap().sidebar_width, 180);
+    }
     #[cfg(windows)]
     #[test]
     fn saved_proxy_only_becomes_a_default_after_explicit_opt_in() {

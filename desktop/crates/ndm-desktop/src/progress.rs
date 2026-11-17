@@ -68,14 +68,22 @@ fn format_elapsed(milliseconds: Option<u64>) -> String {
     }
 }
 
-fn progress_bytes(task: Option<&Task>, snapshot: Option<&ProgressSnapshot>) -> (u64, Option<u64>) {
-    if let Some(task) = task
-        && task.state == TaskState::Completed
-        && let Some(path) = &task.output_path
-        && let Ok(metadata) = std::fs::metadata(path)
-        && metadata.is_file()
+fn output_file_size(path: &std::path::Path) -> Option<u64> {
+    std::fs::metadata(path)
+        .ok()
+        .filter(|metadata| metadata.is_file())
+        .map(|metadata| metadata.len())
+}
+
+fn progress_bytes(
+    task: Option<&Task>,
+    snapshot: Option<&ProgressSnapshot>,
+    completed_size: Option<u64>,
+) -> (u64, Option<u64>) {
+    if task.is_some_and(|task| task.state == TaskState::Completed)
+        && let Some(size) = completed_size
     {
-        return (metadata.len(), Some(metadata.len()));
+        return (size, Some(size));
     }
     (
         snapshot.map_or(0, |value| value.downloaded),
@@ -95,6 +103,7 @@ pub(crate) struct ProgressWindow {
     proxy_switching: bool,
     task: Option<Task>,
     snapshot: Option<ProgressSnapshot>,
+    completed_size: Option<u64>,
     meter: SpeedMeter,
     measured_phase: Option<ProgressPhase>,
     phase_started: Option<Instant>,
@@ -146,6 +155,7 @@ impl ProgressWindow {
                                 } if task_id == this.id => {
                                     this.task = this.store.get(this.id).ok().flatten();
                                     this.snapshot = Some(progress);
+                                    this.cache_output_size(cx);
                                     this.speed = 0;
                                     this.meter.reset();
                                     this.measured_phase = None;
@@ -175,6 +185,7 @@ impl ProgressWindow {
             proxy_switching: false,
             task,
             snapshot,
+            completed_size: None,
             meter: SpeedMeter::default(),
             measured_phase: None,
             phase_started: None,
@@ -183,10 +194,12 @@ impl ProgressWindow {
             expanded: false,
             tracking: false,
             notice: None,
-            layout_height: COMPACT_HEIGHT,
+            // First render fits the actual client area for this task's state.
+            layout_height: 0.,
             bar_motion: Default::default(),
             bar_epoch: Instant::now(),
         };
+        this.cache_output_size(cx);
         if should_track(
             this.task.as_ref().map(|task| task.state),
             this.scheduler.progress(id).is_some(),
@@ -202,6 +215,34 @@ impl ProgressWindow {
         } else {
             english
         }
+    }
+
+    fn cache_output_size(&mut self, cx: &mut Context<Self>) {
+        self.completed_size = None;
+        let Some(path) = self
+            .task
+            .as_ref()
+            .filter(|task| task.state == TaskState::Completed)
+            .and_then(|task| task.output_path.clone())
+        else {
+            return;
+        };
+        let source = path.clone();
+        cx.spawn(async move |view, cx| {
+            let size = cx
+                .background_executor()
+                .spawn(async move { output_file_size(&source) })
+                .await;
+            let _ = view.update(cx, |this, cx| {
+                if this.task.as_ref().is_some_and(|task| {
+                    task.state == TaskState::Completed && task.output_path.as_ref() == Some(&path)
+                }) {
+                    this.completed_size = size;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     fn begin_tracking(&mut self, cx: &mut Context<Self>) {
@@ -221,6 +262,7 @@ impl ProgressWindow {
                             this.tracking =
                                 should_track(this.task.as_ref().map(|task| task.state), false);
                             if !this.tracking {
+                                this.cache_output_size(cx);
                                 this.speed = 0;
                                 this.snapshot = this
                                     .task
@@ -435,7 +477,7 @@ mod tests {
             total: Some(100),
             ..Default::default()
         };
-        assert_eq!(progress_bytes(None, Some(&snapshot)), (42, Some(100)));
+        assert_eq!(progress_bytes(None, Some(&snapshot), None), (42, Some(100)));
         assert_eq!(format_elapsed(Some(65_999)), "01:05");
         assert_eq!(format_elapsed(Some(3_661_000)), "1:01:01");
         assert_eq!(format_elapsed(None), "—");
@@ -468,8 +510,10 @@ mod tests {
             downloaded: 100,
             ..Default::default()
         };
+        let measured_size = super::output_file_size(task.output_path.as_ref().unwrap());
+        std::fs::remove_file(task.output_path.as_ref().unwrap()).unwrap();
         assert_eq!(
-            progress_bytes(Some(&task), Some(&old_snapshot)),
+            progress_bytes(Some(&task), Some(&old_snapshot), measured_size),
             (123, Some(123))
         );
         assert_eq!(task.size_verified, Some(false));

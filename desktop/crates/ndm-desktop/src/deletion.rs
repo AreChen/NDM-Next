@@ -174,4 +174,65 @@ mod tests {
         scheduler.shutdown().await;
         server.abort();
     }
+
+    #[tokio::test]
+    async fn completed_download_with_missing_output_still_removes_its_record() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            let _ = stream.read(&mut request).await;
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\ndata")
+                .await
+                .unwrap();
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::open(&dir.path().join("tasks.db")).unwrap());
+        let scheduler = Scheduler::start(
+            store.clone(),
+            SchedulerOptions {
+                auto_resume: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let id = TaskId::new_v4();
+        store
+            .prepare(
+                id,
+                &NewTask {
+                    url: format!("http://{address}/file.bin"),
+                    destination: dir.path().into(),
+                    suggested_filename: None,
+                    source_url: None,
+                    expected_size: None,
+                    headers: BTreeMap::new(),
+                },
+            )
+            .unwrap();
+        store.commit(id).unwrap();
+        scheduler.notify();
+        let output = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let Some(task) = store.get(id).unwrap()
+                    && task.state == TaskState::Completed
+                {
+                    break task.output_path.unwrap();
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        std::fs::remove_file(output).unwrap();
+        let report = delete_many(store.clone(), scheduler.clone(), vec![id], true).await;
+        assert_eq!(report.removed, [id]);
+        assert!(report.failed.is_empty());
+        assert!(store.get(id).unwrap().is_none());
+        scheduler.shutdown().await;
+        server.await.unwrap();
+    }
 }

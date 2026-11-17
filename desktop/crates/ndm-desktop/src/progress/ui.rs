@@ -4,7 +4,6 @@ use gpui_kit::component::{Disableable, IconName, ThemeMode, button::ButtonVarian
 impl Render for ProgressWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dark = matches!(ComponentTheme::global(cx).mode, ThemeMode::Dark);
-        let page = if dark { 0x101726 } else { 0xf8f9fd };
         let panel = if dark { 0x192337 } else { 0xffffff };
         let edge = if dark { 0x2c3a52 } else { 0xdfe6f2 };
         let fg = if dark { 0xf1f4ff } else { 0x19263c };
@@ -28,7 +27,7 @@ impl Render for ProgressWindow {
         let target_height = target_height + if self.notice.is_some() { 22. } else { 0. };
         if self.layout_height != target_height {
             self.layout_height = target_height;
-            window.resize(size(px(WINDOW_WIDTH), px(target_height)));
+            chrome::fit_content(window, size(px(WINDOW_WIDTH), px(target_height)), cx);
         }
         let phase = self
             .snapshot
@@ -57,7 +56,8 @@ impl Render for ProgressWindow {
             (TaskState::Completed, _) => self.text("下载完成", "Completed"),
             (TaskState::Failed, _) => self.text("下载失败", "Failed"),
         };
-        let (downloaded, mut total) = progress_bytes(task.as_ref(), self.snapshot.as_ref());
+        let (downloaded, mut total) =
+            progress_bytes(task.as_ref(), self.snapshot.as_ref(), self.completed_size);
         let shown_bytes = if state == TaskState::Running && phase == ProgressPhase::Saving {
             total = self.snapshot.as_ref().and_then(|value| value.save_total);
             self.snapshot.as_ref().map_or(0, |value| value.saved)
@@ -272,8 +272,9 @@ impl Render for ProgressWindow {
         let mut content = div()
             .flex_1()
             .min_h_0()
-            .px_3()
-            .py_2()
+            .px_4()
+            .pt_1()
+            .pb_3()
             .flex()
             .flex_col()
             .gap(px(6.))
@@ -281,6 +282,7 @@ impl Render for ProgressWindow {
                 div()
                     .flex()
                     .items_center()
+                    .flex_shrink_0()
                     .gap_3()
                     .child(
                         div()
@@ -314,7 +316,7 @@ impl Render for ProgressWindow {
             )
             .child(progress_track(fill, edge));
         if active {
-            let mut chips = div().flex().items_center().gap(px(6.));
+            let mut chips = div().flex().flex_shrink_0().items_center().gap(px(6.));
             if phase == ProgressPhase::Finalizing {
                 chips = chips.child(metric_chip(
                     self.text("封装", "Remux"),
@@ -384,7 +386,8 @@ impl Render for ProgressWindow {
                 .flex()
                 .items_center()
                 .h(px(28.))
-                .gap_2()
+                .flex_shrink_0()
+                .gap_1()
                 .text_xs()
                 .text_color(rgb(muted))
                 .child(
@@ -525,9 +528,9 @@ impl Render for ProgressWindow {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(page))
+            .bg(chrome::floating_surface(dark))
             .text_color(rgb(fg))
-            .child(chrome::title_bar("NDM Next", dark))
+            .child(chrome::floating_header("NDM Next", dark))
             .child(content)
     }
 }
