@@ -282,10 +282,15 @@ fn start_window_move(window: &Window, cx: &App) {
         .detach();
 }
 
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(test)))]
 fn start_window_move(window: &Window, _: &App) {
     window.start_window_move();
 }
+
+// GPUI's test window has no native move implementation. The drag harness
+// records the request before reaching this boundary.
+#[cfg(all(not(windows), test))]
+fn start_window_move(_: &Window, _: &App) {}
 
 pub(crate) fn floating_header(
     title: impl IntoElement,
