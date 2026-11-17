@@ -466,6 +466,7 @@ async fn paused_download_resumes_the_existing_segments() {
     let (server, url) = fixture(Mode::Ranges, expected.clone(), true).await;
     let req = request(dir.path(), url);
     let id = TaskId::new_v4();
+    let part_dir = dir.path().join(format!(".ndm-next-{id}"));
     let cancel = CancellationToken::new();
     let pending = tokio::spawn({
         let req = req.clone();
@@ -473,7 +474,10 @@ async fn paused_download_resumes_the_existing_segments() {
         async move { download_http(&req, id, &HttpOptions::default(), cancel).await }
     });
     tokio::time::timeout(Duration::from_secs(10), async {
-        while server.sent_bytes.load(Ordering::SeqCst) < 131_072 {
+        while !(0..connections).any(|i| {
+            std::fs::metadata(part_dir.join(format!("segment-{i}.part")))
+                .is_ok_and(|metadata| metadata.len() > 0 && metadata.len() < segment_bytes)
+        }) {
             assert!(
                 !pending.is_finished(),
                 "download finished before it could be paused"
@@ -485,7 +489,6 @@ async fn paused_download_resumes_the_existing_segments() {
     .unwrap();
     cancel.cancel();
     assert!(pending.await.unwrap().is_err());
-    let part_dir = dir.path().join(format!(".ndm-next-{id}"));
     let partial_lengths: Vec<_> = (0..connections)
         .map(|i| {
             std::fs::metadata(part_dir.join(format!("segment-{i}.part")))
