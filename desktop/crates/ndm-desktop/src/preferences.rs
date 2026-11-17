@@ -12,6 +12,17 @@ pub enum Language {
     English,
 }
 
+impl Language {
+    pub const ALL: [Self; 2] = [Self::Chinese, Self::English];
+
+    pub const fn native_name(self) -> &'static str {
+        match self {
+            Self::Chinese => "简体中文",
+            Self::English => "English",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Theme {
     #[default]

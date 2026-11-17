@@ -114,51 +114,184 @@ pub(crate) fn window_options(toolbar: bool) -> WindowOptions {
     options
 }
 
-pub(crate) fn toolbar(dark: bool) -> TitleBar {
+pub(crate) fn toolbar(tone: impl Into<crate::motion::ThemeTone>) -> TitleBar {
+    let tone = tone.into();
     TitleBar::new()
         .h(px(TOOLBAR_HEIGHT))
-        .bg(rgb(if dark { 0x111625 } else { 0xf8f9fd }))
-        .border_color(rgb(if dark { 0x263247 } else { 0xe5e9f2 }))
+        .bg(rgb(tone.rgb(0x111625, 0xf8f9fd)))
+        .border_color(rgb(tone.rgb(0x263247, 0xe5e9f2)))
         // Native macOS controls are on the left; there is no right control group
         // to separate the last title action from the window edge.
         .when(cfg!(target_os = "macos"), |bar| bar.pr_3())
 }
 
 pub(crate) fn main_toolbar(
-    title: &'static str,
     collapse: gpui_kit::component::button::Button,
     controls: impl IntoElement,
-    dark: bool,
+    tone: impl Into<crate::motion::ThemeTone>,
+    sidebar_width: f32,
 ) -> TitleBar {
-    toolbar(dark)
+    // Body: sidebar + 4px resize handle + 16px content inset. Account for
+    // TitleBar's native leading inset; the compact sidebar keeps brand space.
+    let leading = if cfg!(target_os = "macos") { 80. } else { 12. };
+    toolbar(tone)
         .child(
             div()
                 .flex()
                 .items_center()
                 .flex_shrink_0()
+                .w(px((sidebar_width + 20. - leading).max(
+                    if cfg!(target_os = "macos") {
+                        112.
+                    } else {
+                        152.
+                    },
+                )))
                 .gap_2()
                 .pr_3()
-                .child(crate::branding::logo(px(24.)))
+                .when(cfg!(target_os = "macos"), |row| row.gap_1().pr_0())
+                .child(crate::branding::logo(px(if cfg!(target_os = "macos") {
+                    20.
+                } else {
+                    24.
+                })))
                 .child(
                     div()
                         .text_sm()
+                        .when(cfg!(target_os = "macos"), |label| label.text_xs())
                         .font_weight(FontWeight::BOLD)
                         .child("NDM Next"),
                 )
-                .child(title_bar_action("sidebar-title-action", collapse))
-                .child(
-                    div()
-                        .w(px(108.))
-                        .text_sm()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .truncate()
-                        .child(title),
-                ),
+                .child(title_bar_action("sidebar-title-action", collapse)),
         )
-        .child(title_bar_action("toolbar-actions", controls).flex_1())
+        .child(controls)
 }
 
-pub(crate) fn floating_header(title: impl IntoElement, dark: bool) -> TitleBar {
+#[derive(Default)]
+struct BlankDrag {
+    hitbox: std::rc::Rc<std::cell::RefCell<Option<Hitbox>>>,
+    origin: Option<Point<Pixels>>,
+    #[cfg(test)]
+    moves: usize,
+}
+
+/// Drag only when the background hitbox receives hover. Input/button/menu
+/// hitboxes mask it; no native caption area extends beneath those controls.
+pub(crate) fn blank_drag_region(
+    id: &'static str,
+    window: &mut Window,
+    cx: &mut App,
+) -> Stateful<Div> {
+    let state = window.use_keyed_state((id, 0usize), cx, |_, _| BlankDrag::default());
+    blank_drag_surface(id, state, window, cx)
+}
+
+fn blank_drag_surface(
+    id: &'static str,
+    state: Entity<BlankDrag>,
+    window: &mut Window,
+    cx: &App,
+) -> Stateful<Div> {
+    let hitbox = state.read(cx).hitbox.clone();
+    div()
+        .id(id)
+        .relative()
+        .on_mouse_down(
+            MouseButton::Left,
+            window.listener_for(&state, |state, event: &MouseDownEvent, window, _| {
+                state.origin = (event.click_count == 1
+                    && !window.default_prevented()
+                    && state
+                        .hitbox
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|hitbox| hitbox.is_hovered(window)))
+                .then_some(event.position);
+                if state.origin.is_some() {
+                    window.prevent_default();
+                }
+            }),
+        )
+        .on_mouse_move(
+            window.listener_for(&state, |state, event: &MouseMoveEvent, window, cx| {
+                if event.pressed_button != Some(MouseButton::Left) {
+                    state.origin = None;
+                } else if let Some(origin) = state.origin
+                    && ((event.position.x - origin.x).abs() >= px(4.)
+                        || (event.position.y - origin.y).abs() >= px(4.))
+                {
+                    state.origin = None;
+                    #[cfg(test)]
+                    {
+                        state.moves += 1;
+                    }
+                    start_window_move(window, cx);
+                }
+            }),
+        )
+        .on_mouse_up(
+            MouseButton::Left,
+            window.listener_for(&state, |state, _, _, _| state.origin = None),
+        )
+        .child(
+            canvas(
+                move |bounds, window, _| {
+                    *hitbox.borrow_mut() =
+                        Some(window.insert_hitbox(bounds, HitboxBehavior::Normal));
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .size_full(),
+        )
+}
+
+#[cfg(windows)]
+fn start_window_move(window: &Window, cx: &App) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows_sys::Win32::UI::{
+        Input::KeyboardAndMouse::{GetAsyncKeyState, ReleaseCapture, VK_LBUTTON},
+        WindowsAndMessaging::{HTCAPTION, PostMessageW, SC_MOVE, WM_SYSCOMMAND},
+    };
+    let Ok(raw) = HasWindowHandle::window_handle(window) else {
+        return;
+    };
+    let RawWindowHandle::Win32(raw) = raw.as_raw() else {
+        return;
+    };
+    let hwnd = raw.hwnd.get();
+    let handle = Window::window_handle(window);
+    let mut app = cx.to_async();
+    // GPUI's start_window_move is a no-op on Windows. Queue the native move
+    // outside the App/Window borrow; native capture changes can reenter GPUI.
+    cx.foreground_executor()
+        .spawn(async move {
+            if handle.update(&mut app, |_, _, _| ()).is_err() {
+                return;
+            }
+            // SAFETY: hwnd belongs to the live, user-dragged window. Posting
+            // hands the move loop to Windows without holding a GPUI borrow.
+            unsafe {
+                if GetAsyncKeyState(VK_LBUTTON as i32) >= 0 {
+                    return;
+                }
+                ReleaseCapture();
+                PostMessageW(hwnd as _, WM_SYSCOMMAND, (SC_MOVE | HTCAPTION) as usize, 0);
+            }
+        })
+        .detach();
+}
+
+#[cfg(not(windows))]
+fn start_window_move(window: &Window, _: &App) {
+    window.start_window_move();
+}
+
+pub(crate) fn floating_header(
+    title: impl IntoElement,
+    tone: impl Into<crate::motion::ThemeTone>,
+) -> TitleBar {
+    let tone = tone.into();
     TitleBar::new()
         .h(px(34.))
         .bg(rgba(0))
@@ -170,18 +303,19 @@ pub(crate) fn floating_header(title: impl IntoElement, dark: bool) -> TitleBar {
                 .items_center()
                 .gap_2()
                 .text_xs()
-                .text_color(rgb(if dark { 0xaebbd1 } else { 0x61718a }))
+                .text_color(rgb(tone.rgb(0xaebbd1, 0x61718a)))
                 .child(crate::branding::logo(px(18.)))
                 .child(title),
         )
 }
 
-pub(crate) fn floating_surface(dark: bool) -> Background {
+pub(crate) fn floating_surface(tone: impl Into<crate::motion::ThemeTone>) -> Background {
+    let tone = tone.into();
     // One static gradient, shared underneath header and body; no extra frames.
     linear_gradient(
         110.,
-        linear_color_stop(rgb(if dark { 0x151a2e } else { 0xf8f7ff }), 0.),
-        linear_color_stop(rgb(if dark { 0x101d27 } else { 0xf2f8fb }), 1.),
+        linear_color_stop(rgb(tone.rgb(0x151a2e, 0xf8f7ff)), 0.),
+        linear_color_stop(rgb(tone.rgb(0x101d27, 0xf2f8fb)), 1.),
     )
 }
 
@@ -300,15 +434,149 @@ mod tests {
     use super::title_bar_action;
     use gpui::component::{Sizable, button::Button};
     use gpui::{
-        AppContext, Context, Focusable, Hitbox, HitboxBehavior, InteractiveElement, IntoElement,
-        Modifiers, ParentElement, Render, StatefulInteractiveElement, Styled, Window,
-        WindowControlArea, canvas, div, point, px,
+        AppContext, Context, Entity, Focusable, Hitbox, HitboxBehavior, InteractiveElement,
+        IntoElement, Modifiers, MouseButton, ParentElement, Render, StatefulInteractiveElement,
+        Styled, Window, WindowControlArea, canvas, div, point, px,
     };
     use gpui_kit as gpui;
     use std::{
         cell::{Cell, RefCell},
         rc::Rc,
     };
+
+    struct DragHarness {
+        state: Entity<super::BlankDrag>,
+        focus: gpui::FocusHandle,
+        input: Entity<gpui::component::input::InputState>,
+        clicks: Rc<Cell<usize>>,
+    }
+
+    impl Render for DragHarness {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let clicks = self.clicks.clone();
+            super::blank_drag_surface("blank-drag", self.state.clone(), window, cx)
+                .size_full()
+                .track_focus(&self.focus)
+                .flex()
+                .flex_col()
+                .p_4()
+                .child(
+                    div()
+                        .id("scroll-content")
+                        .flex_1()
+                        .overflow_y_scroll()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(
+                            Button::new("action")
+                                .small()
+                                .w(px(100.))
+                                .debug_selector(|| "action".into())
+                                .label("Action")
+                                .on_click(move |_, _, _| clicks.set(clicks.get() + 1)),
+                        )
+                        .child(
+                            div()
+                                .id("drag-input")
+                                .debug_selector(|| "drag-input".into())
+                                .w(px(200.))
+                                .child(gpui::component::input::Input::new(&self.input).small()),
+                        )
+                        .child(
+                            div()
+                                .id("selectable-row")
+                                .block_mouse_except_scroll()
+                                .h(px(32.))
+                                .w(px(200.))
+                                .debug_selector(|| "selectable-row".into())
+                                .on_click(|_, _, _| {})
+                                .child("Selectable download"),
+                        )
+                        .child(div().h(px(800.))),
+                )
+                .child(
+                    gpui::uniform_list(
+                        "virtual-tasks",
+                        1,
+                        cx.processor(|_, _, _, _| {
+                            vec![
+                                div()
+                                    .id("virtual-task")
+                                    .debug_selector(|| "virtual-task".into())
+                                    .block_mouse_except_scroll()
+                                    .w_full()
+                                    .h(px(32.))
+                                    .on_click(|_, _, _| {})
+                                    .child("Download")
+                                    .into_any_element(),
+                            ]
+                        }),
+                    )
+                    .h(px(120.))
+                    .flex_shrink_0(),
+                )
+        }
+    }
+
+    #[gpui::test]
+    fn blank_area_drag_does_not_capture_inputs_buttons_or_task_selection(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(gpui::init);
+        let clicks = Rc::new(Cell::new(0));
+        let (view, cx) = cx.add_window_view({
+            let clicks = clicks.clone();
+            move |window, cx| DragHarness {
+                state: cx.new(|_| super::BlankDrag::default()),
+                focus: cx.focus_handle(),
+                input: cx.new(|cx| gpui::component::input::InputState::new(window, cx)),
+                clicks,
+            }
+        });
+        cx.simulate_resize(gpui::size(px(500.), px(400.)));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        for (id, expected) in [
+            ("action", false),
+            ("drag-input", false),
+            ("selectable-row", false),
+            ("virtual-task", false),
+        ] {
+            let point = cx.debug_bounds(id).unwrap().center();
+            cx.simulate_mouse_move(point, None, Modifiers::default());
+            cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
+            cx.update(|_, cx| {
+                assert_eq!(
+                    view.read(cx).state.read(cx).origin.is_some(),
+                    expected,
+                    "{id}"
+                )
+            });
+            cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
+        }
+        assert_eq!(clicks.get(), 1);
+        for (index, blank) in [point(px(250.), px(250.)), point(px(350.), px(365.))]
+            .into_iter()
+            .enumerate()
+        {
+            cx.simulate_mouse_move(blank, None, Modifiers::default());
+            cx.simulate_mouse_down(blank, MouseButton::Left, Modifiers::default());
+            cx.update(|_, cx| assert!(view.read(cx).state.read(cx).origin.is_some()));
+            cx.simulate_mouse_move(
+                blank + point(px(2.), px(1.)),
+                Some(MouseButton::Left),
+                Modifiers::default(),
+            );
+            cx.update(|_, cx| assert_eq!(view.read(cx).state.read(cx).moves, index));
+            let moved = blank + point(px(8.), px(5.));
+            cx.simulate_mouse_move(moved, Some(MouseButton::Left), Modifiers::default());
+            cx.update(|_, cx| {
+                assert_eq!(view.read(cx).state.read(cx).moves, index + 1);
+                assert!(view.read(cx).state.read(cx).origin.is_none());
+            });
+            cx.simulate_mouse_up(moved, MouseButton::Left, Modifiers::default());
+        }
+    }
 
     struct ActionHarness {
         drag: Rc<RefCell<Option<Hitbox>>>,
@@ -324,6 +592,7 @@ mod tests {
         input: gpui::Entity<gpui::component::input::InputState>,
         focus: gpui::FocusHandle,
         clicks: Rc<Cell<usize>>,
+        sidebar_width: f32,
     }
 
     impl Render for ToolbarHarness {
@@ -356,7 +625,6 @@ mod tests {
                 .size_full()
                 .track_focus(&self.focus)
                 .child(super::main_toolbar(
-                    "All downloads",
                     super::icon_button(
                         "collapse",
                         gpui::component::IconName::PanelLeftClose,
@@ -366,7 +634,14 @@ mod tests {
                     .on_click(move |_, _, _| clicked.set(clicked.get() + 1)),
                     controls,
                     true,
+                    self.sidebar_width,
                 ))
+                .child(
+                    div()
+                        .ml(px(self.sidebar_width + 20.))
+                        .debug_selector(|| "first-task-edge".into())
+                        .h(px(52.)),
+                )
         }
     }
 
@@ -384,11 +659,19 @@ mod tests {
                 }),
                 focus: super::page_focus(window, cx),
                 clicks,
+                sidebar_width: 180.,
             }
         });
         for width in [880., 1000.] {
             cx.simulate_resize(gpui::size(px(width), px(500.)));
             cx.update(|window, cx| window.draw(cx).clear(cx));
+            let search = cx.debug_bounds("download-search").unwrap();
+            let task = cx.debug_bounds("first-task-edge").unwrap();
+            assert_eq!(
+                search.left(),
+                task.left(),
+                "Toolbar and task list must share an edge"
+            );
             for id in ["collapse", "type", "sort", "new", "update"] {
                 let bounds = cx.debug_bounds(id).unwrap();
                 assert!(bounds.bottom() <= px(super::TOOLBAR_HEIGHT));
@@ -400,6 +683,26 @@ mod tests {
                 cx.simulate_click(bounds.center(), Modifiers::default());
                 assert_eq!(clicks.get(), before + 1, "{id} cannot be clicked");
             }
+            for sidebar_width in [160., 240., 320.] {
+                cx.update(|window, cx| {
+                    view.update(cx, |view, cx| {
+                        view.sidebar_width = sidebar_width;
+                        cx.notify();
+                    });
+                    window.draw(cx).clear(cx);
+                });
+                let search = cx.debug_bounds("download-search").unwrap();
+                let task = cx.debug_bounds("first-task-edge").unwrap();
+                if !cfg!(target_os = "macos") || sidebar_width >= 180. {
+                    assert_eq!(search.left(), task.left());
+                }
+            }
+            cx.update(|_, cx| {
+                view.update(cx, |view, cx| {
+                    view.sidebar_width = 180.;
+                    cx.notify();
+                })
+            });
             let search = cx.debug_bounds("download-search").unwrap();
             assert!(
                 search.size.width >= px(140.),

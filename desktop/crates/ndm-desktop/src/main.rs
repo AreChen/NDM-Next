@@ -14,6 +14,7 @@ mod notice;
 mod preferences;
 mod progress;
 mod protocol_auth;
+mod redownload;
 mod selection;
 mod sidebar;
 mod speed;
@@ -264,6 +265,8 @@ mod asset_tests {
             IconName::Pause,
             IconName::Play,
             IconName::Zap,
+            IconName::Clock,
+            IconName::Trash,
             IconName::Square,
             IconName::WindowMinimize,
             IconName::WindowMaximize,

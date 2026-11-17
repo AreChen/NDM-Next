@@ -519,6 +519,29 @@ async fn pausing_a_running_task_remains_paused_until_resumed() {
 }
 
 #[tokio::test]
+async fn deleting_a_completed_record_can_remove_leftover_owned_cache() {
+    let dir = TempDir::new().unwrap();
+    let store = Arc::new(Store::open(&dir.path().join("tasks.db")).unwrap());
+    let (url, _) = server().await;
+    let id = TaskId::new_v4();
+    store.prepare(id, &request(dir.path(), &url)).unwrap();
+    store.commit(id).unwrap();
+    let scheduler = Scheduler::start(store.clone(), SchedulerOptions::default()).unwrap();
+    wait_for(&store, id, TaskState::Completed).await;
+    let task = store.get(id).unwrap().unwrap();
+    let cache = task.work_directory();
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::write(cache.join("assembled.part"), b"leftover cache").unwrap();
+    scheduler.delete(id, true).unwrap();
+    assert!(store.get(id).unwrap().is_none());
+    assert!(!cache.exists());
+    // The scheduler only owns temporary data; the desktop file layer handles
+    // deleting/recycling the published output before deleting the record.
+    assert!(task.output_path.unwrap().exists());
+    scheduler.shutdown().await;
+}
+
+#[tokio::test]
 async fn removing_a_paused_task_can_keep_or_remove_only_its_temporary_files() {
     let dir = TempDir::new().unwrap();
     let store = Arc::new(Store::open(&dir.path().join("tasks.db")).unwrap());

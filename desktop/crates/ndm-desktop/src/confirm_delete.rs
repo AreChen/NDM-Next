@@ -97,8 +97,9 @@ impl ConfirmDelete {
 }
 
 impl Render for ConfirmDelete {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dark = matches!(ComponentTheme::global(cx).mode, ThemeMode::Dark);
+        let tone = crate::motion::ThemeTone::current(cx);
         let title = if self.ids.len() == 1 {
             self.text("删除下载任务？", "Delete this download?")
                 .to_owned()
@@ -110,38 +111,40 @@ impl Render for ConfirmDelete {
                 self.text("个下载任务？", "downloads?")
             )
         };
-        delete_dialog(
-            title,
-            self.preview.as_ref().map(|preview| {
-                file_preview(
-                    preview.name.clone(),
-                    preview.directory.to_string_lossy().into_owned(),
-                    self.language == Language::Chinese,
-                    dark,
-                    self.folder_error,
-                    cx.listener(|this, _, _, cx| {
-                        if let Some(preview) = &this.preview {
-                            this.folder_error =
-                                crate::files::open_directory(&preview.directory).is_err();
-                            cx.notify();
-                        }
-                    }),
-                )
-                .into_any_element()
-            }),
-            self.language == Language::Chinese,
-            dark,
-            cx.listener(|_, _, window, _| window.remove_window()),
-            cx.listener(|this, _, window, cx| this.confirm(false, window, cx)),
-            cx.listener(|this, _, window, cx| this.confirm(true, window, cx)),
-        )
-        .track_focus(&self.focus)
-        .on_key_down(|event, window, cx| {
-            if event.keystroke.key == "escape" {
-                cx.stop_propagation();
-                window.remove_window();
-            }
-        })
+        chrome::blank_drag_region("delete-background", window, cx)
+            .size_full()
+            .child(delete_dialog(
+                title,
+                self.preview.as_ref().map(|preview| {
+                    file_preview(
+                        preview.name.clone(),
+                        preview.directory.to_string_lossy().into_owned(),
+                        self.language == Language::Chinese,
+                        dark,
+                        self.folder_error,
+                        cx.listener(|this, _, _, cx| {
+                            if let Some(preview) = &this.preview {
+                                this.folder_error =
+                                    crate::files::open_directory(&preview.directory).is_err();
+                                cx.notify();
+                            }
+                        }),
+                    )
+                    .into_any_element()
+                }),
+                self.language == Language::Chinese,
+                tone,
+                cx.listener(|_, _, window, _| window.remove_window()),
+                cx.listener(|this, _, window, cx| this.confirm(false, window, cx)),
+                cx.listener(|this, _, window, cx| this.confirm(true, window, cx)),
+            ))
+            .track_focus(&self.focus)
+            .on_key_down(|event, window, cx| {
+                if event.keystroke.key == "escape" {
+                    cx.stop_propagation();
+                    window.remove_window();
+                }
+            })
     }
 }
 
@@ -153,25 +156,26 @@ fn delete_dialog(
     title: String,
     preview: Option<AnyElement>,
     zh: bool,
-    dark: bool,
+    tone: impl Into<crate::motion::ThemeTone>,
     cancel: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     keep: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     delete: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
+    let tone = tone.into();
     div()
         .id("delete-confirmation")
         .size_full()
         .flex()
         .flex_col()
-        .bg(chrome::floating_surface(dark))
-        .text_color(rgb(if dark { 0xf0f3ff } else { 0x19253b }))
+        .bg(chrome::floating_surface(tone))
+        .text_color(rgb(tone.rgb(0xf0f3ff, 0x19253b)))
         .child(chrome::floating_header(
             div()
                 .text_sm()
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(if dark { 0xf0f3ff } else { 0x19253b }))
+                .text_color(rgb(tone.rgb(0xf0f3ff, 0x19253b)))
                 .child(title),
-            dark,
+            tone,
         ))
         .child(
             div()

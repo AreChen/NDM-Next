@@ -2,10 +2,43 @@ use super::*;
 use gpui_kit::component::menu::PopupMenuItem;
 
 impl Desktop {
+    fn download_again(&mut self, id: TaskId, cx: &mut Context<Self>) {
+        if matches!(self.update_state, UpdateState::Installing) {
+            return;
+        }
+        let store = self.store.clone();
+        let runtime = self.runtime.clone();
+        cx.spawn(async move |view, cx| {
+            let result = runtime
+                .spawn_blocking(move || crate::redownload::enqueue(&store, id))
+                .await;
+            let _ = view.update(cx, |this, cx| {
+                match result {
+                    Ok(Ok(task)) => {
+                        this.seen_tasks.insert(task.id);
+                        this.scheduler.notify();
+                        this.reload();
+                        this.show_progress(task.id, cx);
+                    }
+                    _ => this.set_notice(
+                        this.text(
+                            "无法重新下载，请检查链接是否仍然有效。",
+                            "Could not download again. Check that the link is still valid.",
+                        )
+                        .into(),
+                        cx,
+                    ),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn task_row(
         &self,
         task: &Task,
-        dark: bool,
+        _dark: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let id = task.id;
@@ -81,7 +114,7 @@ impl Desktop {
             TaskState::Completed => self.text("已完成", "Completed"),
             TaskState::Failed => self.text("失败", "Failed"),
         };
-        let (start, end, edge, accent) = match (state, dark) {
+        let palette = |dark| match (state, dark) {
             (TaskState::Running, true) => (0x252044, 0x183e69, 0x49418c, 0xb19bff),
             (TaskState::Completed, true) => (0x172238, 0x124b40, 0x286055, 0x60e1bc),
             (TaskState::Paused, true) => (0x222435, 0x443424, 0x62513c, 0xe7ba6f),
@@ -93,8 +126,17 @@ impl Desktop {
             (TaskState::Failed, false) => (0xf8f4fc, 0xffe2e8, 0xeabdc7, 0xb93752),
             (_, false) => (0xffffff, 0xedf3fc, 0xdce4f1, 0x697c9c),
         };
-        let foreground = if dark { 0xf1f3ff } else { 0x22324b };
-        let muted = if dark { 0xa0b0cc } else { 0x6c7b94 };
+        let tone = crate::motion::ThemeTone::current(cx);
+        let d = palette(true);
+        let l = palette(false);
+        let (start, end, edge, accent) = (
+            tone.rgb(d.0, l.0),
+            tone.rgb(d.1, l.1),
+            tone.rgb(d.2, l.2),
+            tone.rgb(d.3, l.3),
+        );
+        let foreground = tone.rgb(0xf1f3ff, 0x22324b);
+        let muted = tone.rgb(0xa0b0cc, 0x6c7b94);
         let size = total
             .map(format_bytes)
             .unwrap_or_else(|| self.text("大小未知", "Unknown size").into());
@@ -131,6 +173,18 @@ impl Desktop {
                 ))
                 .on_click(move |_, _, cx| crate::chrome::copy_download_link(&url, cx)),
             );
+            if state != TaskState::Prepared {
+                let view = view.clone();
+                menu = menu.item(
+                    PopupMenuItem::new(if zh { "再次下载" } else { "Download again" })
+                        .icon(gpui_kit::component::Icon::new(
+                            gpui_kit::assets::IconName::RotateCw,
+                        ))
+                        .on_click(move |_, _, cx| {
+                            let _ = view.update(cx, |this, cx| this.download_again(id, cx));
+                        }),
+                );
+            }
             if let Some(error) = &error {
                 menu = menu.item(PopupMenuItem::new(error.clone()).disabled(true));
             }
@@ -254,7 +308,7 @@ impl Desktop {
                         .h(px(4.))
                         .rounded_full()
                         .overflow_hidden()
-                        .bg(rgba(if dark { 0xffffff20 } else { 0x26365c18 }))
+                        .bg(rgba(tone.rgba(0xffffff20, 0x26365c18)))
                         .child(
                             div()
                                 .h_full()
@@ -279,6 +333,7 @@ impl Desktop {
         div().h(px(58.)).pb(px(6.)).child(
             div()
                 .id(SharedString::from(format!("task-selection-area-{id}")))
+                .block_mouse_except_scroll()
                 .cursor_pointer()
                 .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                     this.page_focus.focus(window, cx);
@@ -327,7 +382,7 @@ impl Desktop {
                         .items_center()
                         .justify_center()
                         .rounded_md()
-                        .bg(rgba(if dark { 0x8a66ff25 } else { 0x8a66ff18 }))
+                        .bg(rgba(tone.rgba(0x8a66ff25, 0x8a66ff18)))
                         .text_color(rgb(accent))
                         .child(Icon::new(IconName::File).with_size(px(18.))),
                 )
@@ -362,7 +417,7 @@ impl Desktop {
                         .py(px(3.))
                         .rounded_full()
                         .text_color(rgb(accent))
-                        .bg(rgba(if dark { 0xffffff0d } else { 0xffffff80 }))
+                        .bg(rgba(tone.rgba(0xffffff0d, 0xffffff80)))
                         .child(status),
                 )
                 .child(metrics)

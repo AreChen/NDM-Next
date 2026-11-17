@@ -1,5 +1,4 @@
 use crate::{
-    apply_theme,
     library::{Category, SortOrder, TaskIndex},
     preferences::{Language, Preferences, Theme},
     progress::ProgressWindow,
@@ -105,6 +104,9 @@ pub(crate) struct Desktop {
     page_focus: FocusHandle,
     sidebar_motion: gpui_motion_kit::MotionState,
     content_motion: gpui_motion_kit::MotionState,
+    theme_transition: Option<crate::motion::ThemeTransition>,
+    language_motion: Option<gpui_motion_kit::ValueState>,
+    language_progress: f32,
     sidebar: crate::sidebar::Sidebar,
     new_download_open: bool,
     hls_catalog: Option<(String, HlsCatalog)>,
@@ -417,6 +419,9 @@ impl Desktop {
             page_focus,
             sidebar_motion: Default::default(),
             content_motion: Default::default(),
+            theme_transition: None,
+            language_motion: None,
+            language_progress: 1.,
             sidebar,
             new_download_open: false,
             hls_catalog: None,
@@ -463,6 +468,14 @@ impl Desktop {
         match self.preferences.language {
             Language::Chinese => chinese,
             Language::English => english,
+        }
+    }
+
+    fn display_text(&self, text: &'static str) -> SharedString {
+        if self.language_progress >= 1. {
+            text.into()
+        } else {
+            crate::motion::scramble(text, self.language_progress).into()
         }
     }
 
@@ -586,6 +599,7 @@ impl Desktop {
         let scheduler = self.scheduler.clone();
         let runtime = self.runtime.clone();
         let preferences = self.preferences.clone();
+        let owner = cx.entity().downgrade();
         let bounds = Bounds::centered(
             None,
             size(
@@ -597,14 +611,17 @@ impl Desktop {
         match gpui_kit::open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
-                window_min_size: Some(size(px(460.), px(136.))),
+                window_min_size: Some(size(px(crate::progress::WINDOW_WIDTH), px(136.))),
                 ..crate::chrome::window_options(false)
             },
             cx,
             move |window, cx| {
                 crate::chrome::round_window(window);
                 cx.new(|cx| {
-                    ProgressWindow::new(id, store, scheduler, runtime, preferences, window, cx)
+                    let mut progress =
+                        ProgressWindow::new(id, store, scheduler, runtime, preferences, window, cx);
+                    progress.owner = Some(owner);
+                    progress
                 })
             },
         ) {
@@ -815,7 +832,7 @@ impl Desktop {
     }
     fn set_theme(&mut self, mode: Theme, cx: &mut Context<Self>) {
         self.preferences.theme = mode;
-        apply_theme(mode, cx);
+        self.theme_transition = crate::motion::ThemeTransition::begin(mode, cx);
         self.save_preferences(cx);
         cx.notify();
     }
@@ -1232,7 +1249,12 @@ impl Desktop {
             .flex()
             .flex_col()
             .gap_1()
-            .child(div().text_xs().text_color(rgb(muted)).child(label))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(muted))
+                    .child(self.display_text(label)),
+            )
             .child(Input::new(input).small().id(id).aria_label(label).w_full())
     }
     fn hls_options_panel(
@@ -1380,7 +1402,7 @@ impl Desktop {
             Section::Completed => IconName::CircleCheck,
             Section::Settings => IconName::Settings2,
         };
-        let dark = self.is_dark(cx);
+        let tone = crate::motion::ThemeTone::current(cx);
         let count = match section {
             Section::All => Some(
                 self.tasks
@@ -1414,7 +1436,9 @@ impl Desktop {
             .gap_2()
             .when(self.sidebar.collapsed, |row| row.justify_center())
             .child(Icon::new(icon).with_size(px(15.)))
-            .when(!self.sidebar.collapsed, |row| row.child(label))
+            .when(!self.sidebar.collapsed, |row| {
+                row.child(self.display_text(label))
+            })
             .when_some(count.filter(|_| !self.sidebar.collapsed), |row, count| {
                 row.child(
                     div()
@@ -1445,8 +1469,8 @@ impl Desktop {
             }));
         if selected {
             button
-                .bg(rgb(if dark { 0x302b50 } else { 0xede9ff }))
-                .text_color(rgb(if dark { 0xd9d1ff } else { 0x523fa7 }))
+                .bg(rgb(tone.rgb(0x302b50, 0xede9ff)))
+                .text_color(rgb(tone.rgb(0xd9d1ff, 0x523fa7)))
         } else {
             button
         }
@@ -1455,12 +1479,25 @@ impl Desktop {
 
 impl Render for Desktop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(transition) = &mut self.theme_transition
+            && !transition.frame(window, cx)
+        {
+            self.theme_transition = None;
+        }
+        if let Some(state) = &mut self.language_motion {
+            let frame = state.frame(1., crate::motion::tween(320), window, cx);
+            self.language_progress = frame.value() as f32;
+            if !frame.is_animating() {
+                self.language_motion = None;
+            }
+        }
         let dark = self.is_dark(cx);
-        let page = if dark { 0x0c1120 } else { 0xf4f6fb };
-        let side = if dark { 0x111625 } else { 0xf8f9fd };
-        let fg = if dark { 0xf0f3ff } else { 0x19253b };
-        let muted = if dark { 0x8999b4 } else { 0x6e7d98 };
-        let border = if dark { 0x28344b } else { 0xe3e8f2 };
+        let tone = crate::motion::ThemeTone::current(cx);
+        let page = tone.rgb(0x0c1120, 0xf4f6fb);
+        let side = tone.rgb(0x111625, 0xf8f9fd);
+        let fg = tone.rgb(0xf0f3ff, 0x19253b);
+        let muted = tone.rgb(0x8999b4, 0x6e7d98);
+        let border = tone.rgb(0x28344b, 0xe3e8f2);
         use gpui_motion_kit::core::{Motion, Target};
         let visible = self.visible_task_indices();
         let sidebar = self.sidebar_motion.frame(
@@ -1481,12 +1518,6 @@ impl Render for Desktop {
             window,
             cx,
         );
-        let title = match self.section {
-            Section::All => self.text("全部下载", "All downloads"),
-            Section::Active => self.text("正在进行", "In progress"),
-            Section::Completed => self.text("已完成", "Completed"),
-            Section::Settings => self.text("设置", "Settings"),
-        };
         let mut content = div()
             .id("content")
             .flex_1()
@@ -1509,12 +1540,20 @@ impl Render for Desktop {
             .gap_2()
             .pr_3()
             .when(self.section != Section::Settings, |row| {
-                row.child(crate::chrome::download_search(
-                    &self.search_input,
-                    &self.page_focus,
-                    self.text("搜索文件名、来源或链接", "Search filename, source or URL"),
-                ))
-                .child(
+                row.child(
+                    crate::chrome::title_bar_action(
+                        "search-title-action",
+                        crate::chrome::download_search(
+                            &self.search_input,
+                            &self.page_focus,
+                            self.text("搜索文件名、来源或链接", "Search filename, source or URL"),
+                        ),
+                    )
+                    .flex_1()
+                    .max_w(px(500.)),
+                )
+                .child(crate::chrome::title_bar_action(
+                    "category-title-action",
                     Button::new("category-filter")
                         .small()
                         .label(current_category.label(zh))
@@ -1543,8 +1582,9 @@ impl Render for Desktop {
                                 )
                             })
                         }),
-                )
-                .child(
+                ))
+                .child(crate::chrome::title_bar_action(
+                    "sort-title-action",
                     Button::new("sort-downloads")
                         .small()
                         .icon(IconName::ArrowDown)
@@ -1572,8 +1612,9 @@ impl Render for Desktop {
                                 )
                             })
                         }),
-                )
-                .child(
+                ))
+                .child(crate::chrome::title_bar_action(
+                    "new-title-action",
                     Button::new("new-download-toggle")
                         .small()
                         .primary()
@@ -1595,7 +1636,7 @@ impl Render for Desktop {
                             this.new_download_open = !this.new_download_open;
                             cx.notify();
                         })),
-                )
+                ))
             })
             .when(self.section == Section::Settings, |row| {
                 row.child(div().flex_1())
@@ -1610,12 +1651,17 @@ impl Render for Desktop {
                 ) || self.remembered_update()
                     || (matches!(self.update_state, UpdateState::Failed(_))
                         && self.install_update_when_idle),
-                |row| row.child(self.title_update_button(cx)),
+                |row| {
+                    row.child(crate::chrome::title_bar_action(
+                        "update-title-action",
+                        self.title_update_button(cx),
+                    ))
+                },
             );
         if self.section == Section::Settings {
             content = content
                 .overflow_y_scroll()
-                .child(self.settings_panel(dark, cx));
+                .child(self.settings_panel(dark, window, cx));
         } else {
             if let Some(id) = self.confirming_host_key
                 && let Some(key) = self.pending_host_keys.get(&id)
@@ -1919,7 +1965,7 @@ impl Render for Desktop {
                     ),
             );
         }
-        div()
+        crate::chrome::blank_drag_region("main-background", window, cx)
             .size_full()
             .track_focus(&self.page_focus)
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
@@ -1957,7 +2003,6 @@ impl Render for Desktop {
             .bg(rgb(page))
             .text_color(rgb(fg))
             .child(crate::chrome::main_toolbar(
-                title,
                 crate::chrome::icon_button(
                     "sidebar-toggle",
                     if self.sidebar.collapsed {
@@ -1978,7 +2023,8 @@ impl Render for Desktop {
                     cx.notify();
                 })),
                 toolbar_controls,
-                dark,
+                tone,
+                sidebar.target().width_px().unwrap_or(180.),
             ))
             .child(
                 div()

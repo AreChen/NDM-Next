@@ -16,10 +16,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(crate) const WINDOW_WIDTH: f32 = 480.;
-pub(crate) const COMPACT_HEIGHT: f32 = 168.;
+pub(crate) const WINDOW_WIDTH: f32 = 560.;
+pub(crate) const COMPACT_HEIGHT: f32 = 136.;
 pub(crate) const FINISHED_HEIGHT: f32 = 136.;
-pub(crate) const EXPANDED_HEIGHT: f32 = 430.;
+pub(crate) const EXPANDED_HEIGHT: f32 = 400.;
 
 fn should_track(state: Option<TaskState>, has_worker: bool) -> bool {
     has_worker || matches!(state, Some(TaskState::Queued | TaskState::Running))
@@ -94,6 +94,7 @@ fn progress_bytes(
 }
 
 pub(crate) struct ProgressWindow {
+    pub(crate) owner: Option<WeakEntity<crate::view::Desktop>>,
     id: TaskId,
     store: Arc<Store>,
     scheduler: Scheduler,
@@ -176,6 +177,7 @@ impl ProgressWindow {
         })
         .detach();
         let mut this = Self {
+            owner: None,
             id,
             store,
             scheduler,

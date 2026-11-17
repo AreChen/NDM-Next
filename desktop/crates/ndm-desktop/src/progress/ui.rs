@@ -1,13 +1,17 @@
 use super::*;
-use gpui_kit::component::{Disableable, IconName, ThemeMode, button::ButtonVariants};
+use gpui_kit::component::{
+    Disableable, IconName, Sizable,
+    button::ButtonVariants,
+    menu::{DropdownMenu, PopupMenuItem},
+};
 
 impl Render for ProgressWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let dark = matches!(ComponentTheme::global(cx).mode, ThemeMode::Dark);
-        let panel = if dark { 0x192337 } else { 0xffffff };
-        let edge = if dark { 0x2c3a52 } else { 0xdfe6f2 };
-        let fg = if dark { 0xf1f4ff } else { 0x19263c };
-        let muted = if dark { 0x9baac4 } else { 0x71809a };
+        let tone = crate::motion::ThemeTone::current(cx);
+        let panel = tone.rgb(0x192337, 0xffffff);
+        let edge = tone.rgb(0x2c3a52, 0xdfe6f2);
+        let fg = tone.rgb(0xf1f4ff, 0x19263c);
+        let muted = tone.rgb(0x9baac4, 0x71809a);
         let task = self.task.clone();
         let state = task
             .as_ref()
@@ -157,8 +161,8 @@ impl Render for ProgressWindow {
             }
         }
         details = details.child(div().text_xs().text_color(rgb(muted)).child(self.text(
-            "耗时不含暂停与排队；平均速度按实际接收数据计算。",
-            "Elapsed excludes pauses and queue time; average uses bytes actually received.",
+            "耗时不含暂停与排队。",
+            "Elapsed excludes pauses and queue time.",
         )));
         details = details.child(
             div()
@@ -315,42 +319,38 @@ impl Render for ProgressWindow {
                     ),
             )
             .child(progress_track(fill, edge));
+        let elapsed = format_elapsed(self.snapshot.as_ref().map(|snapshot| snapshot.elapsed_ms));
+        let mut chips = metric_group();
         if active {
-            let mut chips = div().flex().flex_shrink_0().items_center().gap(px(6.));
-            if phase == ProgressPhase::Finalizing {
-                chips = chips.child(metric_chip(
-                    self.text("封装", "Remux"),
-                    self.text("本地处理", "Local processing").into(),
-                    edge,
-                    muted,
-                ));
+            let speed_label = if phase == ProgressPhase::Finalizing {
+                self.text("封装进度", "Remux progress")
             } else {
-                chips = chips.child(metric_chip(
-                    if phase == ProgressPhase::Saving {
-                        self.text("保存", "Save")
-                    } else if phase == ProgressPhase::Merging {
-                        self.text("合并", "Merge")
-                    } else {
-                        self.text("速度", "Speed")
-                    },
-                    if state == TaskState::Running {
+                self.text("下载速度", "Download speed")
+            };
+            chips = chips
+                .child(metric_chip(
+                    IconName::ArrowDown,
+                    speed_label,
+                    if phase == ProgressPhase::Finalizing {
+                        self.text("封装", "Remux").into()
+                    } else if state == TaskState::Running {
                         format!("{}/s", format_bytes(self.speed))
                     } else {
                         "—".into()
                     },
                     edge,
                     muted,
-                ));
-            }
-            chips = chips
+                ))
                 .child(metric_chip(
-                    self.text("剩余", "ETA"),
+                    gpui_kit::assets::IconName::Clock,
+                    self.text("预计剩余", "Time remaining"),
                     remaining,
                     edge,
                     muted,
                 ))
                 .child(metric_chip(
-                    self.text("连接", "Peers"),
+                    IconName::Globe,
+                    self.text("活动连接", "Active connections"),
                     if segments.is_empty() {
                         "—".into()
                     } else {
@@ -359,15 +359,14 @@ impl Render for ProgressWindow {
                     edge,
                     muted,
                 ));
-            content = content.child(chips);
         }
-        let elapsed = format_elapsed(self.snapshot.as_ref().map(|snapshot| snapshot.elapsed_ms));
-        let average = self
-            .snapshot
-            .as_ref()
-            .and_then(ProgressSnapshot::average_bytes_per_second)
-            .map(|speed| format!("{}/s", format_bytes(speed)))
-            .unwrap_or_else(|| "—".into());
+        chips = chips.child(metric_chip(
+            gpui_kit::assets::IconName::Clock,
+            self.text("总耗时", "Elapsed time"),
+            elapsed,
+            edge,
+            muted,
+        ));
         let peak = self.history.iter().copied().max().unwrap_or(1).max(1);
         let mut graph = div().ml_auto().h(px(16.)).flex().items_end().gap(px(2.));
         if state == TaskState::Running {
@@ -381,123 +380,127 @@ impl Render for ProgressWindow {
                 );
             }
         }
-        content = content.child(
-            div()
-                .flex()
-                .items_center()
-                .h(px(28.))
-                .flex_shrink_0()
-                .gap_1()
-                .text_xs()
-                .text_color(rgb(muted))
-                .child(
-                    div()
-                        .flex()
-                        .gap(px(5.))
-                        .child(self.text("耗时", "Elapsed"))
-                        .child(div().text_color(rgb(fg)).child(elapsed)),
+        let actions = div()
+            .flex()
+            .items_center()
+            .flex_shrink_0()
+            .when_some(task.as_ref(), |row, task| {
+                row.child(chrome::copy_link_button(
+                    "progress-copy-link",
+                    task.request.url.clone(),
+                    self.text("复制下载链接", "Copy download link"),
+                ))
+            })
+            .when_some(action, |row, (icon, label)| {
+                row.child(
+                    chrome::icon_button("progress-action", icon, label)
+                        .disabled(self.proxy_switching)
+                        .on_click(cx.listener(move |this, _, _, cx| this.change_state(state, cx))),
                 )
-                .child(
-                    div()
-                        .flex()
-                        .gap(px(5.))
-                        .child(self.text("平均", "Average"))
-                        .child(div().text_color(rgb(fg)).child(average)),
+            })
+            .child(
+                chrome::icon_button(
+                    "progress-folder",
+                    IconName::FolderOpen,
+                    self.text("打开文件夹", "Open folder"),
                 )
-                .child(div().flex_1())
-                .when_some(task.as_ref(), |row, task| {
-                    row.child(chrome::copy_link_button(
-                        "progress-copy-link",
-                        task.request.url.clone(),
-                        self.text("复制下载链接", "Copy download link"),
-                    ))
-                })
-                .when_some(action, |row, (icon, label)| {
-                    row.child(
-                        chrome::icon_button("progress-action", icon, label)
-                            .disabled(self.proxy_switching)
-                            .on_click(
-                                cx.listener(move |this, _, _, cx| this.change_state(state, cx)),
-                            ),
-                    )
-                })
-                .child(
+                .on_click(cx.listener(|this, _, _, cx| this.open_folder(cx))),
+            )
+            .when(state == TaskState::Completed, |row| {
+                row.child(
                     chrome::icon_button(
-                        "progress-folder",
-                        IconName::FolderOpen,
-                        self.text("打开文件夹", "Open folder"),
+                        "progress-file",
+                        IconName::ExternalLink,
+                        self.text("打开文件", "Open file"),
                     )
-                    .on_click(cx.listener(|this, _, _, cx| this.open_folder(cx))),
+                    .on_click(cx.listener(|this, _, _, cx| this.open_file(cx))),
                 )
-                .when(state == TaskState::Completed, |row| {
+            })
+            .when(
+                matches!(
+                    state,
+                    TaskState::Queued | TaskState::Running | TaskState::Paused | TaskState::Failed
+                ) && task.as_ref().is_some_and(|task| {
+                    reqwest::Url::parse(&task.request.url)
+                        .is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
+                }),
+                |row| {
                     row.child(
                         chrome::icon_button(
-                            "progress-file",
-                            IconName::ExternalLink,
-                            self.text("打开文件", "Open file"),
+                            "progress-proxy",
+                            gpui_kit::component::Icon::new(gpui_kit::assets::IconName::Zap),
+                            self.text(
+                                "仅对此任务使用已配置代理",
+                                "Use configured proxy for this download only",
+                            ),
                         )
-                        .on_click(cx.listener(|this, _, _, cx| this.open_file(cx))),
-                    )
-                })
-                .when(
-                    matches!(
-                        state,
-                        TaskState::Queued
-                            | TaskState::Running
-                            | TaskState::Paused
-                            | TaskState::Failed
-                    ) && task.as_ref().is_some_and(|task| {
-                        reqwest::Url::parse(&task.request.url)
-                            .is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
-                    }),
-                    |row| {
-                        row.child(
-                            chrome::icon_button(
-                                "progress-proxy",
-                                gpui_kit::component::Icon::new(gpui_kit::assets::IconName::Zap),
-                                self.text(
-                                    "仅对此任务使用已配置代理",
-                                    "Use configured proxy for this download only",
-                                ),
-                            )
-                            .when(
-                                task.as_ref().is_some_and(|task| match &task.options {
-                                    ndm_core::TaskOptions::Http(options) => options.proxy.is_some(),
-                                    ndm_core::TaskOptions::Hls(options) => options.proxy.is_some(),
-                                    ndm_core::TaskOptions::Dash(options) => options.proxy.is_some(),
-                                    _ => false,
-                                }),
-                                |button| button.primary(),
-                            )
-                            .disabled(self.proxy_switching)
-                            .tooltip(if self.proxy_switching {
-                                self.text("正在切换代理…", "Switching proxy…")
-                            } else {
-                                self.text(
-                                    "仅对此任务使用已配置代理",
-                                    "Use configured proxy for this download only",
-                                )
-                            })
-                            .on_click(cx.listener(|this, _, _, cx| this.enable_task_proxy(cx))),
+                        .when(
+                            task.as_ref().is_some_and(|task| match &task.options {
+                                ndm_core::TaskOptions::Http(options) => options.proxy.is_some(),
+                                ndm_core::TaskOptions::Hls(options) => options.proxy.is_some(),
+                                ndm_core::TaskOptions::Dash(options) => options.proxy.is_some(),
+                                _ => false,
+                            }),
+                            |button| button.primary(),
                         )
-                    },
-                )
-                .child(
-                    chrome::icon_button(
-                        "progress-details",
-                        if self.expanded {
-                            IconName::ChevronUp
+                        .disabled(self.proxy_switching)
+                        .tooltip(if self.proxy_switching {
+                            self.text("正在切换代理…", "Switching proxy…")
                         } else {
-                            IconName::ChevronDown
-                        },
-                        self.text("展开／收起详情", "Expand / collapse details"),
+                            self.text(
+                                "仅对此任务使用已配置代理",
+                                "Use configured proxy for this download only",
+                            )
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| this.enable_task_proxy(cx))),
                     )
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.expanded = !this.expanded;
-                        cx.notify();
-                    })),
-                ),
-        );
+                },
+            )
+            .when_some(self.owner.clone(), |row, owner| {
+                let id = self.id;
+                let label = self.text("删除任务、缓存及文件", "Delete task, cache and file");
+                let confirm = self.text("确认删除任务及文件", "Confirm deletion of task and file");
+                row.child(
+                    chrome::icon_button(
+                        "progress-delete",
+                        gpui_kit::assets::IconName::Trash,
+                        label,
+                    )
+                    .text_color(rgb(tone.rgb(0xf28b9c, 0xbe3049)))
+                    .disabled(self.proxy_switching)
+                    .dropdown_menu(move |menu, _, _| {
+                        let owner = owner.clone();
+                        menu.item(
+                            PopupMenuItem::element(move |_, _| {
+                                div()
+                                    .text_sm()
+                                    .text_color(rgb(tone.rgb(0xf28b9c, 0xbe3049)))
+                                    .child(confirm)
+                            })
+                            .on_click(move |_, _, cx| {
+                                let _ = owner
+                                    .update(cx, |this, cx| this.delete_tasks(vec![id], true, cx));
+                            }),
+                        )
+                    }),
+                )
+            })
+            .child(
+                chrome::icon_button(
+                    "progress-details",
+                    if self.expanded {
+                        IconName::ChevronUp
+                    } else {
+                        IconName::ChevronDown
+                    },
+                    self.text("展开／收起详情", "Expand / collapse details"),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.expanded = !this.expanded;
+                    cx.notify();
+                })),
+            );
+        content = content.child(compact_footer(chips, actions));
         if let Some(notice) = &self.notice {
             content = content.child(
                 div()
@@ -523,16 +526,32 @@ impl Render for ProgressWindow {
                     .child(details),
             );
         }
-        div()
-            .id("download-progress")
+        chrome::blank_drag_region("download-progress", window, cx)
             .size_full()
             .flex()
             .flex_col()
-            .bg(chrome::floating_surface(dark))
+            .bg(chrome::floating_surface(tone))
             .text_color(rgb(fg))
-            .child(chrome::floating_header("NDM Next", dark))
+            .child(chrome::floating_header("NDM Next", tone))
             .child(content)
     }
+}
+
+fn metric_group() -> Div {
+    div().flex().flex_shrink_0().items_center().gap(px(4.))
+}
+
+fn compact_footer(metrics: impl IntoElement, actions: impl IntoElement) -> Stateful<Div> {
+    div()
+        .id("progress-footer")
+        .debug_selector(|| "progress-footer".into())
+        .flex()
+        .items_center()
+        .h(px(28.))
+        .flex_shrink_0()
+        .gap_2()
+        .child(metrics)
+        .child(div().ml_auto().flex_shrink_0().child(actions))
 }
 
 fn progress_track(fill: impl IntoElement, edge: u32) -> Stateful<Div> {
@@ -547,20 +566,41 @@ fn progress_track(fill: impl IntoElement, edge: u32) -> Stateful<Div> {
         .child(fill)
 }
 
-fn metric_chip(label: &'static str, value: String, edge: u32, muted: u32) -> impl IntoElement {
+fn metric_chip(
+    icon: impl Into<gpui_kit::component::Icon>,
+    label: &'static str,
+    value: String,
+    edge: u32,
+    muted: u32,
+) -> Stateful<Div> {
+    use gpui_kit::component::tooltip::Tooltip;
+    let tooltip = format!("{label}: {value}");
     div()
-        .h(px(24.))
-        .px(px(7.))
+        .id(SharedString::from(format!("metric-{label}")))
+        .h(px(28.))
+        .flex_shrink_0()
+        .px(px(6.))
         .flex()
         .items_center()
-        .gap(px(5.))
+        .justify_center()
+        .gap(px(4.))
         .rounded_md()
         .border_1()
         .border_color(rgb(edge))
-        .child(div().text_size(px(10.)).text_color(rgb(muted)).child(label))
+        .tooltip(move |_, cx| cx.new(|_| Tooltip::new(tooltip.clone())).into())
         .child(
             div()
-                .text_xs()
+                .debug_selector(move || format!("metric-{label}-icon"))
+                .size(px(12.))
+                .flex_shrink_0()
+                .child(icon.into().with_size(px(12.)).text_color(rgb(muted))),
+        )
+        .child(
+            div()
+                .debug_selector(move || format!("metric-{label}-value"))
+                .min_w_0()
+                .text_size(px(11.))
+                .truncate()
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(value),
         )
@@ -568,12 +608,148 @@ fn metric_chip(label: &'static str, value: String, edge: u32, muted: u32) -> imp
 
 #[cfg(test)]
 mod tests {
-    use super::progress_track;
+    use super::{compact_footer, metric_chip, metric_group, progress_track};
     use gpui::{
-        Context, InteractiveElement, IntoElement, ParentElement, Render, Styled, Window, div,
-        prelude::FluentBuilder, px,
+        Context, InteractiveElement, IntoElement, Modifiers, ParentElement, Render, Styled, Window,
+        div, prelude::FluentBuilder, px,
     };
     use gpui_kit as gpui;
+    use std::{cell::Cell, rc::Rc};
+
+    #[gpui::test]
+    fn compact_progress_keeps_all_metrics_and_actions_on_one_clickable_row(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        struct Footer(Rc<Cell<usize>>, bool);
+        impl Render for Footer {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let mut metrics = metric_group();
+                let values = if self.1 {
+                    [
+                        ("speed", "10.7 MB/s"),
+                        ("eta", "33s"),
+                        ("peers", "16/16"),
+                        ("elapsed", "00:02"),
+                    ]
+                } else {
+                    [
+                        ("speed", "999.9 MB/s"),
+                        ("eta", "12h 59m"),
+                        ("peers", "16/16"),
+                        ("elapsed", "100:59:59"),
+                    ]
+                };
+                for (label, value) in values {
+                    metrics = metrics.child(
+                        metric_chip(gpui::assets::IconName::Clock, label, value.into(), 0, 0)
+                            .debug_selector(move || label.into()),
+                    );
+                }
+                let mut actions = div().flex().flex_shrink_0();
+                for (id, icon) in [
+                    ("copy", gpui::assets::IconName::Copy),
+                    ("pause", gpui::assets::IconName::Pause),
+                    ("folder", gpui::assets::IconName::FolderOpen),
+                    ("proxy", gpui::assets::IconName::Zap),
+                    ("delete", gpui::assets::IconName::Trash),
+                    ("details", gpui::assets::IconName::ChevronDown),
+                ] {
+                    let clicks = self.0.clone();
+                    actions = actions.child(
+                        crate::chrome::icon_button(id, icon, id)
+                            .debug_selector(move || id.into())
+                            .on_click(move |_, _, _| clicks.set(clicks.get() + 1)),
+                    );
+                }
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .child(div().h(px(34.)).flex_shrink_0())
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .px_4()
+                            .pt_1()
+                            .pb_3()
+                            .flex()
+                            .flex_col()
+                            .gap(px(6.))
+                            .child(div().h(px(40.)).flex_shrink_0())
+                            .child(progress_track(div(), 0))
+                            .child(compact_footer(metrics, actions)),
+                    )
+            }
+        }
+        cx.update(gpui::init);
+        let clicks = Rc::new(Cell::new(0));
+        let (view, cx) = cx.add_window_view({
+            let clicks = clicks.clone();
+            move |_, _| Footer(clicks, false)
+        });
+        for (scale, compact) in [1., 1.5, 2.]
+            .into_iter()
+            .flat_map(|scale| [false, true].map(move |compact| (scale, compact)))
+        {
+            cx.simulate_scale_factor_change(scale);
+            cx.simulate_resize(gpui::size(
+                px(super::super::WINDOW_WIDTH),
+                px(super::super::COMPACT_HEIGHT),
+            ));
+            cx.update(|window, cx| {
+                view.update(cx, |this, cx| {
+                    this.1 = compact;
+                    cx.notify();
+                });
+                window.draw(cx).clear(cx);
+            });
+            let row = cx.debug_bounds("progress-footer").unwrap();
+            assert!(row.bottom() <= px(super::super::COMPACT_HEIGHT - 12.));
+            let mut last = row.left();
+            for id in [
+                "speed", "eta", "peers", "elapsed", "copy", "pause", "folder", "proxy", "delete",
+                "details",
+            ] {
+                let item = cx.debug_bounds(id).unwrap();
+                assert_eq!(item.top(), row.top(), "{id}");
+                assert!(item.left() >= last, "{id} overlaps");
+                assert!(item.right() <= row.right(), "{id} is clipped");
+                assert!(item.size.width >= px(28.), "{id} collapsed");
+                last = item.right();
+            }
+            for (label, icon_id, value_id) in [
+                ("speed", "metric-speed-icon", "metric-speed-value"),
+                ("eta", "metric-eta-icon", "metric-eta-value"),
+                ("peers", "metric-peers-icon", "metric-peers-value"),
+                ("elapsed", "metric-elapsed-icon", "metric-elapsed-value"),
+            ] {
+                let chip = cx.debug_bounds(label).unwrap();
+                let icon = cx.debug_bounds(icon_id).unwrap();
+                let value = cx.debug_bounds(value_id).unwrap();
+                let left_inset = icon.left() - chip.left();
+                let right_inset = chip.right() - value.right();
+                assert!(
+                    (px(6.)..=px(8.)).contains(&left_inset),
+                    "{label}: left inset {left_inset:?}"
+                );
+                assert!(
+                    (px(6.)..=px(8.)).contains(&right_inset),
+                    "{label}: right inset {right_inset:?}"
+                );
+            }
+            let gap = cx.debug_bounds("copy").unwrap().left()
+                - cx.debug_bounds("elapsed").unwrap().right();
+            assert!(gap >= px(8.), "Metrics overlap actions: {gap:?}");
+            assert_eq!(cx.debug_bounds("details").unwrap().right(), row.right());
+            for id in ["copy", "pause", "folder", "proxy", "delete", "details"] {
+                let before = clicks.get();
+                let center = cx.debug_bounds(id).unwrap().center();
+                cx.simulate_click(center, Modifiers::default());
+                assert_eq!(clicks.get(), before + 1);
+            }
+        }
+    }
 
     #[gpui::test]
     fn progress_track_keeps_its_height_in_compact_and_expanded_layouts(

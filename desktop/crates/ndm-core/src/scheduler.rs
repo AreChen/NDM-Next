@@ -226,7 +226,7 @@ impl Scheduler {
         ) {
             return Err(Error::InvalidState);
         }
-        if remove_partial && task.state != TaskState::Completed {
+        if remove_partial {
             crate::cache::remove_partial(
                 task.cache_directory
                     .as_deref()
