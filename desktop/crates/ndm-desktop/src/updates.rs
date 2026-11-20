@@ -127,6 +127,13 @@ fn asset_name(version: &Version) -> String {
             "x64"
         };
         format!("NDM-Next-{version}-macos-{arch}.dmg")
+    } else if cfg!(target_os = "linux") {
+        let arch = if cfg!(target_arch = "aarch64") {
+            "arm64"
+        } else {
+            "x64"
+        };
+        format!("NDM-Next-{version}-linux-{arch}.tar.gz")
     } else {
         format!("NDM-Next-Setup-{version}-x64.exe")
     }
@@ -436,7 +443,21 @@ pub(crate) async fn install(update: ReadyUpdate, _data_dir: PathBuf) -> Result<(
             Err(UpdateFailure::Installer(status.code()))
         }
     }
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(target_os = "linux")]
+    {
+        let directory = update.path.parent().ok_or(UpdateFailure::Launch(None))?;
+        let status = tokio::process::Command::new("xdg-open")
+            .arg(directory)
+            .status()
+            .await
+            .map_err(|error| UpdateFailure::Launch(error.raw_os_error()))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(UpdateFailure::Installer(status.code()))
+        }
+    }
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     {
         Err(UpdateFailure::Launch(None))
     }

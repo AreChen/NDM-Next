@@ -7,11 +7,33 @@ use std::{
 use ndm_host::{read_frame, write_frame};
 use serde_json::{Value, json};
 
+const HOST_BINARY: &str = env!("CARGO_BIN_EXE_ndm-host");
+
+fn host_fixture_directory() -> tempfile::TempDir {
+    #[cfg(target_os = "linux")]
+    {
+        // Linux can reject a just-copied executable while a parallel spawn
+        // still has its writable file descriptor. Stage on the build volume
+        // so fixtures can link the existing, already closed binary instead.
+        let parent = std::path::Path::new(HOST_BINARY).parent().unwrap();
+        tempfile::tempdir_in(parent).unwrap()
+    }
+    #[cfg(not(target_os = "linux"))]
+    tempfile::tempdir().unwrap()
+}
+
+fn stage_host(path: &std::path::Path) {
+    #[cfg(target_os = "linux")]
+    fs::hard_link(HOST_BINARY, path).unwrap();
+    #[cfg(not(target_os = "linux"))]
+    fs::copy(HOST_BINARY, path).unwrap();
+}
+
 #[test]
 fn rewriting_manifest_preserves_existing_valid_origins_for_the_same_host() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = host_fixture_directory();
     let host = dir.path().join("ndm-host.exe");
-    fs::copy(env!("CARGO_BIN_EXE_ndm-host"), &host).unwrap();
+    stage_host(&host);
     let first = "caegebfdojcdlkkiaiokeoadefdooamd";
     let added = "pdkhpmalkocjfkfopjhmopikegpmcbcf";
     let edge = "hiblommiheggidolemmnnlocmocebckp";
@@ -68,15 +90,15 @@ fn rewriting_manifest_preserves_existing_valid_origins_for_the_same_host() {
 
 #[test]
 fn relocating_integration_preserves_only_the_identified_installations_valid_origins() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = host_fixture_directory();
     let old = dir.path().join("previous-install");
     let new = dir.path().join("new-install");
     fs::create_dir_all(&old).unwrap();
     fs::create_dir_all(&new).unwrap();
     let old_host = old.join("ndm-host.exe");
     let host = new.join("ndm-host.exe");
-    fs::copy(env!("CARGO_BIN_EXE_ndm-host"), &old_host).unwrap();
-    fs::copy(env!("CARGO_BIN_EXE_ndm-host"), &host).unwrap();
+    stage_host(&old_host);
+    stage_host(&host);
     let old_desktop = old.join("ndm-desktop.exe");
     fs::write(&old_desktop, b"identified desktop installation").unwrap();
     let name = "com.ndmnext.host";
@@ -158,11 +180,11 @@ fn relocating_integration_preserves_only_the_identified_installations_valid_orig
 
 #[test]
 fn host_process_exchanges_framed_messages_and_reopens_durable_storage() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = host_fixture_directory();
     let bin = dir.path().join("bin");
     fs::create_dir_all(&bin).unwrap();
     let host_exe = bin.join("ndm-host.exe");
-    fs::copy(env!("CARGO_BIN_EXE_ndm-host"), &host_exe).unwrap();
+    stage_host(&host_exe);
     // This test only prepares and aborts: a sentinel stands in for the app.
     fs::write(
         bin.join(if cfg!(windows) {
@@ -173,9 +195,16 @@ fn host_process_exchanges_framed_messages_and_reopens_durable_storage() {
         b"sentinel",
     )
     .unwrap();
-    let mut child = Command::new(host_exe)
-        .env("LOCALAPPDATA", dir.path().join("profile"))
-        .env("HOME", dir.path().join("home"))
+    let mut command = Command::new(host_exe);
+    command.env("LOCALAPPDATA", dir.path().join("profile"));
+    #[cfg(target_os = "macos")]
+    command.env("HOME", dir.path().join("home"));
+    #[cfg(target_os = "linux")]
+    command
+        .env("XDG_DATA_HOME", dir.path().join("data"))
+        .env("XDG_CONFIG_HOME", dir.path().join("config"))
+        .env("XDG_RUNTIME_DIR", dir.path());
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

@@ -5,18 +5,18 @@ use std::{
 
 /// Lifetime reservation for an idle desktop update. Dropping it reopens admission.
 pub struct DesktopUpdateGuard {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     _file: std::fs::File,
     #[cfg(windows)]
     _marker: std::os::windows::io::OwnedHandle,
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     namespace: String,
 }
 
 // Unlike the existing singleton protocol, these new names normalize aliases so
 // Store handles opening the same profile share one admission boundary. Keep the
 // legacy singleton/shutdown/installer namespace algorithm unchanged.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn coordination_namespace(data_dir: &Path) -> String {
     let path = std::fs::canonicalize(data_dir)
         .or_else(|_| std::path::absolute(data_dir))
@@ -31,7 +31,7 @@ fn coordination_namespace(data_dir: &Path) -> String {
     desktop_instance_namespace(Path::new(&*text))
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn update_namespace(data_dir: &Path) -> String {
     format!("{}-updating", coordination_namespace(data_dir))
 }
@@ -53,21 +53,21 @@ pub fn with_desktop_startup<T>(
 }
 
 pub(crate) struct WorkAdmission {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     _file: std::fs::File,
     #[cfg(windows)]
     handle: std::os::windows::io::OwnedHandle,
     #[cfg(windows)]
     _same_thread: std::marker::PhantomData<*mut ()>,
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     _lock: std::sync::MutexGuard<'static, ()>,
 }
 
 impl WorkAdmission {
     pub(crate) fn acquire(data_dir: &Path) -> std::io::Result<Self> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
-            let file = crate::macos_instance::lock_file(data_dir, "admission.lock")?;
+            let file = crate::unix_instance::lock_file(data_dir, "admission.lock")?;
             file.lock()?;
             Ok(Self { _file: file })
         }
@@ -100,7 +100,7 @@ impl WorkAdmission {
                 _ => Err(std::io::Error::last_os_error()),
             }
         }
-        #[cfg(not(any(windows, target_os = "macos")))]
+        #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
         {
             let _ = data_dir;
             Ok(Self {
@@ -123,13 +123,13 @@ impl Drop for WorkAdmission {
     }
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 static PORTABLE_ADMISSION: std::sync::Mutex<()> = std::sync::Mutex::new(());
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 static PORTABLE_RESERVATIONS: std::sync::Mutex<std::collections::BTreeSet<String>> =
     std::sync::Mutex::new(std::collections::BTreeSet::new());
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 impl Drop for DesktopUpdateGuard {
     fn drop(&mut self) {
         PORTABLE_RESERVATIONS
@@ -143,16 +143,16 @@ impl Drop for DesktopUpdateGuard {
 pub(crate) fn publish_update_reservation(
     data_dir: &Path,
 ) -> std::io::Result<Option<DesktopUpdateGuard>> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
-        let file = crate::macos_instance::lock_file(data_dir, "updating.lock")?;
+        let file = crate::unix_instance::lock_file(data_dir, "updating.lock")?;
         match file.try_lock() {
             Ok(()) => Ok(Some(DesktopUpdateGuard { _file: file })),
             Err(std::fs::TryLockError::WouldBlock) => Ok(None),
             Err(std::fs::TryLockError::Error(error)) => Err(error),
         }
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     let namespace = update_namespace(data_dir);
     #[cfg(windows)]
     {
@@ -172,7 +172,7 @@ pub(crate) fn publish_update_reservation(
         let marker = unsafe { std::os::windows::io::OwnedHandle::from_raw_handle(raw) };
         Ok((!existed).then_some(DesktopUpdateGuard { _marker: marker }))
     }
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     {
         let mut reservations = PORTABLE_RESERVATIONS
             .lock()
@@ -213,7 +213,7 @@ pub fn windows_installer_active(data_dir: &Path) -> std::io::Result<bool> {
     named_mutex_exists(&desktop_installation_namespace(data_dir))
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 pub fn desktop_installation_active(data_dir: &Path) -> std::io::Result<bool> {
     Ok(PORTABLE_RESERVATIONS
         .lock()
@@ -359,9 +359,9 @@ pub fn wake_desktop(data_dir: &Path) -> std::io::Result<()> {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn desktop_installation_active(data_dir: &Path) -> std::io::Result<bool> {
-    let file = crate::macos_instance::lock_file(data_dir, "updating.lock")?;
+    let file = crate::unix_instance::lock_file(data_dir, "updating.lock")?;
     match file.try_lock() {
         Ok(()) => Ok(false),
         Err(std::fs::TryLockError::WouldBlock) => Ok(true),
@@ -369,7 +369,7 @@ pub fn desktop_installation_active(data_dir: &Path) -> std::io::Result<bool> {
     }
 }
 
-#[cfg(target_os = "macos")]
-pub use crate::macos_instance::{
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub use crate::unix_instance::{
     desktop_is_running, request_desktop_shutdown, wait_for_desktop_ready, wake_desktop,
 };

@@ -34,6 +34,10 @@ jobs:
     uses: ./.github/workflows/macos-build.yml
     secrets: inherit
 
+  linux:
+    if: ${{ !inputs.artifact_run_id }}
+    uses: ./.github/workflows/linux-build.yml
+
   extension:
     name: Package companion extension
     if: ${{ !inputs.artifact_run_id }}
@@ -56,8 +60,8 @@ jobs:
 
   publish:
     name: Publish GitHub release
-    needs: [windows, macos, extension]
-    if: ${{ !cancelled() && (inputs.artifact_run_id || (needs.windows.result == 'success' && needs.macos.result == 'success' && needs.extension.result == 'success')) }}
+    needs: [windows, macos, linux, extension]
+    if: ${{ !cancelled() && (inputs.artifact_run_id || (needs.windows.result == 'success' && needs.macos.result == 'success' && needs.linux.result == 'success' && needs.extension.result == 'success')) }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -100,6 +104,13 @@ jobs:
           path: release-assets
           github-token: ${{ github.token }}
           run-id: ${{ inputs.artifact_run_id || github.run_id }}
+      - name: Download Linux artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: ndm-next-linux-x64
+          path: release-assets
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.artifact_run_id || github.run_id }}
       - name: Validate release version and checksums
         run: |
           set -euo pipefail
@@ -110,6 +121,10 @@ jobs:
           [[ "${#dmgs[@]}" -eq 2 ]]
           [[ -f "release-assets/NDM-Next-$version-macos-arm64.dmg" ]]
           [[ -f "release-assets/NDM-Next-$version-macos-x64.dmg" ]]
+          linux="NDM-Next-$version-linux-x64.tar.gz"
+          [[ -f "release-assets/$linux" && -f "release-assets/$linux.sha256" ]]
+          (cd release-assets && sha256sum --check "$linux.sha256")
+          tar -tzf "release-assets/$linux" > /dev/null
           extension_version=$(python3 -c 'import json; print(json.load(open("extension/manifest.json"))["version"])')
           extension="release-assets/NDM-Next-Extension-Desktop-$version-v$extension_version.zip"
           [[ -f "$extension" && -f "$extension.sha256" ]]
@@ -121,13 +136,13 @@ jobs:
           for dmg in "${dmgs[@]}"; do
             [[ -f "$dmg.sha256" ]]
           done
-          (cd release-assets && sha256sum ./*.exe ./*.dmg ./*.zip > SHA256SUMS)
+          (cd release-assets && sha256sum ./*.exe ./*.dmg ./*.tar.gz ./*.zip > SHA256SUMS)
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mapfile -t assets < <(find release-assets -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.zip' -o -name '*.sha256' -o -name SHA256SUMS \) -print)
+          mapfile -t assets < <(find release-assets -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' -o -name SHA256SUMS \) -print)
           gh release create "$RELEASE_TAG" "${assets[@]}" \
             --title "NDM Next ${RELEASE_TAG#desktop-v}" \
             --verify-tag \

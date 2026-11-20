@@ -1,18 +1,25 @@
 use std::path::{Path, PathBuf};
 
 fn legacy_download_directory() -> PathBuf {
-    std::env::var_os(if cfg!(target_os = "macos") {
-        "HOME"
-    } else {
-        "USERPROFILE"
-    })
-    .map(PathBuf::from)
-    .filter(|path| path.is_absolute())
-    .unwrap_or_else(std::env::temp_dir)
-    .join("Downloads")
+    #[cfg(target_os = "linux")]
+    {
+        linux_home().join("Downloads")
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        std::env::var_os(if cfg!(target_os = "macos") {
+            "HOME"
+        } else {
+            "USERPROFILE"
+        })
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(std::env::temp_dir)
+        .join("Downloads")
+    }
 }
 
-/// Resolve the configured Windows known folder, including redirected Downloads.
+/// Resolve the system's configured Downloads folder.
 pub fn system_download_directory() -> PathBuf {
     #[cfg(windows)]
     {
@@ -55,6 +62,12 @@ pub fn system_download_directory() -> PathBuf {
             return path;
         }
     }
+    #[cfg(target_os = "linux")]
+    if let Ok(config) = std::fs::read_to_string(linux_config_directory().join("user-dirs.dirs"))
+        && let Some(path) = linux_download_directory(&config, &linux_home())
+    {
+        return path;
+    }
     legacy_download_directory()
 }
 
@@ -95,7 +108,11 @@ pub fn application_data_directory() -> PathBuf {
     {
         macos_home().join("Library/Application Support/NDM Next")
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        linux_base_directory("XDG_DATA_HOME", ".local/share").join("ndm-next")
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
@@ -111,12 +128,69 @@ pub(crate) fn macos_home() -> PathBuf {
         .expect("macOS requires an absolute HOME directory")
 }
 
+#[cfg(target_os = "linux")]
+fn linux_home() -> PathBuf {
+    std::env::home_dir()
+        .filter(|path| path.is_absolute())
+        .expect("Linux requires an absolute user home directory")
+}
+
+#[cfg(target_os = "linux")]
+fn linux_base_directory(variable: &str, default: &str) -> PathBuf {
+    std::env::var_os(variable)
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| linux_home().join(default))
+}
+
+#[cfg(target_os = "linux")]
+pub fn linux_config_directory() -> PathBuf {
+    linux_base_directory("XDG_CONFIG_HOME", ".config")
+}
+
+#[cfg(target_os = "linux")]
+fn linux_download_directory(config: &str, home: &Path) -> Option<PathBuf> {
+    let encoded = config.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("XDG_DOWNLOAD_DIR=")?
+            .trim()
+            .strip_prefix('"')?
+            .strip_suffix('"')
+    })?;
+    let mut expanded = String::new();
+    let mut chars = encoded.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            let escaped = chars.next()?;
+            if !matches!(escaped, '\\' | '"' | '$' | '`') {
+                expanded.push('\\');
+            }
+            expanded.push(escaped);
+        } else {
+            expanded.push(ch);
+        }
+    }
+    let path = if encoded == "$HOME" {
+        home.to_owned()
+    } else if encoded.starts_with("$HOME/") {
+        let suffix = expanded.strip_prefix("$HOME/")?.trim_start_matches('/');
+        home.join(suffix)
+    } else {
+        PathBuf::from(expanded)
+    };
+    path.is_absolute().then_some(path)
+}
+
 pub fn default_cache_directory() -> PathBuf {
     #[cfg(target_os = "macos")]
     {
         macos_home().join("Library/Caches/com.ndmnext.desktop")
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        linux_base_directory("XDG_CACHE_HOME", ".cache").join("ndm-next")
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
@@ -157,5 +231,21 @@ mod tests {
             (system, true)
         );
         assert!(system_download_directory().is_absolute());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn xdg_download_path_keeps_escaped_characters_and_rejects_relative_paths() {
+        let home = Path::new("/home/test");
+        let config = r#"XDG_DOWNLOAD_DIR="$HOME/Media Files/\$downloads""#;
+        assert_eq!(
+            super::linux_download_directory(config, home),
+            Some(home.join("Media Files/$downloads"))
+        );
+        assert_eq!(
+            super::linux_download_directory(r#"XDG_DOWNLOAD_DIR="/mnt/data""#, home),
+            Some("/mnt/data".into())
+        );
+        assert!(super::linux_download_directory(r#"XDG_DOWNLOAD_DIR="relative""#, home).is_none());
     }
 }

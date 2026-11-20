@@ -80,7 +80,7 @@ pub(crate) struct Desktop {
     update_cache_lease: Option<tokio::sync::OwnedMutexGuard<()>>,
     active_input: Entity<InputState>,
     connections_input: Entity<InputState>,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     extension_id_input: Entity<InputState>,
     speed_input: Entity<InputState>,
     proxy_url_input: Entity<InputState>,
@@ -118,7 +118,7 @@ pub(crate) struct Desktop {
     inspecting_hls: bool,
     #[cfg(any(windows, target_os = "macos"))]
     tray: Option<crate::tray::Tray>,
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     startup_enabled: bool,
     section: Section,
     tasks: Vec<Task>,
@@ -146,9 +146,9 @@ pub(crate) struct DesktopServices {
     pub preferences_path: PathBuf,
     pub prepared_at_launch: HashSet<TaskId>,
     #[cfg(any(windows, target_os = "macos"))]
-    pub ui_sender: tokio::sync::mpsc::UnboundedSender<crate::tray::Command>,
-    #[cfg(any(windows, target_os = "macos"))]
-    pub commands: tokio::sync::mpsc::UnboundedReceiver<crate::tray::Command>,
+    pub ui_sender: tokio::sync::mpsc::UnboundedSender<crate::instance::Command>,
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+    pub commands: tokio::sync::mpsc::UnboundedReceiver<crate::instance::Command>,
 }
 
 impl Desktop {
@@ -166,7 +166,7 @@ impl Desktop {
             prepared_at_launch,
             #[cfg(any(windows, target_os = "macos"))]
             ui_sender,
-            #[cfg(any(windows, target_os = "macos"))]
+            #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             mut commands,
         } = services;
         cx.bind_keys([KeyBinding::new(
@@ -215,7 +215,7 @@ impl Desktop {
         let connections_input = cx.new(|cx| {
             InputState::new(window, cx).default_value(preferences.max_connections.to_string())
         });
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         let extension_id_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("chrome://extensions → ID"));
         let speed_input = cx.new(|cx| {
@@ -260,7 +260,7 @@ impl Desktop {
             preferences.sidebar_collapsed,
             f32::from(preferences.sidebar_width),
         );
-        #[cfg(any(windows, target_os = "macos"))]
+        #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         let startup_enabled = crate::startup::enabled().unwrap_or(false);
         #[cfg(any(windows, target_os = "macos"))]
         let tray = {
@@ -278,21 +278,36 @@ impl Desktop {
                 Err(_) => None,
             }
         };
-        #[cfg(any(windows, target_os = "macos"))]
+        #[cfg(target_os = "linux")]
+        {
+            window.on_window_should_close(cx, |_, cx| {
+                cx.quit();
+                false
+            });
+            if std::env::args_os().any(|arg| arg == "--background" || arg == "--handoff") {
+                cx.defer_in(window, |_, window, _| window.minimize_window());
+            }
+        }
+        #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         {
             let runtime = runtime.clone();
             let scheduler = scheduler.clone();
             cx.spawn_in(window, async move |view, cx| {
                 while let Some(command) = commands.recv().await {
                     match command {
-                        crate::tray::Command::Show => {
+                        crate::instance::Command::Show => {
+                            #[cfg(any(windows, target_os = "macos"))]
                             let _ =
                                 view.update_in(cx, |_, window, cx| crate::tray::show(window, cx));
+                            #[cfg(target_os = "linux")]
+                            let _ = view.update_in(cx, |_, window, cx| {
+                                crate::chrome::activate_window(window, cx);
+                            });
                         }
-                        crate::tray::Command::Refresh => {
+                        crate::instance::Command::Refresh => {
                             let _ = view.update(cx, |this, cx| this.discover_new_tasks(cx));
                         }
-                        crate::tray::Command::Quit => {
+                        crate::instance::Command::Quit => {
                             let scheduler = scheduler.clone();
                             let _ = runtime
                                 .spawn(async move { scheduler.shutdown().await })
@@ -396,7 +411,7 @@ impl Desktop {
             update_cache_lease: None,
             active_input,
             connections_input,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             extension_id_input,
             speed_input,
             proxy_url_input,
@@ -434,7 +449,7 @@ impl Desktop {
             inspecting_hls: false,
             #[cfg(any(windows, target_os = "macos"))]
             tray,
-            #[cfg(any(windows, target_os = "macos"))]
+            #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             startup_enabled,
             section: Section::All,
             tasks,
@@ -938,7 +953,7 @@ impl Desktop {
         }
         cx.notify();
     }
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     fn toggle_startup(&mut self, cx: &mut Context<Self>) {
         let enabled = !self.startup_enabled;
         match crate::startup::set(enabled) {
@@ -963,7 +978,7 @@ impl Desktop {
         }
         cx.notify();
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn repair_browser_integration(&mut self, cx: &mut Context<Self>) {
         let id = self.extension_id_input.read(cx).value().trim().to_owned();
         if id.len() != 32 || !id.bytes().all(|byte| (b'a'..=b'p').contains(&byte)) {
@@ -978,7 +993,7 @@ impl Desktop {
             return;
         }
         let result = std::env::current_exe().and_then(|path| {
-            ndm_host::macos::register_browser_hosts(&path.with_file_name("ndm-host"), &[id])
+            ndm_host::browser::register_browser_hosts(&path.with_file_name("ndm-host"), &[id])
         });
         let message = if result.is_ok() {
             self.text(

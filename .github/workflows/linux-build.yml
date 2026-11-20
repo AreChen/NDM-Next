@@ -1,0 +1,63 @@
+name: Linux build
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  push:
+    branches:
+      - main
+      - 'codex/**'
+    paths:
+      - '.github/workflows/linux-build.yml'
+      - 'desktop/**'
+      - 'LICENSE'
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux x64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4f15a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config libssl-dev libfontconfig1-dev libfreetype-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libxcb1-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxcb-xkb-dev \
+            xvfb xauth ffmpeg xdg-utils libglib2.0-bin libvulkan1 mesa-vulkan-drivers
+      - name: Install Rust and license tool
+        run: |
+          rustup toolchain install 1.100.0 --profile minimal --target x86_64-unknown-linux-gnu
+          cargo +1.100.0 install cargo-about --version 0.9.3 --features cli --locked
+      - name: Run workspace tests
+        working-directory: desktop
+        env:
+          CARGO_PROFILE_TEST_DEBUG: '0'
+          NDM_TEST_FFMPEG_DIR: /usr/bin
+        run: |
+          export XDG_CONFIG_HOME="$RUNNER_TEMP/ndm-linux/config"
+          export XDG_DATA_HOME="$RUNNER_TEMP/ndm-linux/data"
+          export XDG_CACHE_HOME="$RUNNER_TEMP/ndm-linux/cache"
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/ndm-linux/run"
+          install -d -m 700 "$XDG_RUNTIME_DIR"
+          xvfb-run -a cargo +1.100.0 test --locked --workspace
+          cargo +1.100.0 test --locked -p ndm-core --test hls --test dash -- --ignored
+          cargo +1.100.0 test --locked -p ndm-core --lib local_remux_reports_observed_time_against_local_duration -- --ignored
+      - name: Build Linux archive
+        run: bash desktop/packaging/linux/build.sh "$RUNNER_TEMP/ndm-linux-dist"
+      - name: Upload Linux archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ndm-next-linux-x64
+          path: |
+            ${{ runner.temp }}/ndm-linux-dist/*.tar.gz
+            ${{ runner.temp }}/ndm-linux-dist/*.sha256
+          if-no-files-found: error
+          retention-days: 3

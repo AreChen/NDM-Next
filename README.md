@@ -2,10 +2,10 @@
   <img src="extension/icons/icon-128.png" width="96" height="96" alt="NDM Next logo">
   <h1>NDM Next</h1>
   <p><strong>High performance · Memory safety · Modern design</strong></p>
-  <p>A download manager for Windows and macOS, built with Rust and a polished native GPUI interface.</p>
+  <p>A download manager for Windows, macOS, and Linux, built with Rust and a polished native GPUI interface.</p>
   <p>
     <a href="https://github.com/AreChen/NDM-Next/releases/latest"><img src="https://img.shields.io/github/v/release/AreChen/NDM-Next?label=download&amp;color=7c61ff" alt="Latest release"></a>
-    <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-168aad" alt="Windows and macOS">
+    <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-168aad" alt="Windows, macOS, and Linux">
     <a href="https://github.com/AreChen/NDM-Next/actions/workflows/release.yml"><img src="https://github.com/AreChen/NDM-Next/actions/workflows/release.yml/badge.svg" alt="Desktop release build"></a>
     <a href="LICENSE"><img src="https://img.shields.io/github/license/AreChen/NDM-Next?color=34b8a3" alt="MIT license"></a>
   </p>
@@ -33,8 +33,9 @@ Get your installer from [**GitHub Releases →**](https://github.com/AreChen/NDM
 | Windows · x64 | `NDM-Next-Setup-*-x64.exe` | Run the installer. |
 | macOS 12+ · Apple Silicon | `NDM-Next-*-macos-arm64.dmg` | Drag **NDM Next** to **Applications**. |
 | macOS 12+ · Intel | `NDM-Next-*-macos-x64.dmg` | Drag **NDM Next** to **Applications**. |
+| Linux · x86-64 | `NDM-Next-*-linux-x64.tar.gz` | Install the [Linux dependencies](desktop/packaging/linux/README.md), extract the archive, and run `ndm-desktop`. |
 
-The app checks GitHub for updates. Click **Upgrade** to download a verified package: Windows installs when idle; macOS opens the DMG for app replacement.
+The app checks GitHub for updates. Click **Upgrade** to download a verified package. Windows installs when idle, macOS opens the DMG, and Linux opens the folder containing the archive.
 
 New profiles use 16 download connections and startup at login. Existing saved choices are preserved.
 
@@ -44,14 +45,14 @@ Connect **Chrome, Edge or Brave** to capture downloads and discover webpage medi
 
 Each release includes its matching versioned extension ZIP. Follow the [extension installation guide](docs/extension-install.md).
 
-**Platform details:** [Windows](desktop/packaging/windows/README.md#browser-extension) · [macOS](desktop/packaging/macos/README.md#browser-extension). Select **NDM Next** as the extension backend. The extension also supports Neat Download Manager.
+**Platform details:** [Windows](desktop/packaging/windows/README.md#browser-extension) · [macOS](desktop/packaging/macos/README.md#browser-extension) · [Linux](desktop/packaging/linux/README.md#browser-extension). Select **NDM Next** as the extension backend. The extension also supports Neat Download Manager.
 
 <details>
 <summary><strong>Build & release</strong></summary>
 
-GitHub Actions builds the Windows installer and both macOS DMGs. Pushing a `desktop-vX.Y.Z` tag runs the [release workflow](.github/workflows/release.yml), which publishes the packages and matching companion extension after all builds and tests succeed.
+GitHub Actions builds the Windows installer, both macOS DMGs, and the Linux archive. Pushing a `desktop-vX.Y.Z` tag runs the [release workflow](.github/workflows/release.yml), which publishes the packages and matching companion extension after all builds and tests succeed.
 
-Local build guides: [Windows](desktop/packaging/windows/README.md) · [macOS](desktop/packaging/macos/README.md).
+Local build guides: [Windows](desktop/packaging/windows/README.md) · [macOS](desktop/packaging/macos/README.md) · [Linux](desktop/packaging/linux/README.md).
 
 </details>
 

@@ -1,4 +1,4 @@
-use crate::preferences::Language;
+use crate::{instance::Command, preferences::Language};
 use gpui_kit::Window;
 #[cfg(windows)]
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -12,13 +12,6 @@ use windows_sys::Win32::{
     Foundation::HWND,
     UI::WindowsAndMessaging::{SW_HIDE, SW_SHOW, SetForegroundWindow, ShowWindow},
 };
-
-#[derive(Clone, Copy)]
-pub enum Command {
-    Show,
-    Refresh,
-    Quit,
-}
 
 pub struct Tray {
     _icon: TrayIcon,

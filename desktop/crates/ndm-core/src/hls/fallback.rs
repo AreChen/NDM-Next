@@ -1,4 +1,4 @@
-//! Remux finite, validated HLS media using local, network-disabled media tools.
+//! Remux finite, validated HLS media using local files.
 
 use std::path::Path;
 

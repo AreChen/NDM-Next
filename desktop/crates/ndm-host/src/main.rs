@@ -60,7 +60,7 @@ fn run() -> io::Result<()> {
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn();
-            #[cfg(any(windows, target_os = "macos"))]
+            #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             {
                 launched.is_ok()
                     && ndm_core::wait_for_desktop_ready(
@@ -69,7 +69,7 @@ fn run() -> io::Result<()> {
                     )
                     .unwrap_or(false)
             }
-            #[cfg(not(any(windows, target_os = "macos")))]
+            #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
             {
                 launched.is_ok()
             }
@@ -88,7 +88,7 @@ fn run() -> io::Result<()> {
         {
             // Commit only after startup recovery finishes, then wake the scheduler.
             // A retry is safe if the desktop exits between these two operations.
-            #[cfg(any(windows, target_os = "macos"))]
+            #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             if ndm_core::wake_desktop(&data_dir).is_err() {
                 result = json!({"ok":false,"error":"desktop_unavailable"});
             }
@@ -223,13 +223,13 @@ fn old_installation_host(desktop: &std::path::Path) -> io::Result<Option<PathBuf
 
 fn main() {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     if arguments
         .first()
         .is_some_and(|argument| argument == "--register-browser-hosts")
     {
         let result = std::env::current_exe()
-            .and_then(|host| ndm_host::macos::register_browser_hosts(&host, &arguments[1..]));
+            .and_then(|host| ndm_host::browser::register_browser_hosts(&host, &arguments[1..]));
         if let Err(error) = &result {
             eprintln!("{error}");
         }

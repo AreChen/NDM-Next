@@ -1,5 +1,5 @@
 //! Shared local-only media inspection and remuxing. No remote address or header is
-//! passed to a media tool; installed tools are built without network protocols.
+//! passed to a media tool. Only local file access is allowed for media inputs.
 
 use std::{
     path::{Path, PathBuf},
@@ -41,10 +41,15 @@ impl LocalTools {
     }
 
     pub(crate) fn installed_directory() -> Option<PathBuf> {
-        std::env::current_exe()
+        let bundled = std::env::current_exe()
             .ok()?
             .parent()
-            .map(|directory| directory.join("ffmpeg"))
+            .map(|directory| directory.join("ffmpeg"))?;
+        #[cfg(target_os = "linux")]
+        if !bundled.join("ffmpeg").is_file() || !bundled.join("ffprobe").is_file() {
+            return Some(PathBuf::from("/usr/bin"));
+        }
+        Some(bundled)
     }
 }
 
@@ -339,6 +344,11 @@ pub(crate) async fn remux_local(
                 header[..4] == [0x1a, 0x45, 0xdf, 0xa3]
             };
         if valid {
+            // FFmpeg can report the last packet timestamp rather than the
+            // end of its duration. The validated output supplies that end.
+            if let Some(duration) = metadata.duration_ms {
+                progress.set_finalized_ms(duration);
+            }
             return Ok((output, actual.len()));
         }
     }

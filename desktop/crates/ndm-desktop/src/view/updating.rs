@@ -267,8 +267,8 @@ impl Desktop {
             return;
         }
         let ready = ready.clone();
-        #[cfg(target_os = "macos")]
-        let macos_release = ready.release.clone();
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        let manual_release = ready.release.clone();
         self.update_state = UpdateState::Installing;
         self.install_wait = None;
         let runtime = self.runtime.clone();
@@ -299,9 +299,17 @@ impl Desktop {
                             "更新磁盘镜像已打开。退出 NDM Next，然后将新版拖入 Applications 替换旧版。",
                             "Update disk image opened. Quit NDM Next, then drag the new app into Applications to replace it.",
                         ).into(), cx);
-                        UpdateState::Available(macos_release)
+                        UpdateState::Available(manual_release)
                     }
-                    #[cfg(not(target_os = "macos"))]
+                    #[cfg(target_os = "linux")]
+                    {
+                        this.set_notice(this.text(
+                            "新版压缩包已校验。退出 NDM Next，解压后运行新版。",
+                            "Update archive verified. Quit NDM Next, extract the archive, and run the new version.",
+                        ).into(), cx);
+                        UpdateState::Available(manual_release)
+                    }
+                    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
                     {
                         // The installer owns its guard; exit so replacement can finish.
                         cx.quit();

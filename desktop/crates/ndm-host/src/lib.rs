@@ -273,5 +273,8 @@ impl Host {
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[path = "browser_unix.rs"]
+pub mod browser;
 #[cfg(target_os = "macos")]
-pub mod macos;
+pub use browser as macos;

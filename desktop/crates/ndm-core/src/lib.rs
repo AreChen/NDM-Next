@@ -1,6 +1,8 @@
 mod cache;
 mod directories;
 pub use cache::CacheReport;
+#[cfg(target_os = "linux")]
+pub use directories::linux_config_directory;
 pub use directories::{
     application_data_directory, default_cache_directory, resolve_download_directory,
     system_download_directory,
@@ -37,7 +39,7 @@ pub use http::{
 };
 #[cfg(windows)]
 pub use installation::shutdown_desktop_installation;
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 pub use instance::desktop_is_running;
 #[cfg(windows)]
 pub use instance::windows_installer_active;
@@ -45,7 +47,7 @@ pub use instance::{
     DesktopUpdateGuard, desktop_installation_active, desktop_installation_namespace,
     desktop_instance_namespace, with_desktop_startup,
 };
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 pub use instance::{request_desktop_shutdown, wait_for_desktop_ready, wake_desktop};
 pub use model::{NewTask, Task, TaskId, TaskOptions, TaskState};
 pub use scheduler::{Scheduler, SchedulerEvent, SchedulerOptions};
@@ -129,14 +131,16 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Encrypt data for the current Windows user using the same protection as task credentials.
+/// Encrypt data for the current user using the same protection as task credentials.
 pub fn protect_user_data(data: &[u8]) -> Result<Vec<u8>> {
     secrets::protect(data)
 }
-/// Decrypt data previously protected for the current Windows user.
+/// Decrypt data previously protected for the current user.
 pub fn unprotect_user_data(data: &[u8]) -> Result<Vec<u8>> {
     secrets::unprotect(data)
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub mod unix_instance;
 #[cfg(target_os = "macos")]
-pub mod macos_instance;
+pub use unix_instance as macos_instance;

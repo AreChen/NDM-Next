@@ -107,6 +107,8 @@ pub(crate) const TOOLBAR_HEIGHT: f32 = 48.;
 
 pub(crate) fn window_options() -> WindowOptions {
     WindowOptions {
+        #[cfg(target_os = "linux")]
+        app_id: Some("com.ndmnext.desktop".into()),
         titlebar: Some(TitlebarOptions {
             traffic_light_position: None,
             ..TitleBar::title_bar_options()
@@ -125,6 +127,7 @@ pub(crate) fn main_toolbar(
 ) -> TitleBar {
     let tone = tone.into();
     let bar = TitleBar::new()
+        .on_close_window(|_, _, cx| cx.quit())
         .pl_3()
         .h(px(TOOLBAR_HEIGHT))
         .bg(rgb(tone.rgb(0x111625, 0xf8f9fd)))

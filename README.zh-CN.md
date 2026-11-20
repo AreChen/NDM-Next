@@ -2,10 +2,10 @@
   <img src="extension/icons/icon-128.png" width="96" height="96" alt="NDM Next 标志">
   <h1>NDM Next</h1>
   <p><strong>高性能 · 内存安全 · 现代美观</strong></p>
-  <p>使用 Rust 与 GPUI 构建的 Windows、macOS 下载管理器，搭配精致的原生界面。</p>
+  <p>使用 Rust 与 GPUI 构建的 Windows、macOS 和 Linux 下载管理器，搭配精致的原生界面。</p>
   <p>
     <a href="https://github.com/AreChen/NDM-Next/releases/latest"><img src="https://img.shields.io/github/v/release/AreChen/NDM-Next?label=download&amp;color=7c61ff" alt="最新版本"></a>
-    <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-168aad" alt="支持 Windows 与 macOS">
+    <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-168aad" alt="支持 Windows、macOS 和 Linux">
     <a href="https://github.com/AreChen/NDM-Next/actions/workflows/release.yml"><img src="https://github.com/AreChen/NDM-Next/actions/workflows/release.yml/badge.svg" alt="桌面端发布构建"></a>
     <a href="LICENSE"><img src="https://img.shields.io/github/license/AreChen/NDM-Next?color=34b8a3" alt="MIT 许可证"></a>
   </p>
@@ -33,8 +33,9 @@
 | Windows · x64 | `NDM-Next-Setup-*-x64.exe` | 运行安装程序。 |
 | macOS 12+ · Apple Silicon | `NDM-Next-*-macos-arm64.dmg` | 将 **NDM Next** 拖入 **Applications**。 |
 | macOS 12+ · Intel | `NDM-Next-*-macos-x64.dmg` | 将 **NDM Next** 拖入 **Applications**。 |
+| Linux · x86-64 | `NDM-Next-*-linux-x64.tar.gz` | 安装 [Linux 运行依赖](desktop/packaging/linux/README.md)，解压并运行 `ndm-desktop`。 |
 
-应用通过 GitHub 检查更新。点击**升级**下载并校验安装包：Windows 在空闲时安装，macOS 打开 DMG，由用户替换应用。
+应用通过 GitHub 检查更新。点击**升级**下载并校验安装包。Windows 在空闲时安装，macOS 打开 DMG，Linux 打开压缩包所在目录。
 
 新安装默认使用 16 个下载连接并开启开机自启，已有设置会保留。
 
@@ -44,14 +45,14 @@
 
 每次 Release 均附带对应版本的扩展 ZIP。按照[扩展安装说明](docs/extension-install.md)连接浏览器。
 
-**平台说明：** [Windows](desktop/packaging/windows/README.md#browser-extension) · [macOS](desktop/packaging/macos/README.md#browser-extension)。扩展后端请选择 **NDM Next**；扩展也支持连接 Neat Download Manager。
+**平台说明** [Windows](desktop/packaging/windows/README.md#browser-extension) · [macOS](desktop/packaging/macos/README.md#browser-extension) · [Linux](desktop/packaging/linux/README.md#browser-extension)。扩展后端请选择 **NDM Next**。扩展也支持连接 Neat Download Manager。
 
 <details>
 <summary><strong>构建与发布</strong></summary>
 
-GitHub Actions 负责构建 Windows 安装包及 macOS 双架构 DMG。推送 `desktop-vX.Y.Z` 标签后，[发布工作流](.github/workflows/release.yml)会在各平台构建和测试成功后自动发布安装包及对应扩展。
+GitHub Actions 构建 Windows 安装包、macOS 双架构 DMG 和 Linux 压缩包。推送 `desktop-vX.Y.Z` 标签后，[发布工作流](.github/workflows/release.yml)会在各平台构建和测试成功后发布安装包及对应扩展。
 
-本地构建说明：[Windows](desktop/packaging/windows/README.md) · [macOS](desktop/packaging/macos/README.md)。
+本地构建说明 [Windows](desktop/packaging/windows/README.md) · [macOS](desktop/packaging/macos/README.md) · [Linux](desktop/packaging/linux/README.md)。
 
 </details>
 

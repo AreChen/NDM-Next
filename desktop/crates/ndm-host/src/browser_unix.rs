@@ -1,4 +1,4 @@
-//! Per-user Chromium native messaging registration, outside the signed app bundle.
+//! Per-user Chromium native messaging registration on macOS and Linux.
 use serde_json::Value;
 use std::{fs, io, path::Path};
 
@@ -8,19 +8,32 @@ pub const DEFAULT_IDS: [&str; 3] = [
     "hiblommiheggidolemmnnlocmocebckp",
     "cpapmfpgmpbpnjgibdgkfkdeblamiodm",
 ];
+#[cfg(target_os = "macos")]
 const BROWSERS: [&str; 4] = [
     "Google/Chrome",
     "Microsoft Edge",
     "BraveSoftware/Brave-Browser",
     "Chromium",
 ];
+#[cfg(target_os = "linux")]
+const BROWSERS: [&str; 4] = [
+    "google-chrome",
+    "microsoft-edge",
+    "BraveSoftware/Brave-Browser",
+    "chromium",
+];
 
 pub fn register_browser_hosts(executable: &Path, extra_ids: &[String]) -> io::Result<()> {
+    #[cfg(target_os = "macos")]
     let home = std::env::var_os("HOME").ok_or_else(|| io::Error::other("HOME is missing"))?;
-    register_in(Path::new(&home), executable, extra_ids)
+    #[cfg(target_os = "macos")]
+    let config = Path::new(&home).join("Library/Application Support");
+    #[cfg(target_os = "linux")]
+    let config = ndm_core::linux_config_directory();
+    register_in(&config, executable, extra_ids)
 }
 
-fn register_in(home: &Path, executable: &Path, extra_ids: &[String]) -> io::Result<()> {
+fn register_in(config: &Path, executable: &Path, extra_ids: &[String]) -> io::Result<()> {
     let executable = fs::canonicalize(executable)?;
     let mut ids: Vec<String> = DEFAULT_IDS.iter().map(|id| (*id).to_owned()).collect();
     for id in extra_ids {
@@ -31,10 +44,7 @@ fn register_in(home: &Path, executable: &Path, extra_ids: &[String]) -> io::Resu
     // Validate before touching any browser files.
     crate::native_manifest(HOST_NAME, &executable, &ids)?;
     for browser in BROWSERS {
-        let directory = home
-            .join("Library/Application Support")
-            .join(browser)
-            .join("NativeMessagingHosts");
+        let directory = config.join(browser).join("NativeMessagingHosts");
         fs::create_dir_all(&directory)?;
         let destination = directory.join(format!("{HOST_NAME}.json"));
         let mut browser_ids = ids.clone();
@@ -84,7 +94,6 @@ mod tests {
         for browser in BROWSERS {
             let file = home
                 .path()
-                .join("Library/Application Support")
                 .join(browser)
                 .join("NativeMessagingHosts/com.ndmnext.host.json");
             let manifest: Value = serde_json::from_slice(&fs::read(file).unwrap()).unwrap();

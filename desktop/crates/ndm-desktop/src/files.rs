@@ -98,10 +98,23 @@ fn open_path(path: &Path) -> io::Result<()> {
     }
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(target_os = "linux")]
+fn open_path(path: &Path) -> io::Result<()> {
+    if std::process::Command::new("xdg-open")
+        .arg(path)
+        .status()?
+        .success()
+    {
+        Ok(())
+    } else {
+        Err(io::Error::other("Linux could not open the path"))
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 fn open_path(_path: &Path) -> io::Result<()> {
     Err(io::Error::other(
-        "opening files is only supported on Windows",
+        "opening files is unavailable on this platform",
     ))
 }
 
@@ -128,7 +141,23 @@ fn recycle(path: &Path) -> io::Result<()> {
     }
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(target_os = "linux")]
+fn recycle(path: &Path) -> io::Result<()> {
+    if std::process::Command::new("gio")
+        .args(["trash", "--"])
+        .arg(path)
+        .status()?
+        .success()
+    {
+        Ok(())
+    } else {
+        Err(io::Error::other(
+            "Linux could not move the download to the trash",
+        ))
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 fn recycle(path: &Path) -> io::Result<()> {
     std::fs::remove_file(path)
 }

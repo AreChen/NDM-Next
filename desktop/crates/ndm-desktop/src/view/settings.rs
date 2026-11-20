@@ -322,7 +322,7 @@ impl Desktop {
                     .label(self.display_text(self.text("手动安装", "Manual install")))
                     .on_click(cx.listener(|_, _, _, cx| cx.open_url(EXTENSION_GUIDE_URL))),
             );
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         let extensions = extensions.child(
             div().w_full().flex().flex_col().gap_2()
                 .child(div().text_xs().text_color(rgb(muted)).child(self.text(
@@ -530,7 +530,7 @@ impl Desktop {
             cx,
         );
         let mut cards = vec![appearance, downloads, storage, proxy];
-        #[cfg(any(windows, target_os = "macos"))]
+        #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         {
             let startup = Switch::new("startup-toggle")
                 .small()
@@ -542,10 +542,14 @@ impl Desktop {
                     3,
                     IconName::Settings2,
                     self.text("启动与后台", "Startup and background"),
-                    self.text(
-                        "开机自启 · 关闭窗口后留在托盘",
-                        "Start on sign-in · close to system tray",
-                    ),
+                    if cfg!(target_os = "linux") {
+                        self.text("登录后最小化启动", "Start minimized on sign-in")
+                    } else {
+                        self.text(
+                            "开机自启 · 关闭窗口后留在托盘",
+                            "Start on sign-in · close to system tray",
+                        )
+                    },
                 ),
                 startup,
                 None,

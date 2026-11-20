@@ -23,6 +23,9 @@ mod startup;
 #[cfg(target_os = "macos")]
 #[path = "startup_macos.rs"]
 mod startup;
+#[cfg(target_os = "linux")]
+#[path = "startup_linux.rs"]
+mod startup;
 mod storage;
 #[cfg(any(windows, target_os = "macos"))]
 mod tray;
@@ -63,19 +66,19 @@ pub(crate) fn apply_theme(theme: Theme, cx: &mut App) {
 
 fn main() {
     let data_dir = ndm_core::application_data_directory();
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     if let Ok(executable) = std::env::current_exe() {
         let host = executable.with_file_name("ndm-host");
-        if let Err(error) = ndm_host::macos::register_browser_hosts(&host, &[]) {
+        if let Err(error) = ndm_host::browser::register_browser_hosts(&host, &[]) {
             eprintln!("Could not register browser integration: {error}");
         }
     }
     let background = std::env::args_os().any(|arg| arg == "--background");
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     let handoff = std::env::args_os().any(|arg| arg == "--handoff");
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     let show_existing = !background && !handoff;
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     let mut instance = match instance::Instance::acquire(&data_dir, show_existing) {
         Ok(Some(instance)) => instance,
         Ok(None) => return,
@@ -86,6 +89,8 @@ fn main() {
     let mut preferences = match Preferences::load(&preferences_path) {
         Ok(preferences) => preferences,
         Err(_) => {
+            #[cfg(target_os = "linux")]
+            eprintln!("Could not read NDM Next settings or decrypt stored credentials.");
             #[cfg(windows)]
             {
                 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -106,7 +111,7 @@ fn main() {
             return;
         }
     };
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     {
         let result = (|| -> std::io::Result<()> {
             let current = startup::enabled()?;
@@ -141,23 +146,23 @@ fn main() {
         let _guard = runtime.enter();
         Scheduler::start(store.clone(), preferences.scheduler_options()).expect("start scheduler")
     };
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     let (ui_sender, ui_commands) = tokio::sync::mpsc::unbounded_channel();
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     {
         let scheduler = scheduler.clone();
         let sender = ui_sender.clone();
         instance.on_wake(move || {
             scheduler.notify();
-            let _ = sender.send(tray::Command::Refresh);
+            let _ = sender.send(instance::Command::Refresh);
         });
         let sender = ui_sender.clone();
         instance.on_show(move || {
-            let _ = sender.send(tray::Command::Show);
+            let _ = sender.send(instance::Command::Show);
         });
         let sender = ui_sender.clone();
         instance.on_shutdown(move || {
-            let _ = sender.send(tray::Command::Quit);
+            let _ = sender.send(instance::Command::Quit);
         });
         instance.mark_ready().expect("signal desktop readiness");
     }
@@ -170,7 +175,7 @@ fn main() {
     });
     application.run(move |cx| {
         gpui_kit::init(cx);
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
             let runtime = runtime.clone();
             let scheduler = scheduler.clone();
@@ -187,17 +192,19 @@ fn main() {
         }
         apply_theme(preferences.theme, cx);
         let bounds = Bounds::centered(None, size(px(1000.), px(500.)), cx);
-        // A native host can cold-start the desktop just to receive a download.
-        // Keep the main window hidden until the user opens it.
+        // Keep browser-triggered launches in the background. Linux GPUI maps
+        // the main window during creation, then the view minimizes it.
         #[cfg(target_os = "macos")]
         let show_main = !handoff;
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
+        let show_main = !background && !handoff;
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         let show_main = true;
         gpui_kit::open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(size(px(880.), px(400.))),
-                show: show_main,
+                show: show_main || cfg!(target_os = "linux"),
                 focus: show_main,
                 ..chrome::window_options()
             },
@@ -215,7 +222,7 @@ fn main() {
                             prepared_at_launch,
                             #[cfg(any(windows, target_os = "macos"))]
                             ui_sender,
-                            #[cfg(any(windows, target_os = "macos"))]
+                            #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
                             commands: ui_commands,
                         },
                         window,

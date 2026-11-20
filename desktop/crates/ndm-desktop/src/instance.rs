@@ -370,8 +370,16 @@ mod platform {
 #[cfg(windows)]
 pub use platform::Instance;
 
-#[cfg(target_os = "macos")]
-#[path = "instance_macos.rs"]
-mod macos;
-#[cfg(target_os = "macos")]
-pub use macos::Instance;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[path = "instance_unix.rs"]
+mod unix;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub use unix::Instance;
+
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+#[derive(Clone, Copy)]
+pub enum Command {
+    Show,
+    Refresh,
+    Quit,
+}

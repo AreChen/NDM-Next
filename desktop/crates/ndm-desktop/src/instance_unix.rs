@@ -30,21 +30,14 @@ pub struct Instance {
 
 impl Instance {
     pub fn acquire(data_dir: &Path, show_existing: bool) -> io::Result<Option<Self>> {
-        ndm_core::with_desktop_startup(data_dir, || {
-            let lock = ndm_core::macos_instance::lock_file(data_dir, "desktop.lock")?;
+        let instance = ndm_core::with_desktop_startup(data_dir, || {
+            let lock = ndm_core::unix_instance::lock_file(data_dir, "desktop.lock")?;
             match lock.try_lock() {
                 Ok(()) => {}
-                Err(std::fs::TryLockError::WouldBlock) => {
-                    let _ = ndm_core::wait_for_desktop_ready(data_dir, Duration::from_secs(20));
-                    ndm_core::macos_instance::request(
-                        data_dir,
-                        if show_existing { b'S' } else { b'W' },
-                    )?;
-                    return Ok(None);
-                }
+                Err(std::fs::TryLockError::WouldBlock) => return Ok(None),
                 Err(std::fs::TryLockError::Error(error)) => return Err(error),
             }
-            let socket = data_dir.join("desktop.sock");
+            let socket = ndm_core::unix_instance::socket_path(data_dir)?;
             match std::fs::remove_file(&socket) {
                 Ok(()) => {}
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -115,7 +108,14 @@ impl Instance {
                 callbacks,
                 worker: Some(worker),
             }))
-        })
+        })?;
+        if instance.is_none() {
+            // The first process needs admission to restore its task queue before
+            // it can mark itself ready or accept a wake request.
+            let _ = ndm_core::wait_for_desktop_ready(data_dir, Duration::from_secs(20));
+            ndm_core::unix_instance::request(data_dir, if show_existing { b'S' } else { b'W' })?;
+        }
+        Ok(instance)
     }
 
     pub fn mark_ready(&self) -> io::Result<()> {
