@@ -38,6 +38,9 @@ impl Desktop {
         self.search_input.update(cx, |input, cx| {
             input.set_placeholder(placeholder, window, cx)
         });
+        self.market_search_input.update(cx, |input, cx| {
+            input.set_placeholder(plugins::market_search_placeholder(language), window, cx)
+        });
         #[cfg(any(windows, target_os = "macos"))]
         if let Some(tray) = &self.tray {
             tray.set_language(language);

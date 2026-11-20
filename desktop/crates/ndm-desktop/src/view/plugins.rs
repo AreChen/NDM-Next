@@ -7,12 +7,12 @@ use ndm_core::plugins::{
 use ndm_host::harness::{CodexCli, Harness, Status, Target};
 use serde_json::{Map, Value, json};
 
+mod market;
+pub(super) use market::market_search_placeholder;
+
 #[derive(Default)]
 pub(super) struct Integration {
-    installed: Vec<InstalledPlugin>,
-    catalog: Option<Catalog>,
-    catalog_error: bool,
-    busy: bool,
+    market: market::Market,
     ai_enabled: bool,
     codex: Option<Status>,
     codex_busy: bool,
@@ -38,7 +38,7 @@ struct Field {
 }
 
 enum PackageAction {
-    Install(CatalogPlugin),
+    Install(Box<CatalogPlugin>),
     Import(PathBuf),
     Remove(String),
 }
@@ -65,17 +65,18 @@ impl Desktop {
     }
 
     pub(super) fn open_plugin_market(&mut self, cx: &mut Context<Self>) {
-        if self.integration.catalog.is_none() && !self.integration.busy {
+        if self.integration.market.catalog.is_none() && !self.integration.market.busy {
             self.refresh_plugin_market(cx);
         }
     }
 
     fn refresh_plugin_market(&mut self, cx: &mut Context<Self>) {
-        if self.integration.busy {
+        let market = &mut self.integration.market;
+        if market.busy {
             return;
         }
-        self.integration.busy = true;
-        self.integration.catalog_error = false;
+        market.busy = true;
+        market.catalog_error = false;
         let registry = self.registry();
         let runtime = self.runtime.clone();
         cx.spawn(async move |view, cx| {
@@ -86,19 +87,21 @@ impl Desktop {
                 })
                 .await;
             let _ = view.update(cx, |this, cx| {
-                this.integration.busy = false;
+                let market = &mut this.integration.market;
+                market.busy = false;
                 match results {
                     Ok((installed, catalog)) => {
                         if let Ok(installed) = installed {
-                            this.integration.installed = installed;
+                            market.installed = installed;
                         }
                         match catalog {
-                            Ok(catalog) => this.integration.catalog = Some(catalog),
-                            Err(_) => this.integration.catalog_error = true,
+                            Ok(catalog) => market.catalog = Some(catalog),
+                            Err(_) => market.catalog_error = true,
                         }
                     }
-                    Err(_) => this.integration.catalog_error = true,
+                    Err(_) => market.catalog_error = true,
                 }
+                market.rebuild();
                 cx.notify();
             });
         })
@@ -107,10 +110,10 @@ impl Desktop {
     }
 
     fn package_action(&mut self, action: PackageAction, cx: &mut Context<Self>) {
-        if self.integration.busy || matches!(self.update_state, UpdateState::Installing) {
+        if self.integration.market.busy || matches!(self.update_state, UpdateState::Installing) {
             return;
         }
-        self.integration.busy = true;
+        self.integration.market.busy = true;
         let registry = self.registry();
         let scheduler = self.scheduler.clone();
         let runtime = self.runtime.clone();
@@ -124,10 +127,11 @@ impl Desktop {
                 registry.list()
             }).await;
             let _ = view.update(cx, |this, cx| {
-                this.integration.busy = false;
+                this.integration.market.busy = false;
                 match result {
                     Ok(Ok(installed)) => {
-                        this.integration.installed = installed;
+                        this.integration.market.installed = installed;
+                        this.integration.market.rebuild();
                         this.integration.draft = None;
                         this.scheduler.notify();
                         this.set_notice(this.text("插件已更新。", "Plugin changes saved.").into(), cx);
@@ -571,127 +575,6 @@ impl Desktop {
         }
     }
 
-    pub(super) fn market_panel(&self, cx: &mut Context<Self>) -> AnyElement {
-        let tone = crate::motion::ThemeTone::current(cx);
-        let chinese = self.preferences.language == Language::Chinese;
-        let header = div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .child(
-                div()
-                    .flex_1()
-                    .text_lg()
-                    .font_weight(FontWeight::BOLD)
-                    .child(self.text("插件市场", "Plugin market")),
-            )
-            .child(
-                Button::new("reload-market")
-                    .small()
-                    .disabled(self.integration.busy)
-                    .label(self.text("刷新", "Refresh"))
-                    .on_click(cx.listener(|this, _, _, cx| this.refresh_plugin_market(cx))),
-            )
-            .child(
-                Button::new("import-plugin")
-                    .small()
-                    .disabled(self.integration.busy)
-                    .label(self.text("导入插件", "Import plugin"))
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.pick_plugin_package(window, cx)),
-                    ),
-            );
-        let mut panel = div().flex().flex_col().gap_3().child(header);
-        if self.integration.busy {
-            panel = panel.child(div().text_sm().child(self.text("正在处理…", "Working…")));
-        }
-        if self.integration.catalog_error {
-            panel = panel.child(div().text_sm().child(self.text(
-                "市场目录暂时无法加载。",
-                "The market catalog is unavailable.",
-            )));
-        }
-        for (index, plugin) in self.integration.installed.iter().enumerate() {
-            let id = plugin.manifest.id.clone();
-            let installed = &plugin.manifest.version;
-            let update = self
-                .integration
-                .catalog
-                .as_ref()
-                .and_then(|catalog| {
-                    catalog.plugins.iter().find(|item| {
-                        item.id == id && item.version > *installed && item.artifact().is_some()
-                    })
-                })
-                .cloned();
-            let description = plugin.manifest.description.for_language(chinese);
-            let actions = div()
-                .flex()
-                .gap_2()
-                .when_some(update, |row, update| {
-                    row.child(
-                        Button::new(("update-plugin", index))
-                            .small()
-                            .primary()
-                            .disabled(self.integration.busy)
-                            .label(self.text("更新", "Update"))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.package_action(PackageAction::Install(update.clone()), cx)
-                            })),
-                    )
-                })
-                .child(
-                    Button::new(("remove-plugin", index))
-                        .small()
-                        .ghost()
-                        .disabled(self.integration.busy)
-                        .label(self.text("卸载", "Uninstall"))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.package_action(PackageAction::Remove(id.clone()), cx)
-                        })),
-                );
-            panel = panel.child(market_row(
-                plugin.manifest.name.for_language(chinese),
-                &installed.to_string(),
-                description,
-                actions,
-                tone,
-            ));
-        }
-        if let Some(catalog) = &self.integration.catalog {
-            for (index, plugin) in catalog.plugins.iter().enumerate() {
-                if self
-                    .integration
-                    .installed
-                    .iter()
-                    .any(|installed| installed.manifest.id == plugin.id)
-                {
-                    continue;
-                }
-                let entry = plugin.clone();
-                panel = panel.child(market_row(
-                    plugin.name.for_language(chinese),
-                    &plugin.version.to_string(),
-                    plugin.description.for_language(chinese),
-                    Button::new(("install-market-plugin", index))
-                        .small()
-                        .primary()
-                        .disabled(self.integration.busy || plugin.artifact().is_none())
-                        .label(if plugin.artifact().is_some() {
-                            self.text("安装", "Install")
-                        } else {
-                            self.text("此平台暂不可用", "Unavailable on this platform")
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.package_action(PackageAction::Install(entry.clone()), cx)
-                        })),
-                    tone,
-                ));
-            }
-        }
-        panel.into_any_element()
-    }
-
     pub(super) fn refresh_codex_status(&mut self, cx: &mut Context<Self>) {
         self.codex_action(CodexAction::Inspect, cx);
     }
@@ -738,9 +621,8 @@ impl Desktop {
         let status = self.integration.codex.unwrap_or_default();
         let installed = status.registered && status.skill_installed;
         let enabled = self.integration.ai_enabled;
-        market_row(
+        integration_card(
             self.text("AI 集成", "AI integration"),
-            "",
             if installed {
                 self.text(
                     "Codex CLI 已安装 MCP 与 Skill。",
@@ -804,9 +686,8 @@ impl Desktop {
     }
 }
 
-fn market_row(
+fn integration_card(
     name: &str,
-    version: &str,
     description: &str,
     actions: impl IntoElement,
     tone: crate::motion::ThemeTone,
@@ -829,18 +710,9 @@ fn market_row(
                 .gap_1()
                 .child(
                     div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(name.to_owned()),
-                        )
-                        .when(!version.is_empty(), |row| {
-                            row.child(div().text_xs().opacity(0.7).child(version.to_owned()))
-                        }),
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(name.to_owned()),
                 )
                 .child(div().text_xs().opacity(0.8).child(description.to_owned())),
         )

@@ -1,6 +1,8 @@
 # Plugins and Codex CLI
 
 Open **Plugin market** to browse, install, update, or uninstall plugins.
+Search by name or keyword in English or Chinese, and narrow the cards by
+category or **Installed only**. The display language follows **Settings → Language**.
 The market validates the downloaded package against its published SHA-256
 checksum. **Import plugin** also accepts a compatible local ZIP from a
 developer you trust. An engine package contains a native executable.
@@ -31,7 +33,8 @@ A plugin defines how it uses its thread setting.
 
 # 插件与 Codex CLI
 
-打开 **插件市场** 浏览、安装、更新或卸载插件。市场会校验安装包的
+打开 **插件市场** 浏览、安装、更新或卸载插件。输入中英文名称或关键词，
+可按分类筛选，也可以选择 **仅已安装**。卡片与分类跟随应用语言。市场会校验安装包的
 SHA-256。也可以通过 **导入插件** 安装你信任的开发者提供的本地 ZIP。
 插件包包含可执行的下载引擎。
 

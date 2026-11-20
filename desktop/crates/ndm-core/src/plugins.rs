@@ -26,6 +26,8 @@ const EXTRACT_LIMIT: u64 = 1024 * 1024 * 1024;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Catalog {
     pub schema: u32,
+    #[serde(default)]
+    pub categories: BTreeMap<String, Localized>,
     pub plugins: Vec<CatalogPlugin>,
 }
 
@@ -35,6 +37,10 @@ pub struct CatalogPlugin {
     pub name: Localized,
     pub description: Localized,
     pub version: Version,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub keywords: Vec<String>,
     pub artifacts: BTreeMap<String, Artifact>,
 }
 
@@ -63,9 +69,20 @@ impl Catalog {
             }
             output.extend_from_slice(&chunk);
         }
-        let catalog: Self = serde_json::from_slice(&output).map_err(io::Error::other)?;
+        Self::parse(&output)
+    }
+
+    fn parse(json: &[u8]) -> io::Result<Self> {
+        let catalog: Self = serde_json::from_slice(json).map_err(io::Error::other)?;
         let mut ids = HashSet::new();
         if catalog.schema != 1
+            || catalog.categories.len() > 16
+            || catalog.categories.iter().any(|(id, name)| {
+                !valid_identifier(id)
+                    || name.en.trim().is_empty()
+                    || name.en.len() > 96
+                    || name.zh.len() > 96
+            })
             || catalog.plugins.len() > 128
             || catalog.plugins.iter().any(|plugin| {
                 !valid_identifier(&plugin.id)
@@ -75,6 +92,15 @@ impl Catalog {
                     || plugin.name.zh.len() > 128
                     || plugin.description.en.len() > 1024
                     || plugin.description.zh.len() > 1024
+                    || plugin
+                        .category
+                        .as_ref()
+                        .is_some_and(|id| !catalog.categories.contains_key(id))
+                    || plugin.keywords.len() > 16
+                    || plugin
+                        .keywords
+                        .iter()
+                        .any(|keyword| keyword.trim().is_empty() || keyword.len() > 96)
                     || plugin.artifacts.len() > 8
                     || plugin.artifacts.values().any(|artifact| !artifact.valid())
             })
@@ -513,4 +539,37 @@ fn make_executable(path: &Path) -> io::Result<()> {
 
 fn invalid(reason: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, reason)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Catalog;
+    use serde_json::json;
+
+    #[test]
+    fn catalog_accepts_old_listings_and_validates_category_references() {
+        let mut input = json!({
+            "schema": 1,
+            "plugins": [{
+                "id": "yt-dlp",
+                "name": {"en": "YouTube"},
+                "description": {"en": "Download video"},
+                "version": "1.0.0",
+                "artifacts": {}
+            }]
+        });
+        let read = |input: &serde_json::Value| Catalog::parse(input.to_string().as_bytes());
+        let old = read(&input).unwrap();
+        assert!(old.categories.is_empty());
+        assert_eq!(old.plugins[0].category, None);
+        assert!(old.plugins[0].keywords.is_empty());
+        input["plugins"][0]["category"] = json!("video-audio");
+        assert!(read(&input).is_err());
+        input["categories"] = json!({"video-audio":{"en":"Video & audio","zh":"视频与音频"}});
+        let new = read(&input).unwrap();
+        assert_eq!(
+            new.categories["video-audio"].for_language(true),
+            "视频与音频"
+        );
+    }
 }

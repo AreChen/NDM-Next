@@ -2,13 +2,19 @@ name: Desktop release
 
 on:
   push:
+    branches:
+      - main
+      - 'codex/**'
     tags:
       - 'desktop-v*'
+    paths:
+      - 'desktop/Cargo.toml'
+      - '.github/workflows/release.yml'
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Existing desktop-vX.Y.Z tag to publish'
-        required: true
+        description: 'Existing desktop-vX.Y.Z tag to publish, or leave blank to build artifacts'
+        required: false
         type: string
       artifact_run_id:
         description: 'Optional release run to reuse after a publishing failure'
@@ -21,7 +27,7 @@ permissions:
 
 env:
   GH_REPO: ${{ github.repository }}
-  RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+  RELEASE_TAG: ${{ inputs.release_tag || (startsWith(github.ref, 'refs/tags/desktop-v') && github.ref_name) || '' }}
 
 jobs:
   windows:
@@ -49,7 +55,12 @@ jobs:
       - name: Test browser extension
         run: node --test tests/*.test.js
       - name: Package versioned extension
-        run: python3 desktop/packaging/package-extension.py extension-dist --tag "$RELEASE_TAG"
+        run: |
+          args=()
+          if [[ -n "$RELEASE_TAG" ]]; then
+            args=(--tag "$RELEASE_TAG")
+          fi
+          python3 desktop/packaging/package-extension.py extension-dist "${args[@]}"
       - name: Upload companion extension
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -61,7 +72,11 @@ jobs:
   publish:
     name: Publish GitHub release
     needs: [windows, macos, linux, extension]
-    if: ${{ !cancelled() && (inputs.artifact_run_id || (needs.windows.result == 'success' && needs.macos.result == 'success' && needs.linux.result == 'success' && needs.extension.result == 'success')) }}
+    if: >-
+      ${{ !cancelled() && (inputs.artifact_run_id ||
+        ((inputs.release_tag || startsWith(github.ref, 'refs/tags/desktop-v')) &&
+        needs.windows.result == 'success' && needs.macos.result == 'success' &&
+        needs.linux.result == 'success' && needs.extension.result == 'success')) }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write

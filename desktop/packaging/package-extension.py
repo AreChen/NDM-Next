@@ -19,7 +19,7 @@ def package(output: Path, tag: str | None = None) -> Path:
     manifest = json.loads((extension / 'manifest.json').read_text())
     key = base64.b64decode(manifest['key'], validate=True)
     extension_id = ''.join(chr(ord('a') + int(n, 16)) for n in hashlib.sha256(key).hexdigest()[:32])
-    for registration in ['desktop/crates/ndm-host/src/macos.rs', 'desktop/packaging/windows/ndm-next.nsi']:
+    for registration in ['desktop/crates/ndm-host/src/browser_unix.rs', 'desktop/packaging/windows/ndm-next.nsi']:
         if f'"{extension_id}"' not in (repo / registration).read_text(encoding='utf-8-sig'):
             raise ValueError(f'Unpacked extension ID missing from {registration}')
     output.mkdir(parents=True, exist_ok=True)

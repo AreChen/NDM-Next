@@ -362,7 +362,7 @@ impl TaskIndex {
     }
 }
 
-fn normalize(value: &str) -> String {
+pub(crate) fn normalize(value: &str) -> String {
     value.nfkc().default_case_fold().nfkc().collect()
 }
 

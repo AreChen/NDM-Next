@@ -4,7 +4,20 @@ use std::borrow::Cow;
 pub(crate) const LOGO: &str = "branding/ndm-next.png";
 
 pub(crate) struct Assets;
-gpui_kit::assets::icon_assets!(ExtraIcons, [Zap, Clock, Trash]);
+gpui_kit::assets::icon_assets!(
+    ExtraIcons,
+    [
+        Zap,
+        Clock,
+        Trash,
+        Store,
+        Film,
+        Puzzle,
+        SearchX,
+        PackageOpen,
+        ArrowDownToLine
+    ]
+);
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {

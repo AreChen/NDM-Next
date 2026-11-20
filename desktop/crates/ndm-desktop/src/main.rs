@@ -280,6 +280,13 @@ mod asset_tests {
         let assets = application_assets();
         for icon in [
             IconName::LayoutDashboard,
+            IconName::Store,
+            IconName::Film,
+            IconName::Network,
+            IconName::Puzzle,
+            IconName::SearchX,
+            IconName::PackageOpen,
+            IconName::ArrowDownToLine,
             IconName::ArrowDown,
             IconName::CircleCheck,
             IconName::Settings2,

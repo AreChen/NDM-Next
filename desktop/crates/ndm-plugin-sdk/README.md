@@ -62,6 +62,43 @@ manifest are both checked before installation.
   localized `name` and `description`, and optional preset `defaults` for
   the options. NDM registers them while AI integration is enabled.
 
+## Languages and marketplace listings
+
+Use a localized object wherever the manifest accepts a display string. Supply
+a non-empty `en` string and add `zh` for Simplified Chinese. NDM displays
+English when the Chinese string is omitted or empty. Keep IDs, option keys,
+choice values and category IDs stable across languages.
+
+```json
+{
+  "name": {"en": "Video downloader", "zh": "视频下载"},
+  "description": {"en": "Save a video to the download folder.", "zh": "将视频保存到下载目录。"}
+}
+```
+
+The same format applies to option labels, choice labels, panel label overrides
+and MCP tool metadata. The panel receives `locale: "en"` or `locale: "zh-CN"`.
+MCP uses the English tool metadata and stable tool IDs.
+
+When submitting a plugin to the market, give its listing a localized `name`
+and `description`, choose a stable `category` ID from `sources.json`, and
+optionally include search `keywords` such as protocol abbreviations and
+translations. NDM displays listing text and category labels in the selected
+language and searches both languages. An imported ZIP with no listing uses
+its manifest text on the card. [Marketplace listing format](https://github.com/AreChen/NDM-Next-Plugin-Market#listing-and-translations)
+
+### 中文
+
+插件名称、描述、选项和选项值的显示标签，以及面板覆盖的标签和 MCP 工具的
+名称与描述，都可填写 `{"en": "English", "zh": "简体中文"}`。英文必填，
+省略或留空 `zh` 时显示英文。ID、选项键和选项值使用固定标识。JavaScript
+面板收到的 `locale` 为 `en` 或 `zh-CN`，MCP 工具使用英文元数据。
+
+提交市场时，在目录中填写中英文名称与描述，选用 `sources.json` 中的分类
+ID，也可添加中英文关键词和协议简称。市场卡片和分类随应用语言切换，
+搜索同时匹配两种语言。没有市场条目的本地导入插件使用包内清单的文本。
+[插件市场上架格式](https://github.com/AreChen/NDM-Next-Plugin-Market#listing-and-translations)
+
 ## JavaScript panels
 
 The optional `panel` path points to a JavaScript file with a

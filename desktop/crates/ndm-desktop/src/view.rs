@@ -72,6 +72,7 @@ pub(crate) struct Desktop {
     integration: plugins::Integration,
     url_input: Entity<InputState>,
     search_input: Entity<InputState>,
+    market_search_input: Entity<InputState>,
     search_query: String,
     task_index: TaskIndex,
     matching_tasks: Vec<usize>,
@@ -208,6 +209,14 @@ impl Desktop {
                 this.refilter();
                 cx.notify();
             }
+        })
+        .detach();
+        let market_search_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(plugins::market_search_placeholder(preferences.language))
+        });
+        cx.observe(&market_search_input, |this, input, cx| {
+            this.search_market(input.read(cx).value().as_ref(), cx);
         })
         .detach();
         let replacement_input = cx.new(|cx| InputState::new(window, cx).placeholder("https://…"));
@@ -413,6 +422,7 @@ impl Desktop {
             preferences_path,
             url_input,
             search_input,
+            market_search_input,
             search_query: String::new(),
             task_index,
             matching_tasks,
@@ -1490,12 +1500,13 @@ impl Desktop {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let selected = self.section == section;
+        use gpui_kit::assets::IconName as NavIcon;
         let icon = match section {
-            Section::All => IconName::LayoutDashboard,
-            Section::Active => IconName::ArrowDown,
-            Section::Completed => IconName::CircleCheck,
-            Section::Plugins => IconName::LayoutDashboard,
-            Section::Settings => IconName::Settings2,
+            Section::All => NavIcon::LayoutDashboard,
+            Section::Active => NavIcon::ArrowDown,
+            Section::Completed => NavIcon::CircleCheck,
+            Section::Plugins => NavIcon::Store,
+            Section::Settings => NavIcon::Settings2,
         };
         let tone = crate::motion::ThemeTone::current(cx);
         let count = match section {
@@ -1765,7 +1776,10 @@ impl Render for Desktop {
                 .overflow_y_scroll()
                 .child(self.settings_panel(dark, window, cx));
         } else if self.section == Section::Plugins {
-            content = content.overflow_y_scroll().child(self.market_panel(cx));
+            let width = window.viewport_size().width.as_f32()
+                - sidebar.target().width_px().unwrap_or(180.)
+                - 36.;
+            content = content.min_h_0().child(self.market_panel(width, cx));
         } else {
             if let Some(id) = self.confirming_host_key
                 && let Some(key) = self.pending_host_keys.get(&id)
@@ -2103,13 +2117,15 @@ impl Render for Desktop {
             )
             .key_context("NDMNext")
             .on_action(cx.listener(|this, _: &FocusSearch, window, cx| {
-                if !this.section.downloads() {
+                if this.section == Section::Settings {
                     this.section = Section::All;
                 }
-                this.search_input
-                    .read(cx)
-                    .focus_handle(cx)
-                    .focus(window, cx);
+                let input = if this.section == Section::Plugins {
+                    &this.market_search_input
+                } else {
+                    &this.search_input
+                };
+                input.read(cx).focus_handle(cx).focus(window, cx);
                 cx.notify();
             }))
             .flex()
