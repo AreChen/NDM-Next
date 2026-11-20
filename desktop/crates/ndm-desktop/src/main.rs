@@ -70,8 +70,11 @@ fn main() {
             eprintln!("Could not register browser integration: {error}");
         }
     }
+    let background = std::env::args_os().any(|arg| arg == "--background");
     #[cfg(any(windows, target_os = "macos"))]
-    let show_existing = !std::env::args_os().any(|arg| arg == "--background" || arg == "--handoff");
+    let handoff = std::env::args_os().any(|arg| arg == "--handoff");
+    #[cfg(any(windows, target_os = "macos"))]
+    let show_existing = !background && !handoff;
     #[cfg(any(windows, target_os = "macos"))]
     let mut instance = match instance::Instance::acquire(&data_dir, show_existing) {
         Ok(Some(instance)) => instance,
@@ -161,9 +164,8 @@ fn main() {
     let application = gpui_kit::application().with_assets(application_assets());
     #[cfg(target_os = "macos")]
     application.on_reopen(|cx| {
-        cx.activate(true);
         for handle in cx.windows() {
-            let _ = handle.update(cx, |_, window, _| window.activate_window());
+            let _ = handle.update(cx, |_, window, cx| chrome::activate_window(window, cx));
         }
     });
     application.run(move |cx| {
@@ -185,15 +187,23 @@ fn main() {
         }
         apply_theme(preferences.theme, cx);
         let bounds = Bounds::centered(None, size(px(1000.), px(500.)), cx);
+        // A native host can cold-start the desktop just to receive a download.
+        // Keep the main window hidden until the user opens it.
+        #[cfg(target_os = "macos")]
+        let show_main = !handoff;
+        #[cfg(not(target_os = "macos"))]
+        let show_main = true;
         gpui_kit::open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(size(px(880.), px(400.))),
-                ..chrome::window_options(true)
+                show: show_main,
+                focus: show_main,
+                ..chrome::window_options()
             },
             cx,
             |window, cx| {
-                chrome::round_window(window);
+                chrome::configure_window_chrome(window);
                 cx.new(|cx| {
                     Desktop::new(
                         view::DesktopServices {
@@ -215,7 +225,7 @@ fn main() {
             },
         )
         .expect("open NDM Next");
-        if !std::env::args_os().any(|argument| argument == "--background") {
+        if show_main && !background {
             cx.activate(true);
         }
     });
@@ -257,6 +267,10 @@ mod asset_tests {
             IconName::Plus,
             IconName::ChevronDown,
             IconName::ChevronUp,
+            IconName::WindowMinimize,
+            IconName::WindowMaximize,
+            IconName::WindowRestore,
+            IconName::WindowClose,
             IconName::ChartPie,
             IconName::Close,
             IconName::Delete,

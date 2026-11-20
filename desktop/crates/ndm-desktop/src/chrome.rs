@@ -105,24 +105,14 @@ pub(crate) fn choice_item(
 
 pub(crate) const TOOLBAR_HEIGHT: f32 = 48.;
 
-pub(crate) fn window_options(toolbar: bool) -> WindowOptions {
-    let mut options = TitleBar::window_options();
-    if toolbar && let Some(titlebar) = &mut options.titlebar {
-        // Keep AppKit's traffic lights centered in the integrated toolbar.
-        titlebar.traffic_light_position = Some(point(px(12.), px(16.)));
+pub(crate) fn window_options() -> WindowOptions {
+    WindowOptions {
+        titlebar: Some(TitlebarOptions {
+            traffic_light_position: None,
+            ..TitleBar::title_bar_options()
+        }),
+        ..TitleBar::window_options()
     }
-    options
-}
-
-pub(crate) fn toolbar(tone: impl Into<crate::motion::ThemeTone>) -> TitleBar {
-    let tone = tone.into();
-    TitleBar::new()
-        .h(px(TOOLBAR_HEIGHT))
-        .bg(rgb(tone.rgb(0x111625, 0xf8f9fd)))
-        .border_color(rgb(tone.rgb(0x263247, 0xe5e9f2)))
-        // Native macOS controls are on the left; there is no right control group
-        // to separate the last title action from the window edge.
-        .when(cfg!(target_os = "macos"), |bar| bar.pr_3())
 }
 
 pub(crate) fn main_toolbar(
@@ -130,41 +120,35 @@ pub(crate) fn main_toolbar(
     controls: impl IntoElement,
     tone: impl Into<crate::motion::ThemeTone>,
     sidebar_width: f32,
+    zh: bool,
+    minimize_on_close: bool,
 ) -> TitleBar {
-    // Body: sidebar + 4px resize handle + 16px content inset. Account for
-    // TitleBar's native leading inset; the compact sidebar keeps brand space.
-    let leading = if cfg!(target_os = "macos") { 80. } else { 12. };
-    toolbar(tone)
+    let tone = tone.into();
+    let bar = TitleBar::new()
+        .pl_3()
+        .h(px(TOOLBAR_HEIGHT))
+        .bg(rgb(tone.rgb(0x111625, 0xf8f9fd)))
+        .border_color(rgb(tone.rgb(0x263247, 0xe5e9f2)))
         .child(
             div()
                 .flex()
                 .items_center()
                 .flex_shrink_0()
-                .w(px((sidebar_width + 20. - leading).max(
-                    if cfg!(target_os = "macos") {
-                        112.
-                    } else {
-                        152.
-                    },
-                )))
+                // Align search with the sidebar, resize handle and content inset.
+                .w(px((sidebar_width + 20. - 12.).max(152.)))
                 .gap_2()
                 .pr_3()
-                .when(cfg!(target_os = "macos"), |row| row.gap_1().pr_0())
-                .child(crate::branding::logo(px(if cfg!(target_os = "macos") {
-                    20.
-                } else {
-                    24.
-                })))
+                .child(crate::branding::logo(px(24.)))
                 .child(
                     div()
                         .text_sm()
-                        .when(cfg!(target_os = "macos"), |label| label.text_xs())
                         .font_weight(FontWeight::BOLD)
                         .child("NDM Next"),
                 )
                 .child(title_bar_action("sidebar-title-action", collapse)),
         )
-        .child(controls)
+        .child(controls);
+    with_window_controls(bar, zh, true, minimize_on_close)
 }
 
 #[derive(Default)]
@@ -295,13 +279,15 @@ fn start_window_move(_: &Window, _: &App) {}
 pub(crate) fn floating_header(
     title: impl IntoElement,
     tone: impl Into<crate::motion::ThemeTone>,
+    zh: bool,
+    resizable: bool,
 ) -> TitleBar {
     let tone = tone.into();
-    TitleBar::new()
+    let bar = TitleBar::new()
+        .pl_3()
         .h(px(34.))
         .bg(rgba(0))
         .border_b_0()
-        .when(cfg!(target_os = "macos"), |bar| bar.pr_3())
         .child(
             div()
                 .flex()
@@ -311,7 +297,104 @@ pub(crate) fn floating_header(
                 .text_color(rgb(tone.rgb(0xaebbd1, 0x61718a)))
                 .child(crate::branding::logo(px(18.)))
                 .child(title),
+        );
+    with_window_controls(bar, zh, resizable, false)
+}
+
+fn with_window_controls(
+    bar: TitleBar,
+    _zh: bool,
+    _resizable: bool,
+    _minimize_on_close: bool,
+) -> TitleBar {
+    // Kit renders the Windows caption buttons and their native hit targets.
+    // On macOS, supply the same icons and layout in the shared title bar.
+    #[cfg(target_os = "macos")]
+    let bar = bar.child(MacWindowControls {
+        zh: _zh,
+        resizable: _resizable,
+        minimize_on_close: _minimize_on_close,
+    });
+    bar
+}
+
+#[cfg(target_os = "macos")]
+#[derive(IntoElement)]
+struct MacWindowControls {
+    zh: bool,
+    resizable: bool,
+    minimize_on_close: bool,
+}
+
+#[cfg(target_os = "macos")]
+impl RenderOnce for MacWindowControls {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        use gpui_kit::component::{
+            ActiveTheme, IconName,
+            button::{ButtonCustomVariant, ButtonRounded, ButtonVariants},
+        };
+
+        let text = |zh, en| if self.zh { zh } else { en };
+        let theme = cx.theme();
+        let standard = ButtonCustomVariant::new(cx)
+            .hover(theme.secondary_hover)
+            .active(theme.secondary_active);
+        let danger = ButtonCustomVariant::new(cx)
+            .hover(theme.danger)
+            .active(theme.danger_active);
+        let control = |id: &'static str, icon, label| {
+            icon_button(id, icon, label)
+                .debug_selector(move || id.into())
+                .rounded(ButtonRounded::None)
+                .w(px(34.))
+                .h_full()
+        };
+        let (zoom_icon, zoom_label) =
+            if appkit_window(window).is_some_and(|window| window.isZoomed()) {
+                (IconName::WindowRestore, text("还原", "Restore"))
+            } else {
+                (IconName::WindowMaximize, text("最大化", "Maximize"))
+            };
+        title_bar_action(
+            "mac-window-controls",
+            div()
+                .flex()
+                .h_full()
+                .when(self.resizable, |row| {
+                    row.child(
+                        control(
+                            "minimize",
+                            IconName::WindowMinimize,
+                            text("最小化", "Minimize"),
+                        )
+                        .custom(standard)
+                        .on_click(|_, window, _| window.minimize_window()),
+                    )
+                    .child(
+                        control("zoom", zoom_icon, zoom_label)
+                            .custom(standard)
+                            .on_click(|_, window, _| window.zoom_window()),
+                    )
+                })
+                .child(
+                    control(
+                        "close",
+                        IconName::WindowClose,
+                        text("关闭窗口", "Close window"),
+                    )
+                    .custom(danger)
+                    .on_click(move |_, window, _| {
+                        if self.minimize_on_close {
+                            crate::tray::hide(window);
+                        } else {
+                            window.remove_window();
+                        }
+                    }),
+                ),
         )
+        .ml_auto()
+        .flex_shrink_0()
+    }
 }
 
 pub(crate) fn floating_surface(tone: impl Into<crate::motion::ThemeTone>) -> Background {
@@ -409,7 +492,7 @@ pub(crate) fn title_bar_action(
 }
 
 #[cfg(windows)]
-pub(crate) fn round_window(window: &Window) {
+pub(crate) fn configure_window_chrome(window: &Window) {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows_sys::Win32::Graphics::Dwm::{
         DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND, DwmSetWindowAttribute,
@@ -431,8 +514,73 @@ pub(crate) fn round_window(window: &Window) {
     }
 }
 
-#[cfg(not(windows))]
-pub(crate) fn round_window(_: &Window) {}
+#[cfg(target_os = "macos")]
+pub(crate) fn configure_window_chrome(window: &Window) {
+    use objc2_app_kit::NSWindowButton;
+
+    if let Some(native) = appkit_window(window) {
+        for kind in [
+            NSWindowButton::CloseButton,
+            NSWindowButton::MiniaturizeButton,
+            NSWindowButton::ZoomButton,
+        ] {
+            if let Some(button) = native.standardWindowButton(kind) {
+                button.setHidden(true);
+            }
+        }
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+pub(crate) fn configure_window_chrome(_: &Window) {}
+
+#[cfg(target_os = "macos")]
+fn appkit_window(window: &Window) -> Option<objc2::rc::Retained<objc2_app_kit::NSWindow>> {
+    use objc2_app_kit::NSView;
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let handle = HasWindowHandle::window_handle(window).ok()?;
+    let RawWindowHandle::AppKit(raw) = handle.as_raw() else {
+        return None;
+    };
+    // SAFETY: GPUI exposes the live AppKit NSView on the main thread for the
+    // lifetime of this borrowed handle. NSView::window returns a retained window.
+    unsafe { raw.ns_view.cast::<NSView>().as_ref() }.window()
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn activate_window(window: &Window, cx: &mut App) {
+    cx.activate(true);
+    if let Some(native) = appkit_window(window) {
+        let handle = window.window_handle();
+        let executor = cx.foreground_executor().clone();
+        let mut cx = cx.to_async();
+        executor
+            .spawn(async move {
+                // AppKit can synchronously call GPUI's window delegates. Run
+                // after the current update has released the app and window.
+                if handle.update(&mut cx, |_, _, _| ()).is_err() {
+                    return;
+                }
+                if native.isMiniaturized() {
+                    native.deminiaturize(None);
+                }
+                let mtm = objc2::MainThreadMarker::from(&*native);
+                // If macOS declines app activation from a background process,
+                // put this window in front of the browser without taking focus.
+                if !objc2_app_kit::NSApplication::sharedApplication(mtm).isActive() {
+                    native.orderFrontRegardless();
+                }
+            })
+            .detach();
+    }
+    window.activate_window();
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn activate_window(window: &Window, _: &mut App) {
+    window.activate_window();
+}
 
 #[cfg(test)]
 mod tests {
@@ -640,6 +788,8 @@ mod tests {
                     controls,
                     true,
                     self.sidebar_width,
+                    false,
+                    false,
                 ))
                 .child(
                     div()
@@ -688,6 +838,16 @@ mod tests {
                 cx.simulate_click(bounds.center(), Modifiers::default());
                 assert_eq!(clicks.get(), before + 1, "{id} cannot be clicked");
             }
+            #[cfg(target_os = "macos")]
+            {
+                let minimize = cx.debug_bounds("minimize").unwrap();
+                let zoom = cx.debug_bounds("zoom").unwrap();
+                let close = cx.debug_bounds("close").unwrap();
+                assert!(cx.debug_bounds("update").unwrap().right() <= minimize.left());
+                assert_eq!(minimize.right(), zoom.left());
+                assert_eq!(zoom.right(), close.left());
+                assert_eq!(close.right(), px(width));
+            }
             for sidebar_width in [160., 240., 320.] {
                 cx.update(|window, cx| {
                     view.update(cx, |view, cx| {
@@ -698,9 +858,7 @@ mod tests {
                 });
                 let search = cx.debug_bounds("download-search").unwrap();
                 let task = cx.debug_bounds("first-task-edge").unwrap();
-                if !cfg!(target_os = "macos") || sidebar_width >= 180. {
-                    assert_eq!(search.left(), task.left());
-                }
+                assert_eq!(search.left(), task.left());
             }
             cx.update(|_, cx| {
                 view.update(cx, |view, cx| {

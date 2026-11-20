@@ -39,11 +39,11 @@ pub(crate) fn open(
             kind: WindowKind::Dialog,
             is_resizable: false,
             is_minimizable: false,
-            ..chrome::window_options(false)
+            ..chrome::window_options()
         },
         cx,
         move |window, cx| {
-            chrome::round_window(window);
+            chrome::configure_window_chrome(window);
             chrome::fit_content(window, size(px(480.), px(height)), cx);
             window.set_window_title("NDM Next · Delete");
             let handle = window.window_handle();
@@ -176,6 +176,8 @@ fn delete_dialog(
                 .text_color(rgb(tone.rgb(0xf0f3ff, 0x19253b)))
                 .child(title),
             tone,
+            zh,
+            false,
         ))
         .child(
             div()
@@ -380,6 +382,14 @@ mod tests {
                     });
                     window.draw(cx).clear(cx);
                 });
+                #[cfg(target_os = "macos")]
+                {
+                    assert!(cx.debug_bounds("minimize").is_none());
+                    assert!(cx.debug_bounds("zoom").is_none());
+                    let close = cx.debug_bounds("close").unwrap();
+                    assert_eq!(close.right(), px(480.));
+                    assert!(close.bottom() <= px(34.));
+                }
                 if has_name {
                     let name = cx.debug_bounds("delete-filename").unwrap();
                     let location = cx.debug_bounds("delete-location").unwrap();
@@ -415,6 +425,17 @@ mod tests {
                     assert_eq!(clicked.get(), expected, "{id} did not receive the click");
                 }
             }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let close = cx.debug_bounds("close").unwrap();
+            let handle = cx.update(|window, _| window.window_handle());
+            clicked.set(0);
+            cx.simulate_click(close.center(), Modifiers::default());
+            cx.cx.update(|cx| {
+                assert!(handle.update(cx, |_, _, _| ()).is_err());
+            });
+            assert_eq!(clicked.get(), 0);
         }
     }
 }

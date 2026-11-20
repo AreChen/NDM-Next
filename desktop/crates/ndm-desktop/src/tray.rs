@@ -110,7 +110,7 @@ pub fn hide(window: &Window) {
 }
 
 #[cfg(windows)]
-pub fn show(window: &Window) {
+pub fn show(window: &Window, _: &mut gpui_kit::App) {
     if let Some(handle) = hwnd(window) {
         // SAFETY: the handle belongs to this live GPUI window on its UI thread.
         unsafe {
@@ -126,6 +126,6 @@ pub fn hide(window: &Window) {
     window.minimize_window();
 }
 #[cfg(target_os = "macos")]
-pub fn show(window: &Window) {
-    window.activate_window();
+pub fn show(window: &Window, cx: &mut gpui_kit::App) {
+    crate::chrome::activate_window(window, cx);
 }

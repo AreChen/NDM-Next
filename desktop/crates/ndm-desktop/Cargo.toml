@@ -33,7 +33,10 @@ tray-icon = { version = "=0.26.1", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 ndm-host = { path = "../ndm-host" }
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSApplication", "NSButton", "NSControl", "NSResponder", "NSView", "NSWindow"] }
 objc2-foundation = { version = "0.3", features = ["NSFileManager", "NSURL", "NSError"] }
+raw-window-handle = "0.6"
 
 [build-dependencies]
 embed-resource = "3.0.12"

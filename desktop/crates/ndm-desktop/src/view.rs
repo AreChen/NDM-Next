@@ -286,7 +286,8 @@ impl Desktop {
                 while let Some(command) = commands.recv().await {
                     match command {
                         crate::tray::Command::Show => {
-                            let _ = view.update_in(cx, |_, window, _| crate::tray::show(window));
+                            let _ =
+                                view.update_in(cx, |_, window, cx| crate::tray::show(window, cx));
                         }
                         crate::tray::Command::Refresh => {
                             let _ = view.update(cx, |this, cx| this.discover_new_tasks(cx));
@@ -590,7 +591,9 @@ impl Desktop {
     fn show_progress(&mut self, id: TaskId, cx: &mut Context<Self>) {
         if let Some((handle, _)) = self.progress_windows.get(&id)
             && handle
-                .update(cx, |_, window, _| window.activate_window())
+                .update(cx, |_, window, cx| {
+                    crate::chrome::activate_window(window, cx)
+                })
                 .is_ok()
         {
             return;
@@ -612,11 +615,11 @@ impl Desktop {
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(size(px(crate::progress::WINDOW_WIDTH), px(136.))),
-                ..crate::chrome::window_options(false)
+                ..crate::chrome::window_options()
             },
             cx,
             move |window, cx| {
-                crate::chrome::round_window(window);
+                crate::chrome::configure_window_chrome(window);
                 cx.new(|cx| {
                     let mut progress =
                         ProgressWindow::new(id, store, scheduler, runtime, preferences, window, cx);
@@ -626,9 +629,9 @@ impl Desktop {
             },
         ) {
             Ok((handle, view)) => {
-                // Opening a window while the browser owns focus is insufficient
-                // on Windows. Explicit activation also restores minimized windows.
-                let _ = handle.update(cx, |_, window, _| window.activate_window());
+                let _ = handle.update(cx, |_, window, cx| {
+                    crate::chrome::activate_window(window, cx);
+                });
                 self.progress_windows.insert(id, (handle, view.downgrade()));
             }
             Err(_) => self.set_notice(
@@ -2025,6 +2028,17 @@ impl Render for Desktop {
                 toolbar_controls,
                 tone,
                 sidebar.target().width_px().unwrap_or(180.),
+                self.preferences.language == Language::Chinese,
+                {
+                    #[cfg(target_os = "macos")]
+                    {
+                        self.tray.is_some()
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        false
+                    }
+                },
             ))
             .child(
                 div()

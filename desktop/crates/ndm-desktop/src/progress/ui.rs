@@ -532,7 +532,12 @@ impl Render for ProgressWindow {
             .flex_col()
             .bg(chrome::floating_surface(tone))
             .text_color(rgb(fg))
-            .child(chrome::floating_header("NDM Next", tone))
+            .child(chrome::floating_header(
+                "NDM Next",
+                tone,
+                self.language == Language::Chinese,
+                true,
+            ))
             .child(content)
     }
 }

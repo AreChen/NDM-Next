@@ -4954,7 +4954,7 @@ dependencies = [
 
 [[package]]
 name = "ndm-desktop"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "caseless",
  "embed-resource",
@@ -4964,6 +4964,8 @@ dependencies = [
  "image",
  "ndm-core",
  "ndm-host",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "percent-encoding",
  "raw-window-handle",
@@ -4983,7 +4985,7 @@ dependencies = [
 
 [[package]]
 name = "ndm-host"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "embed-resource",
  "ndm-core",
