@@ -164,8 +164,13 @@ fn main() {
         instance.on_shutdown(move || {
             let _ = sender.send(instance::Command::Quit);
         });
+        #[cfg(not(target_os = "linux"))]
         instance.mark_ready().expect("signal desktop readiness");
     }
+    #[cfg(target_os = "linux")]
+    let instance = std::rc::Rc::new(instance);
+    #[cfg(target_os = "linux")]
+    let ready_instance = instance.clone();
     let application = gpui_kit::application().with_assets(application_assets());
     #[cfg(target_os = "macos")]
     application.on_reopen(|cx| {
@@ -232,6 +237,12 @@ fn main() {
             },
         )
         .expect("open NDM Next");
+        // On Linux, GPUI connects to the display during run. A browser
+        // handoff must wait until the desktop has opened successfully.
+        #[cfg(target_os = "linux")]
+        ready_instance
+            .mark_ready()
+            .expect("signal desktop readiness");
         if show_main && !background {
             cx.activate(true);
         }

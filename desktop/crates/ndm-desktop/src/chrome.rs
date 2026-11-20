@@ -110,6 +110,8 @@ pub(crate) fn window_options() -> WindowOptions {
         #[cfg(target_os = "linux")]
         app_id: Some("com.ndmnext.desktop".into()),
         titlebar: Some(TitlebarOptions {
+            #[cfg(target_os = "linux")]
+            title: Some("NDM Next".into()),
             traffic_light_position: None,
             ..TitleBar::title_bar_options()
         }),

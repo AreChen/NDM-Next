@@ -48,8 +48,8 @@ jobs:
           export XDG_RUNTIME_DIR="$RUNNER_TEMP/ndm-linux/run"
           install -d -m 700 "$XDG_RUNTIME_DIR"
           xvfb-run -a cargo +1.100.0 test --locked --workspace
-          cargo +1.100.0 test --locked -p ndm-core --test hls --test dash -- --ignored
-          cargo +1.100.0 test --locked -p ndm-core --lib local_remux_reports_observed_time_against_local_duration -- --ignored
+          cargo +1.100.0 test --locked --workspace --test hls --test dash -- --ignored
+          cargo +1.100.0 test --locked --workspace --lib local_remux_reports_observed_time_against_local_duration -- --ignored
       - name: Build Linux archive
         run: bash desktop/packaging/linux/build.sh "$RUNNER_TEMP/ndm-linux-dist"
       - name: Upload Linux archive
