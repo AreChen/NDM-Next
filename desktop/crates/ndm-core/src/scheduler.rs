@@ -755,7 +755,12 @@ async fn execute_one(inner: &Arc<Inner>, task: &Task, active: &Active) -> Result
         )
         .await
         .map(|_| ()),
-        TaskOptions::Hls(options) => {
+        TaskOptions::Hls(mut options) => {
+            options.download_threads = task
+                .policy
+                .download_threads
+                .or(options.download_threads)
+                .or(Some(default_threads));
             // hls-engine uses non-Send futures, so its bounded worker owns a
             // current-thread runtime instead of moving those futures between threads.
             let store = inner.store.clone();

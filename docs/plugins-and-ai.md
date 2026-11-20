@@ -22,7 +22,8 @@ directory, check status, pause, and resume. A batch can specify its own
 simultaneous-task and per-download thread settings. The app-wide task limit
 and the engine's limits still apply. A request to change global settings
 updates the app's defaults for queued and future work. Built-in HTTP caps
-segment connections at 16. A plugin defines how it uses its thread setting.
+segment connections at 16 and HLS uses up to four concurrent fragments.
+A plugin defines how it uses its thread setting.
 
 - [Plugin market catalog](https://github.com/AreChen/NDM-Next-Plugin-Market)
 - [Download engine SDK](../desktop/crates/ndm-plugin-sdk/README.md)
@@ -46,4 +47,4 @@ Codex 可发起下载、查询状态、暂停与恢复。省略保存位置时�
 默认下载目录，也可传入绝对路径。单批任务可以设置并发任务数和每项
 下载线程数，并且仍受全局任务上限与引擎上限约束。明确要求修改全局
 设置时，新值会应用到排队和后续任务。内置 HTTP 最多使用 16 个分段
-连接，插件可根据协议决定线程设置的用途。
+连接，HLS 同时下载最多 4 个分片。插件可根据协议决定线程设置的用途。

@@ -40,14 +40,14 @@ use crate::{
 const MAX_PLAYLIST_BYTES: usize = 2 * 1024 * 1024;
 const MAX_RESOURCE_BYTES: usize = 32 * 1024 * 1024;
 
-fn engine_options(progress: DownloadProgress) -> EngineOptions {
+fn engine_options(progress: DownloadProgress, download_threads: Option<u32>) -> EngineOptions {
     EngineOptions::default()
         .with_mode(EngineMode::Open)
         // The engine admits a whole playlist atomically. Its 128-descriptor
         // default rejects ordinary VOD before requesting the first segment.
         // These are metadata ceilings; the download byte budget stays unchanged.
         .with_limits(EngineLimits::default().with_queue(16_384, 16 * 1024 * 1024))
-        .with_download_concurrency(4)
+        .with_download_concurrency(download_threads.unwrap_or(4).clamp(1, 4) as usize)
         .with_on_event(Arc::new(move |event| {
             if matches!(event, EngineEvent::State(EngineState::Finalizing)) {
                 progress.finalize();
@@ -66,6 +66,8 @@ pub struct HlsOptions {
     /// Names in the chosen variant's audio group; defaults to its default track.
     pub audio_names: Vec<String>,
     pub max_bytes_per_second: Option<u64>,
+    #[serde(default)]
+    pub download_threads: Option<u32>,
     #[serde(default)]
     pub proxy: Option<ProxyOptions>,
 }
@@ -615,7 +617,7 @@ async fn download_hls_with_progress(
     let terminal = checkpoint
         .as_ref()
         .is_some_and(|value| value.is_finalizing() || value.is_completed());
-    let engine_options = engine_options(source.progress.clone());
+    let engine_options = engine_options(source.progress.clone(), options.download_threads);
     let engine = match checkpoint {
         Some(checkpoint) => EngineSession::restore(inputs, keys, engine_options, checkpoint),
         None => EngineSession::new(inputs, keys, engine_options),
@@ -780,7 +782,7 @@ mod admission_tests {
                 EmbeddedAudio::Keep,
             ),
             keys,
-            engine_options(DownloadProgress::default()),
+            engine_options(DownloadProgress::default(), None),
         )
         .unwrap();
         let mut content = "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXT-X-PLAYLIST-TYPE:VOD\n".to_owned();
