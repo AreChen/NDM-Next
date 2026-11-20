@@ -17,6 +17,65 @@ pub enum TaskOptions {
     Sftp(SftpOptions),
     Hls(HlsOptions),
     Dash(DashOptions),
+    Plugin(PluginOptions),
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginOptions {
+    pub id: String,
+    #[serde(default)]
+    pub values: serde_json::Map<String, serde_json::Value>,
+}
+
+impl fmt::Debug for PluginOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PluginOptions")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskPolicy {
+    pub batch: Option<BatchLimit>,
+    pub download_threads: Option<u32>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BatchLimit {
+    pub id: TaskId,
+    pub active_tasks: u32,
+}
+
+impl TaskPolicy {
+    pub(crate) fn valid(self) -> bool {
+        self.batch
+            .is_none_or(|batch| (1..=32).contains(&batch.active_tasks))
+            && self
+                .download_threads
+                .is_none_or(|threads| (1..=256).contains(&threads))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DownloadLimits {
+    pub active_tasks: u32,
+    pub download_threads: u32,
+}
+
+impl Default for DownloadLimits {
+    fn default() -> Self {
+        Self {
+            active_tasks: 3,
+            download_threads: 16,
+        }
+    }
+}
+
+impl DownloadLimits {
+    pub(crate) fn valid(self) -> bool {
+        (1..=32).contains(&self.active_tasks) && (1..=256).contains(&self.download_threads)
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,6 +136,7 @@ pub struct Task {
     pub id: TaskId,
     pub request: NewTask,
     pub options: TaskOptions,
+    pub policy: TaskPolicy,
     pub state: TaskState,
     pub output_path: Option<PathBuf>,
     pub error: Option<String>,

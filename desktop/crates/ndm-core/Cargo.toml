@@ -17,6 +17,7 @@ roxmltree.workspace = true
 russh.workspace = true
 russh-sftp.workspace = true
 rusqlite.workspace = true
+semver = { version = "1", features = ["serde"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -26,6 +27,7 @@ suppaftp.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 uuid.workspace = true
+zip = { version = "9.8.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Win32_System_JobObjects"] }

@@ -45,6 +45,10 @@ Connect **Chrome, Edge or Brave** to capture downloads and discover webpage medi
 
 Each release includes its matching versioned extension ZIP. Follow the [extension installation guide](docs/extension-install.md).
 
+The plugin market adds download engines for new sources. Codex CLI can
+optionally use NDM Next through MCP and the companion Skill. See the
+[plugin and AI integration guide](docs/plugins-and-ai.md).
+
 **Platform details:** [Windows](desktop/packaging/windows/README.md#browser-extension) · [macOS](desktop/packaging/macos/README.md#browser-extension) · [Linux](desktop/packaging/linux/README.md#browser-extension). Select **NDM Next** as the extension backend. The extension also supports Neat Download Manager.
 
 <details>

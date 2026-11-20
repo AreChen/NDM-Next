@@ -41,6 +41,7 @@ mod tests {
     fn task(url: &str) -> Task {
         Task {
             cache_directory: None,
+            policy: Default::default(),
             id: TaskId::new_v4(),
             request: NewTask {
                 url: url.into(),

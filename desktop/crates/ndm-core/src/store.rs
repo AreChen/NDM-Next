@@ -6,12 +6,27 @@ use std::{
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use crate::{
-    DashOptions, Error, HlsOptions, NewTask, ProgressSnapshot, Result, SftpOptions, Task, TaskId,
-    TaskOptions, TaskState, secrets,
+    DashOptions, DownloadLimits, Error, HlsOptions, NewTask, ProgressSnapshot, Result, SftpOptions,
+    Task, TaskId, TaskOptions, TaskPolicy, TaskState, secrets,
 };
 
 pub struct Store {
     path: PathBuf,
+}
+
+#[derive(Clone, Copy)]
+pub enum TaskCommand {
+    Pause,
+    Resume,
+}
+
+impl TaskCommand {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Pause => "pause",
+            Self::Resume => "resume",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -109,7 +124,7 @@ impl Store {
         )?)
     }
 
-    fn profile_directory(&self) -> &Path {
+    pub fn profile_directory(&self) -> &Path {
         self.path
             .parent()
             .filter(|path| !path.as_os_str().is_empty())
@@ -139,7 +154,7 @@ impl Store {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let version: i64 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if version > 3 {
+        if version > 4 {
             return Err(Error::UnsupportedSchema);
         }
         tx.execute_batch(
@@ -153,10 +168,22 @@ impl Store {
                 error TEXT,
                 size_verified INTEGER,
                 progress BLOB,
+                policy BLOB,
                 created_at INTEGER NOT NULL DEFAULT (unixepoch())
             );
             CREATE TABLE IF NOT EXISTS cache_workspaces (id TEXT PRIMARY KEY NOT NULL, root BLOB NOT NULL);
             CREATE TABLE IF NOT EXISTS discard_requests (id TEXT PRIMARY KEY NOT NULL);
+            CREATE TABLE IF NOT EXISTS download_limits (
+                singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+                active_tasks INTEGER NOT NULL, download_threads INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS ai_integration (
+                singleton INTEGER PRIMARY KEY CHECK(singleton = 1), enabled INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS task_commands (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT NOT NULL, action TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS sftp_known_hosts (
                 host TEXT NOT NULL, port INTEGER NOT NULL, fingerprint TEXT NOT NULL,
                 PRIMARY KEY (host, port)
@@ -177,6 +204,7 @@ impl Store {
             ("error", "TEXT"),
             ("size_verified", "INTEGER"),
             ("progress", "BLOB"),
+            ("policy", "BLOB"),
         ] {
             if !columns.iter().any(|column| column == name) {
                 tx.execute(
@@ -185,7 +213,7 @@ impl Store {
                 )?;
             }
         }
-        tx.pragma_update(None, "user_version", 3)?;
+        tx.pragma_update(None, "user_version", 4)?;
         tx.commit()?;
         Ok(store)
     }
@@ -242,6 +270,132 @@ impl Store {
         Ok(task)
     }
 
+    /// Enqueue a batch as a unit, so validation or a failed write cannot leave a partial batch.
+    pub fn enqueue(&self, items: &[(TaskId, NewTask, TaskOptions, TaskPolicy)]) -> Result<()> {
+        let _admission = self.admit_work()?;
+        let mut connection = self.connection()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for (id, request, options, policy) in items {
+            if !policy.valid() || !request.destination.is_absolute() {
+                return Err(Error::InvalidState);
+            }
+            if let Some(task) = read_task(&tx, *id)? {
+                if task.request != *request
+                    || task.options != *options
+                    || task.policy != *policy
+                    || task.state == TaskState::Prepared
+                {
+                    return Err(Error::IdConflict);
+                }
+                continue;
+            }
+            let request = secrets::protect(&serde_json::to_vec(request)?)?;
+            let options = secrets::protect(&serde_json::to_vec(options)?)?;
+            let policy = serde_json::to_vec(policy)?;
+            tx.execute(
+                "INSERT INTO tasks (id, request, options, state, policy) VALUES (?1, ?2, ?3, 'queued', ?4)",
+                params![id.to_string(), request, options, policy],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn download_limits(&self) -> Result<Option<DownloadLimits>> {
+        read_limits(&self.connection()?)
+    }
+
+    pub fn change_download_limits(
+        &self,
+        active: Option<u32>,
+        threads: Option<u32>,
+        defaults: DownloadLimits,
+    ) -> Result<DownloadLimits> {
+        let mut connection = self.connection()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut limits = read_limits(&tx)?.unwrap_or(defaults);
+        limits.active_tasks = active.unwrap_or(limits.active_tasks);
+        limits.download_threads = threads.unwrap_or(limits.download_threads);
+        if !limits.valid() {
+            return Err(Error::InvalidState);
+        }
+        tx.execute(
+            "INSERT INTO download_limits VALUES (1, ?1, ?2)
+             ON CONFLICT(singleton) DO UPDATE SET active_tasks = ?1, download_threads = ?2",
+            params![limits.active_tasks, limits.download_threads],
+        )?;
+        tx.commit()?;
+        Ok(limits)
+    }
+
+    pub fn ai_enabled(&self) -> Result<bool> {
+        Ok(self
+            .connection()?
+            .query_row(
+                "SELECT enabled FROM ai_integration WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or(false))
+    }
+
+    pub fn set_ai_enabled(&self, enabled: bool) -> Result<()> {
+        self.connection()?.execute(
+            "INSERT INTO ai_integration VALUES (1, ?1)
+             ON CONFLICT(singleton) DO UPDATE SET enabled = ?1",
+            [enabled],
+        )?;
+        Ok(())
+    }
+
+    pub fn request_task_command(&self, id: TaskId, command: TaskCommand) -> Result<()> {
+        let _admission = self.admit_work()?;
+        let connection = self.connection()?;
+        let changed = connection.execute(
+            "INSERT INTO task_commands (id, action) SELECT id, ?2 FROM tasks
+             WHERE id = ?1 AND state IN ('queued', 'running', 'paused', 'failed')",
+            params![id.to_string(), command.key()],
+        )?;
+        if changed == 0 {
+            return Err(Error::InvalidState);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn next_task_command(&self) -> Result<Option<(i64, TaskId, TaskCommand)>> {
+        let row = self
+            .connection()?
+            .query_row(
+                "SELECT sequence, id, action FROM task_commands ORDER BY sequence LIMIT 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        row.map(|(sequence, id, action)| {
+            let id = TaskId::parse_str(&id).map_err(|_| Error::InvalidStoredState)?;
+            let command = match action.as_str() {
+                "pause" => TaskCommand::Pause,
+                "resume" => TaskCommand::Resume,
+                _ => return Err(Error::InvalidStoredState),
+            };
+            Ok((sequence, id, command))
+        })
+        .transpose()
+    }
+
+    pub(crate) fn finish_task_command(&self, sequence: i64) -> Result<()> {
+        self.connection()?
+            .execute("DELETE FROM task_commands WHERE sequence = ?1", [sequence])?;
+        Ok(())
+    }
+
     pub fn abort(&self, id: TaskId) -> Result<()> {
         let mut conn = self.connection()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -295,11 +449,21 @@ impl Store {
     }
 
     pub fn list(&self) -> Result<Vec<Task>> {
+        self.list_tasks(false)
+    }
+
+    pub(crate) fn list_queued(&self) -> Result<Vec<Task>> {
+        self.list_tasks(true)
+    }
+
+    fn list_tasks(&self, queued_only: bool) -> Result<Vec<Task>> {
         let conn = self.connection()?;
         let mut statement = conn.prepare(
-            "SELECT id, request, state, output, error, size_verified, options, progress, (SELECT root FROM cache_workspaces w WHERE w.id = tasks.id) FROM tasks ORDER BY rowid",
+            "SELECT id, request, state, output, error, size_verified, options, progress,
+             (SELECT root FROM cache_workspaces w WHERE w.id = tasks.id), policy
+             FROM tasks WHERE NOT ?1 OR state = 'queued' ORDER BY rowid",
         )?;
-        let mut rows = statement.query([])?;
+        let mut rows = statement.query([queued_only])?;
         let mut tasks = Vec::new();
         while let Some(row) = rows.next()? {
             let id: String = row.get(0)?;
@@ -312,6 +476,7 @@ impl Store {
             let options: Option<Vec<u8>> = row.get(6)?;
             let progress: Option<Vec<u8>> = row.get(7)?;
             let cache_directory: Option<Vec<u8>> = row.get(8)?;
+            let policy: Option<Vec<u8>> = row.get(9)?;
             tasks.push(decode_task(
                 id,
                 &encrypted,
@@ -322,6 +487,7 @@ impl Store {
                 options,
                 progress,
                 cache_directory,
+                policy,
             )?);
         }
         Ok(tasks)
@@ -654,10 +820,26 @@ impl Store {
     }
 }
 
+fn read_limits(connection: &Connection) -> Result<Option<DownloadLimits>> {
+    Ok(connection
+        .query_row(
+            "SELECT active_tasks, download_threads FROM download_limits WHERE singleton = 1",
+            [],
+            |row| {
+                Ok(DownloadLimits {
+                    active_tasks: row.get(0)?,
+                    download_threads: row.get(1)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
 fn read_task(conn: &Connection, id: TaskId) -> Result<Option<Task>> {
     let row = conn
         .query_row(
-            "SELECT request, state, output, error, size_verified, options, progress, (SELECT root FROM cache_workspaces w WHERE w.id = tasks.id) FROM tasks WHERE id = ?1",
+            "SELECT request, state, output, error, size_verified, options, progress,
+             (SELECT root FROM cache_workspaces w WHERE w.id = tasks.id), policy FROM tasks WHERE id = ?1",
             [id.to_string()],
             |row| {
                 Ok((
@@ -669,12 +851,23 @@ fn read_task(conn: &Connection, id: TaskId) -> Result<Option<Task>> {
                     row.get::<_, Option<Vec<u8>>>(5)?,
                     row.get::<_, Option<Vec<u8>>>(6)?,
                     row.get::<_, Option<Vec<u8>>>(7)?,
+                    row.get::<_, Option<Vec<u8>>>(8)?,
                 ))
             },
         )
         .optional()?;
     row.map(
-        |(encrypted, state, output, error, size_verified, options, progress, cache_directory)| {
+        |(
+            encrypted,
+            state,
+            output,
+            error,
+            size_verified,
+            options,
+            progress,
+            cache_directory,
+            policy,
+        )| {
             decode_task(
                 id,
                 &encrypted,
@@ -685,6 +878,7 @@ fn read_task(conn: &Connection, id: TaskId) -> Result<Option<Task>> {
                 options,
                 progress,
                 cache_directory,
+                policy,
             )
         },
     )
@@ -702,6 +896,7 @@ fn decode_task(
     options: Option<Vec<u8>>,
     progress: Option<Vec<u8>>,
     cache_directory: Option<Vec<u8>>,
+    policy: Option<Vec<u8>>,
 ) -> Result<Task> {
     let request = serde_json::from_slice(&secrets::unprotect(encrypted)?)?;
     let output_path = output
@@ -722,6 +917,11 @@ fn decode_task(
         .transpose()?;
     Ok(Task {
         cache_directory,
+        policy: policy
+            .as_deref()
+            .map(serde_json::from_slice)
+            .transpose()?
+            .unwrap_or_default(),
         id,
         request,
         options,

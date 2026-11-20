@@ -10,16 +10,24 @@ use ndm_host::{Host, read_frame, write_frame};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+mod mcp;
+
 #[derive(Deserialize)]
 struct HostPreferences {
     download_dir: Option<PathBuf>,
     use_system_download_dir: Option<bool>,
+    max_active_tasks: Option<u32>,
+    max_connections: Option<u32>,
 }
 
-fn configured_downloads(data_dir: &std::path::Path) -> PathBuf {
+fn read_preferences(data_dir: &std::path::Path) -> Option<HostPreferences> {
     fs::read(data_dir.join("preferences.json"))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<HostPreferences>(&bytes).ok())
+}
+
+fn configured_downloads(data_dir: &std::path::Path) -> PathBuf {
+    read_preferences(data_dir)
         .map(|prefs| {
             ndm_core::resolve_download_directory(
                 prefs.download_dir.as_deref(),
@@ -28,6 +36,20 @@ fn configured_downloads(data_dir: &std::path::Path) -> PathBuf {
             .0
         })
         .unwrap_or_else(ndm_core::system_download_directory)
+}
+
+fn configured_limits(data_dir: &std::path::Path) -> ndm_core::DownloadLimits {
+    let defaults = ndm_core::DownloadLimits::default();
+    read_preferences(data_dir).map_or(defaults, |prefs| ndm_core::DownloadLimits {
+        active_tasks: prefs
+            .max_active_tasks
+            .unwrap_or(defaults.active_tasks)
+            .clamp(1, 32),
+        download_threads: prefs
+            .max_connections
+            .unwrap_or(defaults.download_threads)
+            .clamp(1, 256),
+    })
 }
 
 fn run() -> io::Result<()> {
@@ -223,6 +245,16 @@ fn old_installation_host(desktop: &std::path::Path) -> io::Result<Option<PathBuf
 
 fn main() {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == "--mcp")
+    {
+        let result = helper_data_directory(&arguments[1..]).and_then(mcp::run);
+        if result.is_err() {
+            eprintln!("NDM Next MCP server could not start or lost its transport");
+        }
+        std::process::exit(i32::from(result.is_err()));
+    }
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     if arguments
         .first()

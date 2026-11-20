@@ -1,0 +1,516 @@
+//! Installed engine packages and the official plugin catalog.
+use std::{
+    collections::{BTreeMap, HashSet},
+    fs, io,
+    io::{Read, Write},
+    path::{Path, PathBuf},
+};
+
+use futures_util::StreamExt;
+pub use ndm_plugin_sdk::{
+    Choice, DownloadTool, Localized, OptionControl, OptionField, Panel, PluginManifest,
+};
+use ndm_plugin_sdk::{MANIFEST_FILE, valid_identifier, valid_package_path};
+use reqwest::Url;
+use semver::Version;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
+
+pub const CATALOG_URL: &str =
+    "https://raw.githubusercontent.com/AreChen/NDM-Next-Plugin-Market/main/catalog.json";
+const JSON_LIMIT: u64 = 2 * 1024 * 1024;
+const PACKAGE_LIMIT: u64 = 384 * 1024 * 1024;
+const EXTRACT_LIMIT: u64 = 1024 * 1024 * 1024;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Catalog {
+    pub schema: u32,
+    pub plugins: Vec<CatalogPlugin>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CatalogPlugin {
+    pub id: String,
+    pub name: Localized,
+    pub description: Localized,
+    pub version: Version,
+    pub artifacts: BTreeMap<String, Artifact>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Artifact {
+    pub url: String,
+    pub sha256: String,
+}
+
+impl Catalog {
+    pub async fn fetch() -> io::Result<Self> {
+        let response = client()?
+            .get(CATALOG_URL)
+            .timeout(std::time::Duration::from_secs(20))
+            .send()
+            .await
+            .map_err(network)?
+            .error_for_status()
+            .map_err(network)?;
+        let mut output = Vec::new();
+        let mut body = response.bytes_stream();
+        while let Some(chunk) = body.next().await {
+            let chunk = chunk.map_err(network)?;
+            if output.len().saturating_add(chunk.len()) > JSON_LIMIT as usize {
+                return Err(invalid("plugin catalog is too large"));
+            }
+            output.extend_from_slice(&chunk);
+        }
+        let catalog: Self = serde_json::from_slice(&output).map_err(io::Error::other)?;
+        let mut ids = HashSet::new();
+        if catalog.schema != 1
+            || catalog.plugins.len() > 128
+            || catalog.plugins.iter().any(|plugin| {
+                !valid_identifier(&plugin.id)
+                    || !ids.insert(&plugin.id)
+                    || plugin.name.en.is_empty()
+                    || plugin.name.en.len() > 128
+                    || plugin.name.zh.len() > 128
+                    || plugin.description.en.len() > 1024
+                    || plugin.description.zh.len() > 1024
+                    || plugin.artifacts.len() > 8
+                    || plugin.artifacts.values().any(|artifact| !artifact.valid())
+            })
+        {
+            return Err(invalid("invalid plugin catalog"));
+        }
+        Ok(catalog)
+    }
+}
+
+impl CatalogPlugin {
+    pub fn artifact(&self) -> Option<&Artifact> {
+        let platform = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
+        self.artifacts.get(&platform)
+    }
+}
+
+impl Artifact {
+    fn valid(&self) -> bool {
+        self.sha256.len() == 64
+            && self.sha256.bytes().all(|b| b.is_ascii_hexdigit())
+            && Url::parse(&self.url).is_ok_and(|url| {
+                url.scheme() == "https"
+                    && url.host_str().is_some()
+                    && url.username().is_empty()
+                    && url.password().is_none()
+            })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct InstalledPlugin {
+    pub manifest: PluginManifest,
+    pub directory: PathBuf,
+}
+
+impl InstalledPlugin {
+    pub fn executable(&self) -> PathBuf {
+        self.directory.join(&self.manifest.engine)
+    }
+
+    pub fn read_panel(&self) -> io::Result<Option<String>> {
+        self.manifest
+            .panel
+            .as_ref()
+            .map(|script| {
+                let bytes = bounded_file(&self.directory.join(script), 64 * 1024)?;
+                String::from_utf8(bytes).map_err(io::Error::other)
+            })
+            .transpose()
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct InstalledPlugins {
+    active: BTreeMap<String, String>,
+    #[serde(default)]
+    preferred: BTreeMap<String, String>,
+}
+
+#[derive(Clone)]
+pub struct PluginRegistry {
+    root: PathBuf,
+}
+
+impl PluginRegistry {
+    pub fn new(profile: &Path) -> Self {
+        Self {
+            root: profile.join("plugins"),
+        }
+    }
+
+    fn load(&self) -> io::Result<InstalledPlugins> {
+        match read_json(&self.root.join("installed.json")) {
+            Ok(snapshot) => Ok(snapshot),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                Ok(InstalledPlugins::default())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn save(&self, snapshot: &InstalledPlugins) -> io::Result<()> {
+        fs::create_dir_all(&self.root)?;
+        let mut pending = tempfile::NamedTempFile::new_in(&self.root)?;
+        serde_json::to_writer(&mut pending, snapshot).map_err(io::Error::other)?;
+        pending.as_file().sync_all()?;
+        pending
+            .persist(self.root.join("installed.json"))
+            .map_err(io::Error::other)?;
+        Ok(())
+    }
+
+    fn mutation_lock(&self) -> io::Result<fs::File> {
+        fs::create_dir_all(&self.root)?;
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(self.root.join("registry.lock"))?;
+        file.lock()?;
+        Ok(file)
+    }
+
+    fn installed(&self, id: &str, revision: &str) -> io::Result<InstalledPlugin> {
+        if !valid_identifier(id) || !valid_package_path(revision) || revision.contains('/') {
+            return Err(invalid("invalid installed plugin reference"));
+        }
+        let directory = self.root.join(id).join(revision);
+        crate::cache::validate_directory(&directory)?;
+        let manifest: PluginManifest = read_json(&directory.join(MANIFEST_FILE))?;
+        manifest.validate()?;
+        if manifest.id != id {
+            return Err(invalid("invalid plugin package identity"));
+        }
+        Ok(InstalledPlugin {
+            manifest,
+            directory,
+        })
+    }
+
+    pub fn list(&self) -> io::Result<Vec<InstalledPlugin>> {
+        self.load()?
+            .active
+            .iter()
+            .map(|(id, revision)| self.installed(id, revision))
+            .collect()
+    }
+
+    pub fn get(&self, id: &str) -> io::Result<Option<InstalledPlugin>> {
+        self.load()?
+            .active
+            .get(id)
+            .map(|revision| self.installed(id, revision))
+            .transpose()
+    }
+
+    /// The most specific matcher wins. A saved site choice has precedence.
+    pub fn candidates(&self, source: &Url) -> io::Result<Vec<InstalledPlugin>> {
+        let snapshot = self.load()?;
+        let host = source.host_str().map(|value| value.trim_end_matches('.'));
+        let path = source.path().to_ascii_lowercase();
+        let preferred = host.and_then(|host| snapshot.preferred.get(host));
+        let mut matches = Vec::new();
+        for (id, revision) in &snapshot.active {
+            let Ok(plugin) = self.installed(id, revision) else {
+                continue;
+            };
+            if let Some(score) = plugin
+                .manifest
+                .inputs
+                .iter()
+                .filter_map(|input| input.score(source.scheme(), host, &path))
+                .max()
+            {
+                matches.push((preferred == Some(id), score, plugin));
+            }
+        }
+        matches.sort_by(|a, b| {
+            b.0.cmp(&a.0)
+                .then(b.1.cmp(&a.1))
+                .then(a.2.manifest.id.cmp(&b.2.manifest.id))
+        });
+        Ok(matches.into_iter().map(|(_, _, plugin)| plugin).collect())
+    }
+
+    pub fn remember(&self, source: &Url, id: &str) -> io::Result<()> {
+        let Some(host) = source.host_str() else {
+            return Ok(());
+        };
+        let _lock = self.mutation_lock()?;
+        let mut snapshot = self.load()?;
+        if !snapshot.active.contains_key(id) {
+            return Err(invalid("plugin is no longer installed"));
+        }
+        snapshot
+            .preferred
+            .insert(host.trim_end_matches('.').to_owned(), id.to_owned());
+        self.save(&snapshot)
+    }
+
+    pub fn task_options(
+        &self,
+        source: &Url,
+        engine: Option<&str>,
+        values: Map<String, Value>,
+    ) -> io::Result<Option<crate::TaskOptions>> {
+        let candidates = self.candidates(source)?;
+        let selected = match engine {
+            Some(engine) => Some(
+                candidates
+                    .into_iter()
+                    .find(|plugin| plugin.manifest.id == engine)
+                    .ok_or_else(|| invalid("plugin cannot handle source"))?,
+            ),
+            None => candidates.into_iter().next(),
+        };
+        match selected {
+            Some(plugin) => {
+                let values = plugin.manifest.complete_options(values)?;
+                Ok(Some(crate::TaskOptions::Plugin(crate::PluginOptions {
+                    id: plugin.manifest.id,
+                    values,
+                })))
+            }
+            None if values.is_empty() => Ok(None),
+            None => Err(invalid("no plugin handles these options")),
+        }
+    }
+
+    pub async fn download_and_install(
+        &self,
+        plugin: &CatalogPlugin,
+    ) -> io::Result<InstalledPlugin> {
+        let artifact = plugin
+            .artifact()
+            .filter(|artifact| artifact.valid())
+            .ok_or_else(|| invalid("package unavailable for this platform"))?;
+        let response = client()?
+            .get(&artifact.url)
+            .send()
+            .await
+            .map_err(network)?
+            .error_for_status()
+            .map_err(network)?;
+        if response
+            .content_length()
+            .is_some_and(|length| length > PACKAGE_LIMIT)
+        {
+            return Err(invalid("plugin package is too large"));
+        }
+        tokio::fs::create_dir_all(&self.root).await?;
+        let pending = tempfile::NamedTempFile::new_in(&self.root)?;
+        let mut file = tokio::fs::File::from_std(pending.reopen()?);
+        let mut body = response.bytes_stream();
+        let mut length = 0u64;
+        let mut digest = Sha256::new();
+        while let Some(chunk) = body.next().await {
+            let chunk = chunk.map_err(network)?;
+            length += chunk.len() as u64;
+            if length > PACKAGE_LIMIT {
+                return Err(invalid("plugin package is too large"));
+            }
+            use tokio::io::AsyncWriteExt;
+            file.write_all(&chunk).await?;
+            digest.update(&chunk);
+        }
+        file.sync_all().await?;
+        drop(file);
+        if !format!("{:x}", digest.finalize()).eq_ignore_ascii_case(&artifact.sha256) {
+            return Err(invalid("plugin package checksum mismatch"));
+        }
+        let registry = self.clone();
+        let id = plugin.id.clone();
+        let version = plugin.version.clone();
+        tokio::task::spawn_blocking(move || registry.install(pending.path(), Some((&id, &version))))
+            .await
+            .map_err(io::Error::other)?
+    }
+
+    pub fn import(&self, package: &Path) -> io::Result<InstalledPlugin> {
+        self.install(package, None)
+    }
+
+    fn install(
+        &self,
+        package: &Path,
+        expected: Option<(&str, &Version)>,
+    ) -> io::Result<InstalledPlugin> {
+        let file = fs::File::open(package)?;
+        if file.metadata()?.len() > PACKAGE_LIMIT {
+            return Err(invalid("plugin package is too large"));
+        }
+        fs::create_dir_all(&self.root)?;
+        let staging = tempfile::tempdir_in(&self.root)?;
+        unpack(file, staging.path())?;
+        let manifest: PluginManifest = read_json(&staging.path().join(MANIFEST_FILE))?;
+        manifest.validate()?;
+        if expected.is_some_and(|(id, version)| manifest.id != id || &manifest.version != version) {
+            return Err(invalid("plugin package does not match catalog"));
+        }
+        let engine = staging.path().join(&manifest.engine);
+        if !fs::metadata(&engine)?.is_file()
+            || (cfg!(windows) && !manifest.engine.ends_with(".exe"))
+        {
+            return Err(invalid("missing plugin executable"));
+        }
+        if let Some(panel) = &manifest.panel {
+            bounded_file(&staging.path().join(panel), 64 * 1024)?;
+        }
+        make_executable(&engine)?;
+        let _lock = self.mutation_lock()?;
+        let mut snapshot = self.load()?;
+        let revision = crate::TaskId::new_v4().to_string();
+        let versions = self.root.join(&manifest.id);
+        fs::create_dir_all(&versions)?;
+        let directory = versions.join(&revision);
+        fs::rename(staging.path(), &directory)?;
+        snapshot.active.insert(manifest.id.clone(), revision);
+        if let Err(error) = self.save(&snapshot) {
+            let _ = fs::remove_dir_all(&directory);
+            return Err(error);
+        }
+        Ok(InstalledPlugin {
+            manifest,
+            directory,
+        })
+    }
+
+    /// Call after download dispatch has established the engine is inactive.
+    pub(crate) fn remove(&self, id: &str) -> io::Result<()> {
+        let _lock = self.mutation_lock()?;
+        let mut snapshot = self.load()?;
+        if !valid_identifier(id) || snapshot.active.remove(id).is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "plugin is not installed",
+            ));
+        }
+        snapshot.preferred.retain(|_, preferred| preferred != id);
+        self.save(&snapshot)?;
+        fs::remove_dir_all(self.root.join(id))
+    }
+}
+
+pub fn parse_source(input: &str) -> io::Result<Url> {
+    let input = input.trim();
+    if input.is_empty() || input.len() > 64 * 1024 || input.chars().any(char::is_control) {
+        return Err(invalid("invalid download source"));
+    }
+    let path = Path::new(input);
+    if path.is_absolute() {
+        Url::from_file_path(path).map_err(|()| invalid("invalid file path"))
+    } else {
+        Url::parse(input).map_err(|_| invalid("invalid download address"))
+    }
+}
+
+pub fn built_in_source(source: &Url) -> bool {
+    matches!(source.scheme(), "http" | "https" | "ftp" | "ftps" | "sftp")
+        && source.host_str().is_some()
+}
+
+fn client() -> io::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .https_only(true)
+        .timeout(std::time::Duration::from_secs(300))
+        .user_agent("NDM-Next")
+        .build()
+        .map_err(network)
+}
+
+fn network(_: reqwest::Error) -> io::Error {
+    io::Error::other("could not fetch plugin catalog or package")
+}
+
+fn read_json<T: DeserializeOwned>(path: &Path) -> io::Result<T> {
+    serde_json::from_slice(&bounded_file(path, JSON_LIMIT)?).map_err(io::Error::other)
+}
+
+fn bounded_file(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_file() || crate::cache::is_reparse(&metadata) || metadata.len() > limit {
+        return Err(invalid("invalid plugin file"));
+    }
+    let mut bytes = Vec::new();
+    fs::File::open(path)?
+        .take(limit + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
+        return Err(invalid("plugin file exceeds its limit"));
+    }
+    Ok(bytes)
+}
+
+fn unpack(file: fs::File, directory: &Path) -> io::Result<()> {
+    let mut archive = zip::ZipArchive::new(file).map_err(io::Error::other)?;
+    if archive.is_empty() || archive.len() > 2048 {
+        return Err(invalid("invalid plugin archive file count"));
+    }
+    let mut size = 0u64;
+    let mut paths = HashSet::new();
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(io::Error::other)?;
+        let name = entry.name().map_err(io::Error::other)?;
+        let relative = name.trim_end_matches('/');
+        if !valid_package_path(relative)
+            || !paths.insert(relative.to_ascii_lowercase())
+            || entry
+                .unix_mode()
+                .is_some_and(|mode| !matches!(mode & 0o170000, 0 | 0o100000 | 0o040000))
+        {
+            return Err(invalid("unsafe file in plugin archive"));
+        }
+        let path = directory.join(relative);
+        if entry.is_dir() {
+            fs::create_dir_all(path)?;
+            continue;
+        }
+        size = size
+            .checked_add(entry.size())
+            .filter(|size| *size <= EXTRACT_LIMIT)
+            .ok_or_else(|| invalid("expanded plugin package is too large"))?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| invalid("invalid plugin path"))?;
+        fs::create_dir_all(parent)?;
+        let mut output = fs::File::create_new(&path)?;
+        let expected = entry.size();
+        if io::copy(
+            &mut Read::by_ref(&mut entry).take(expected + 1),
+            &mut output,
+        )? != expected
+        {
+            return Err(invalid("invalid expanded plugin file size"));
+        }
+        output.flush()?;
+        if entry.unix_mode().is_some_and(|mode| mode & 0o111 != 0) {
+            make_executable(&path)?;
+        }
+    }
+    Ok(())
+}
+
+fn make_executable(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
+fn invalid(reason: &'static str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, reason)
+}

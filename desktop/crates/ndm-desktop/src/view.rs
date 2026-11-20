@@ -29,6 +29,7 @@ use std::{
 };
 
 mod media;
+mod plugins;
 mod settings;
 mod storage;
 mod tasks;
@@ -41,7 +42,14 @@ enum Section {
     All,
     Active,
     Completed,
+    Plugins,
     Settings,
+}
+
+impl Section {
+    fn downloads(self) -> bool {
+        matches!(self, Self::All | Self::Active | Self::Completed)
+    }
 }
 
 enum MediaCatalog {
@@ -61,6 +69,7 @@ pub(crate) struct Desktop {
     runtime: Arc<tokio::runtime::Runtime>,
     preferences: Preferences,
     preferences_path: PathBuf,
+    integration: plugins::Integration,
     url_input: Entity<InputState>,
     search_input: Entity<InputState>,
     search_query: String,
@@ -179,6 +188,12 @@ impl Desktop {
             Some("NDMNext"),
         )]);
         let url_input = cx.new(|cx| InputState::new(window, cx).placeholder("https://…"));
+        cx.observe_in(&url_input, window, |this, input, window, cx| {
+            if this.new_download_open {
+                this.update_draft(input.read(cx).value().trim().to_owned(), window, cx);
+            }
+        })
+        .detach();
         let search_input = cx.new(|cx| {
             InputState::new(window, cx).placeholder(if preferences.language == Language::Chinese {
                 "搜索"
@@ -305,7 +320,10 @@ impl Desktop {
                             });
                         }
                         crate::instance::Command::Refresh => {
-                            let _ = view.update(cx, |this, cx| this.discover_new_tasks(cx));
+                            let _ = view.update_in(cx, |this, window, cx| {
+                                this.sync_download_limits(window, cx);
+                                this.discover_new_tasks(cx);
+                            });
                         }
                         crate::instance::Command::Quit => {
                             let scheduler = scheduler.clone();
@@ -387,6 +405,7 @@ impl Desktop {
         let page_focus = crate::chrome::page_focus(window, cx);
         cx.set_reduce_motion(!preferences.ui_animations);
         let mut this = Self {
+            integration: plugins::Integration::new(&store),
             store,
             scheduler,
             runtime,
@@ -722,8 +741,8 @@ impl Desktop {
             .trim()
             .to_owned();
         let destination = self.directory_input.read(cx).value().to_string();
-        let mut parsed = match reqwest::Url::parse(&url) {
-            Ok(url) if matches!(url.scheme(), "http" | "https" | "ftp" | "ftps" | "sftp") => url,
+        let mut parsed = match ndm_core::plugins::parse_source(&url) {
+            Ok(url) => url,
             _ => {
                 self.set_notice(
                     self.text("请输入有效的下载链接。", "Enter a valid download URL.")
@@ -734,13 +753,36 @@ impl Desktop {
                 return;
             }
         };
+        let plugin_options = match self.plugin_task_options(&url, cx) {
+            Ok(options) => options,
+            Err(error) => {
+                self.set_notice(error.into(), cx);
+                cx.notify();
+                return;
+            }
+        };
+        if plugin_options.is_none() && !ndm_core::plugins::built_in_source(&parsed) {
+            self.set_notice(
+                self.text(
+                    "请安装适用于此来源的插件。",
+                    "Install a plugin for this source.",
+                )
+                .into(),
+                cx,
+            );
+            cx.notify();
+            return;
+        }
         let auth = AuthFields {
             username: self.auth_user_input.read(cx).value().to_string(),
             password: self.auth_password_input.read(cx).value().to_string(),
             key_path: self.auth_key_input.read(cx).value().to_string(),
             passphrase: self.auth_passphrase_input.read(cx).value().to_string(),
         };
-        let protocol_options = match apply_protocol_auth(&mut parsed, &auth, self.ftp_security) {
+        let protocol_options = match plugin_options.map_or_else(
+            || apply_protocol_auth(&mut parsed, &auth, self.ftp_security),
+            Ok,
+        ) {
             Ok(options) => options,
             Err(_) => {
                 self.set_notice(
@@ -798,10 +840,10 @@ impl Desktop {
             expected_size: None,
             headers: BTreeMap::new(),
         };
+        self.remember_engine_choice(&parsed, &options);
         match self
             .store
-            .prepare_with_options(id, &request, &options)
-            .and_then(|_| self.store.commit(id))
+            .enqueue(&[(id, request, options, Default::default())])
         {
             Ok(_) => {
                 self.scheduler.notify();
@@ -867,11 +909,11 @@ impl Desktop {
             cx.notify();
             return;
         };
-        if !(1..=32).contains(&active) || !(1..=16).contains(&connections) || speed > 1_000_000 {
+        if !(1..=32).contains(&active) || !(1..=256).contains(&connections) || speed > 1_000_000 {
             self.set_notice(
                 self.text(
-                    "任务数须为 1–32，连接数须为 1–16，限速须为 0–1000000。",
-                    "Tasks must be 1–32, connections 1–16, and speed 0–1000000.",
+                    "任务数须为 1–32，线程数须为 1–256，限速须为 0–1000000。",
+                    "Tasks must be 1–32, threads 1–256, and speed 0–1000000.",
                 )
                 .into(),
                 cx,
@@ -926,7 +968,16 @@ impl Desktop {
         updated.auto_resume = self.pending_auto_resume;
         updated.proxy = proxy;
         updated.proxy_enabled_by_default = self.pending_proxy_enabled && updated.proxy.is_some();
-        if updated.save(&self.preferences_path).is_err() {
+        if updated.save(&self.preferences_path).is_err()
+            || self
+                .store
+                .change_download_limits(
+                    Some(active as u32),
+                    Some(connections as u32),
+                    ndm_core::DownloadLimits::default(),
+                )
+                .is_err()
+        {
             self.set_notice(
                 self.text("无法保存设置。", "Could not save settings.")
                     .into(),
@@ -950,6 +1001,31 @@ impl Desktop {
                 .into(),
                 cx,
             );
+        }
+        cx.notify();
+    }
+
+    fn sync_download_limits(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Ok(Some(limits)) = self.store.download_limits() else {
+            return;
+        };
+        if self.preferences.max_active_tasks != limits.active_tasks as usize {
+            let current = self.preferences.max_active_tasks.to_string();
+            if self.active_input.read(cx).value().as_ref() == current {
+                self.active_input.update(cx, |input, cx| {
+                    input.set_value(limits.active_tasks.to_string(), window, cx)
+                });
+            }
+            self.preferences.max_active_tasks = limits.active_tasks as usize;
+        }
+        if self.preferences.max_connections != limits.download_threads as usize {
+            let current = self.preferences.max_connections.to_string();
+            if self.connections_input.read(cx).value().as_ref() == current {
+                self.connections_input.update(cx, |input, cx| {
+                    input.set_value(limits.download_threads.to_string(), window, cx)
+                });
+            }
+            self.preferences.max_connections = limits.download_threads as usize;
         }
         cx.notify();
     }
@@ -1385,7 +1461,7 @@ impl Desktop {
                             TaskState::Queued | TaskState::Running | TaskState::Paused
                         ),
                         Section::Completed => task.state == TaskState::Completed,
-                        Section::Settings => false,
+                        Section::Plugins | Section::Settings => false,
                     }
             })
             .collect()
@@ -1418,6 +1494,7 @@ impl Desktop {
             Section::All => IconName::LayoutDashboard,
             Section::Active => IconName::ArrowDown,
             Section::Completed => IconName::CircleCheck,
+            Section::Plugins => IconName::LayoutDashboard,
             Section::Settings => IconName::Settings2,
         };
         let tone = crate::motion::ThemeTone::current(cx);
@@ -1445,7 +1522,7 @@ impl Desktop {
                     .filter(|task| task.state == TaskState::Completed)
                     .count(),
             ),
-            Section::Settings => None,
+            Section::Plugins | Section::Settings => None,
         };
         let row = div()
             .w_full()
@@ -1483,6 +1560,11 @@ impl Desktop {
                     this.clear_notice();
                 }
                 this.section = section;
+                match section {
+                    Section::Plugins => this.open_plugin_market(cx),
+                    Section::Settings => this.refresh_codex_status(cx),
+                    _ => {}
+                }
                 cx.notify();
             }));
         if selected {
@@ -1557,7 +1639,7 @@ impl Render for Desktop {
             .min_w_0()
             .gap_2()
             .pr_3()
-            .when(self.section != Section::Settings, |row| {
+            .when(self.section.downloads(), |row| {
                 row.child(
                     crate::chrome::title_bar_action(
                         "search-title-action",
@@ -1647,18 +1729,20 @@ impl Render for Desktop {
                             self.text("新建下载", "New download")
                         })
                         .accessibility_label(self.text("新建下载", "New download"))
-                        .on_click(cx.listener(|this, _, _, cx| {
+                        .on_click(cx.listener(|this, _, window, cx| {
                             if matches!(this.update_state, UpdateState::Installing) {
                                 return;
                             }
                             this.new_download_open = !this.new_download_open;
+                            if this.new_download_open {
+                                let source = this.url_input.read(cx).value().trim().to_owned();
+                                this.update_draft(source, window, cx);
+                            }
                             cx.notify();
                         })),
                 ))
             })
-            .when(self.section == Section::Settings, |row| {
-                row.child(div().flex_1())
-            })
+            .when(!self.section.downloads(), |row| row.child(div().flex_1()))
             .when(
                 matches!(
                     self.update_state,
@@ -1680,6 +1764,8 @@ impl Render for Desktop {
             content = content
                 .overflow_y_scroll()
                 .child(self.settings_panel(dark, window, cx));
+        } else if self.section == Section::Plugins {
+            content = content.overflow_y_scroll().child(self.market_panel(cx));
         } else {
             if let Some(id) = self.confirming_host_key
                 && let Some(key) = self.pending_host_keys.get(&id)
@@ -1761,9 +1847,18 @@ impl Render for Desktop {
                                     div().flex_1().child(
                                         Input::new(&self.url_input)
                                             .id("download-url")
-                                            .aria_label(self.text("下载链接", "Download URL"))
+                                            .aria_label(
+                                                self.text("下载链接或文件", "Download URL or file"),
+                                            )
                                             .w_full(),
                                     ),
+                                )
+                                .child(
+                                    Button::new("choose-download-file")
+                                        .label(self.text("选取文件", "Choose file"))
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.pick_download_file(window, cx)
+                                        })),
                                 )
                                 .child(
                                     Button::new("advanced-auth")
@@ -1809,7 +1904,8 @@ impl Render for Desktop {
                                             .w_full(),
                                     ),
                                 ),
-                        ),
+                        )
+                        .child(self.engine_draft_panel(cx)),
                 );
                 if self.auth_expanded {
                     content = content.child(div().rounded_xl().border_1().border_color(rgb(border)).bg(rgb(side)).p_4().flex().flex_col().gap_3()
@@ -2007,7 +2103,7 @@ impl Render for Desktop {
             )
             .key_context("NDMNext")
             .on_action(cx.listener(|this, _: &FocusSearch, window, cx| {
-                if this.section == Section::Settings {
+                if !this.section.downloads() {
                     this.section = Section::All;
                 }
                 this.search_input
@@ -2088,6 +2184,11 @@ impl Render for Desktop {
                                 cx,
                             ))
                             .child(div().flex_1())
+                            .child(self.nav_item(
+                                self.text("插件市场", "Plugin market"),
+                                Section::Plugins,
+                                cx,
+                            ))
                             .child(self.nav_item(
                                 self.text("设置", "Settings"),
                                 Section::Settings,

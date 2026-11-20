@@ -9,6 +9,8 @@ use ndm_core::{DashOptions, HlsOptions, NewTask, Store, TaskId, TaskOptions, Tas
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+pub mod harness;
+
 /// Chromium accepts at most 1 MiB from a native host; apply the same limit both ways.
 pub const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 
@@ -231,14 +233,27 @@ impl Host {
             Command::Prepare { id, task } => {
                 // A retry of an existing handoff keeps its original destination even
                 // when the application default changes between prepare requests.
-                let destination = match self.store.get(id) {
-                    Ok(Some(existing)) => existing.request.destination,
-                    Ok(None) => self.destination.clone(),
+                let (destination, original_options) = match self.store.get(id) {
+                    Ok(Some(existing)) => (existing.request.destination, Some(existing.options)),
+                    Ok(None) => (self.destination.clone(), None),
                     Err(_) => return json!({"ok":false,"error":"prepare_failed"}),
                 };
-                let Some((task, options)) = task.validate(destination) else {
+                let Some((task, mut options)) = task.validate(destination) else {
                     return json!({"ok":false,"error":"invalid_request"});
                 };
+                if let Some(TaskOptions::Plugin(original)) = &original_options
+                    && options == TaskOptions::Auto
+                {
+                    options = TaskOptions::Plugin(original.clone());
+                } else if original_options.is_none()
+                    && options == TaskOptions::Auto
+                    && let Ok(url) = reqwest::Url::parse(&task.url)
+                    && let Ok(Some(plugin)) =
+                        ndm_core::plugins::PluginRegistry::new(self.store.profile_directory())
+                            .task_options(&url, None, Default::default())
+                {
+                    options = plugin;
+                }
                 match self.store.prepare_with_options(id, &task, &options) {
                     Ok(task) => json!({"ok":true,"state":state_name(task.state)}),
                     Err(_) => json!({"ok":false,"error":"prepare_failed"}),

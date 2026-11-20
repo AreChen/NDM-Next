@@ -18,6 +18,8 @@ mod instance;
 mod media;
 mod model;
 pub mod plugin_engine;
+mod plugin_transfer;
+pub mod plugins;
 mod scheduler;
 mod secrets;
 mod sftp;
@@ -49,10 +51,13 @@ pub use instance::{
 };
 #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 pub use instance::{request_desktop_shutdown, wait_for_desktop_ready, wake_desktop};
-pub use model::{NewTask, Task, TaskId, TaskOptions, TaskState};
+pub use model::{
+    BatchLimit, DownloadLimits, NewTask, PluginOptions, Task, TaskId, TaskOptions, TaskPolicy,
+    TaskState,
+};
 pub use scheduler::{Scheduler, SchedulerEvent, SchedulerOptions};
 pub use sftp::{SftpAuth, SftpOptions, download_sftp, execute_sftp};
-pub use store::{PendingSftpHost, Store};
+pub use store::{PendingSftpHost, Store, TaskCommand};
 pub use task_progress::recover_task_progress;
 
 #[derive(Debug, thiserror::Error)]
@@ -125,6 +130,16 @@ pub enum Error {
     DashRecovery,
     #[error("trusted local media tools are unavailable")]
     MediaToolUnavailable,
+    #[error("download engine plugin is unavailable")]
+    PluginUnavailable,
+    #[error("download engine plugin authentication failed")]
+    PluginAuthentication,
+    #[error("download engine plugin network error")]
+    PluginNetwork,
+    #[error("download engine plugin does not support this source")]
+    PluginSource,
+    #[error("download engine plugin failed")]
+    PluginTransfer,
     #[error("download was paused or cancelled")]
     Cancelled,
 }

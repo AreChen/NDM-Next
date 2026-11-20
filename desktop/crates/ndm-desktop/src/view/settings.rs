@@ -196,7 +196,7 @@ impl Desktop {
                 muted,
             ))
             .child(self.settings_field(
-                self.text("连接数", "Connections"),
+                self.text("下载线程", "Download threads"),
                 "max-connections",
                 &self.connections_input,
                 muted,
@@ -444,8 +444,8 @@ impl Desktop {
                 IconName::ArrowDown,
                 self.text("下载行为", "Download behavior"),
                 self.text(
-                    "并发、连接数、限速与恢复",
-                    "Concurrency, connections and recovery",
+                    "并发任务、下载线程、限速与恢复",
+                    "Active tasks, download threads, speed and recovery",
                 ),
             ),
             downloads,
@@ -624,7 +624,7 @@ impl Desktop {
             panel = panel.child(settings_row(first, second, stack));
             row_index += 1;
         }
-        panel.child(about)
+        panel.child(self.ai_panel(cx)).child(about)
     }
 }
 

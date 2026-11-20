@@ -1,5 +1,11 @@
 //! Wire types and framing for NDM Next download engine workers.
 
+mod manifest;
+mod worker;
+
+pub use manifest::*;
+pub use worker::{Worker, serve};
+
 use std::{
     collections::BTreeMap,
     io::{self, BufRead, Read, Write},
@@ -11,6 +17,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 pub const ENGINE_PROTOCOL_VERSION: u32 = 1;
 pub const ENGINE_ARGUMENT: &str = "--ndm-engine";
+pub const MEDIA_TOOLS_ENV: &str = "NDM_MEDIA_TOOLS";
 pub const MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 
 // Sources and options can contain credentials. Keep them out of Debug output.

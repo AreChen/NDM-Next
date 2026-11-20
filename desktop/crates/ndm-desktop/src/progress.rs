@@ -492,6 +492,7 @@ mod tests {
         std::fs::write(&output, [0; 123]).unwrap();
         let task = Task {
             cache_directory: None,
+            policy: Default::default(),
             id: TaskId::new_v4(),
             request: NewTask {
                 url: "https://example.test/archive.zip".into(),

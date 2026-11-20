@@ -129,6 +129,10 @@ fn main() {
         }
     }
     let store = Arc::new(Store::open(&data_dir.join("tasks.db")).expect("open task database"));
+    if let Ok(Some(limits)) = store.download_limits() {
+        preferences.max_active_tasks = limits.active_tasks as usize;
+        preferences.max_connections = limits.download_threads as usize;
+    }
     let prepared_at_launch = store
         .list()
         .unwrap_or_default()
@@ -153,7 +157,7 @@ fn main() {
         let scheduler = scheduler.clone();
         let sender = ui_sender.clone();
         instance.on_wake(move || {
-            scheduler.notify();
+            scheduler.refresh_download_limits();
             let _ = sender.send(instance::Command::Refresh);
         });
         let sender = ui_sender.clone();

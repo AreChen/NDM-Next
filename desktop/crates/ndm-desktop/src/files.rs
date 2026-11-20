@@ -1,4 +1,4 @@
-use ndm_core::{Task, TaskState};
+use ndm_core::{Task, TaskOptions, TaskState};
 use std::{
     io,
     path::{Path, PathBuf},
@@ -22,8 +22,13 @@ fn completed_output(task: &Task) -> io::Result<Option<PathBuf>> {
     };
     #[cfg(not(windows))]
     let reparse = metadata.file_type().is_symlink();
-    if !metadata.is_file() || reparse {
-        return Err(io::Error::other("download output is not a regular file"));
+    if reparse
+        || !(metadata.is_file()
+            || (metadata.is_dir() && matches!(task.options, TaskOptions::Plugin(_))))
+    {
+        return Err(io::Error::other(
+            "download output is not a regular file or plugin output folder",
+        ));
     }
     let parent = path
         .parent()
@@ -61,6 +66,12 @@ pub(crate) fn open_file(task: &Task) -> io::Result<()> {
 }
 
 pub(crate) fn open_folder(task: &Task) -> io::Result<()> {
+    if matches!(task.options, TaskOptions::Plugin(_))
+        && let Ok(Some(path)) = completed_output(task)
+        && path.is_dir()
+    {
+        return open_directory(&path);
+    }
     open_directory(&task.request.destination)
 }
 
@@ -193,6 +204,7 @@ mod tests {
     fn task(destination: &std::path::Path, output: std::path::PathBuf, state: TaskState) -> Task {
         Task {
             cache_directory: None,
+            policy: Default::default(),
             id: ndm_core::TaskId::new_v4(),
             request: NewTask {
                 url: "https://example.test/file".into(),

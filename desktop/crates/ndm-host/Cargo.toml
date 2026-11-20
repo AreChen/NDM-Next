@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 ndm-core = { path = "../ndm-core" }
+ndm-plugin-sdk = { path = "../ndm-plugin-sdk" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -14,6 +15,9 @@ tempfile = "3"
 
 [build-dependencies]
 embed-resource = "3.0.12"
+
+[dev-dependencies]
+zip = { version = "9.8.1", default-features = false }
 
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys.workspace = true

@@ -11,8 +11,10 @@ gpui-kit.workspace = true
 # Upstream Kit adapter, with its Kit pin updated to our 0.10 backend.
 gpui-motion-kit = { path = "../../vendor/gpui-motion-kit", version = "=0.5.0" }
 ndm-core = { path = "../ndm-core" }
+ndm-host = { path = "../ndm-host" }
 percent-encoding.workspace = true
 reqwest.workspace = true
+rquickjs = "0.14.0"
 serde.workspace = true
 serde_json.workspace = true
 semver = "1"
@@ -30,9 +32,6 @@ raw-window-handle = "0.6"
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
 tray-icon = { version = "=0.26.1", default-features = false }
-
-[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
-ndm-host = { path = "../ndm-host" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

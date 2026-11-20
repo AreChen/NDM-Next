@@ -89,6 +89,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let task = Task {
             cache_directory: None,
+            policy: Default::default(),
             id: TaskId::new_v4(),
             request: NewTask {
                 url: "https://example.test/file".into(),

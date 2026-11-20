@@ -43,6 +43,81 @@ pub(crate) struct OwnedFiles {
     directories: Vec<PathBuf>,
 }
 
+const ENGINE_MARKER: &str = "engine-workspace";
+const ENGINE_MARKER_DATA: &[u8] = b"ndm-next-plugin-worker-v1";
+
+pub(crate) fn engine_workspace(task: &crate::Task) -> io::Result<PathBuf> {
+    let task_directory = task.work_directory();
+    fs::create_dir_all(&task_directory)?;
+    validate_directory(&task_directory)?;
+    let workspace = task_directory.join("engine");
+    let marker = task_directory.join(ENGINE_MARKER);
+    if !marker.try_exists()? {
+        // Refuse to adopt an existing unmarked engine directory.
+        fs::create_dir(&workspace)?;
+        let result = (|| {
+            use io::Write;
+            let mut pending = tempfile::NamedTempFile::new_in(&task_directory)?;
+            pending.write_all(ENGINE_MARKER_DATA)?;
+            pending.as_file().sync_all()?;
+            pending
+                .persist_noclobber(&marker)
+                .map_err(io::Error::other)?;
+            Ok::<_, io::Error>(())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_dir(&workspace);
+        }
+        result?;
+    }
+    verify_engine_marker(&task_directory)?;
+    validate_directory(&workspace)?;
+    Ok(workspace)
+}
+
+fn verify_engine_marker(directory: &Path) -> io::Result<()> {
+    let marker = directory.join(ENGINE_MARKER);
+    let metadata = fs::symlink_metadata(&marker)?;
+    if is_reparse(&metadata)
+        || !metadata.is_file()
+        || metadata.len() != ENGINE_MARKER_DATA.len() as u64
+        || fs::read(marker)? != ENGINE_MARKER_DATA
+    {
+        return Err(io::Error::other("unrecognized plugin workspace"));
+    }
+    Ok(())
+}
+
+fn collect_engine(directory: &Path, result: &mut OwnedFiles, depth: usize) -> io::Result<()> {
+    if depth > 32 {
+        return Err(io::Error::other("plugin workspace is too deeply nested"));
+    }
+    validate_directory(directory)?;
+    for entry in fs::read_dir(directory)? {
+        let path = entry?.path();
+        let metadata = fs::symlink_metadata(&path)?;
+        if is_reparse(&metadata) {
+            return Err(io::Error::other("linked plugin workspace entry"));
+        }
+        result.modified = result.modified.max(metadata.modified()?);
+        if metadata.is_dir() {
+            collect_engine(&path, result, depth + 1)?;
+        } else if metadata.is_file() {
+            result.bytes = result.bytes.saturating_add(metadata.len());
+            result.files.push(path);
+        } else {
+            return Err(io::Error::other("invalid plugin workspace entry"));
+        }
+        if result.files.len() + result.directories.len() > 70_000 {
+            return Err(io::Error::other(
+                "plugin workspace inventory limit exceeded",
+            ));
+        }
+    }
+    result.directories.push(directory.to_owned());
+    Ok(())
+}
+
 fn known_file(name: &str, media: bool) -> bool {
     if media {
         return matches!(name, "output.mp4" | "output.mkv")
@@ -88,7 +163,13 @@ fn collect(directory: &Path, media: bool, result: &mut OwnedFiles) -> io::Result
         if is_reparse(&metadata) {
             return Err(io::Error::other("linked cache entry"));
         }
-        if metadata.is_file() && known_file(&name, media) {
+        if !media && name == ENGINE_MARKER {
+            verify_engine_marker(directory)?;
+            result.files.push(path);
+        } else if !media && name == "engine" && metadata.is_dir() {
+            verify_engine_marker(directory)?;
+            collect_engine(&path, result, 0)?;
+        } else if metadata.is_file() && known_file(&name, media) {
             result.bytes = result.bytes.saturating_add(metadata.len());
             result.modified = result.modified.max(metadata.modified()?);
             result.files.push(path);

@@ -100,6 +100,9 @@ impl PluginEngine {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true);
+        if let Some(tools) = crate::media::LocalTools::installed_directory() {
+            command.env(ndm_plugin_sdk::MEDIA_TOOLS_ENV, tools);
+        }
         let mut worker = process::Worker::spawn(&mut command)?;
         let mut channel = Channel {
             input: worker.child.stdin.take().ok_or(EngineError::Protocol)?,

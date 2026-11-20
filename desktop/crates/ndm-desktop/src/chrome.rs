@@ -81,11 +81,12 @@ pub(crate) fn copy_link_button(
 }
 
 pub(crate) fn choice_item(
-    label: &'static str,
+    label: impl Into<SharedString>,
     selected: bool,
     dark: bool,
 ) -> gpui_kit::component::menu::PopupMenuItem {
     use gpui_kit::component::ActiveTheme;
+    let label = label.into();
     gpui_kit::component::menu::PopupMenuItem::element(move |_, cx| {
         div()
             // PopupMenu already pads the outer, hoverable row by 0.5rem.
@@ -99,7 +100,7 @@ pub(crate) fn choice_item(
                 row.bg(rgb(if dark { 0x302b50 } else { 0xede9ff }))
                     .text_color(rgb(if dark { 0xd9d1ff } else { 0x523fa7 }))
             })
-            .child(label)
+            .child(label.clone())
     })
 }
 

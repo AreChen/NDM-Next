@@ -16,9 +16,9 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    DashOptions, DownloadProgress, Error, FtpOptions, HlsOptions, HttpOptions, ProgressSnapshot,
-    ProxyOptions, Result, SftpOptions, Store, Task, TaskId, TaskOptions, TaskState, execute_dash,
-    execute_ftp, execute_hls, execute_http, execute_sftp,
+    DashOptions, DownloadLimits, DownloadProgress, Error, FtpOptions, HlsOptions, HttpOptions,
+    ProgressSnapshot, ProxyOptions, Result, SftpOptions, Store, Task, TaskCommand, TaskId,
+    TaskOptions, TaskState, execute_dash, execute_ftp, execute_hls, execute_http, execute_sftp,
 };
 
 #[derive(Clone, Debug)]
@@ -27,6 +27,12 @@ pub struct SchedulerOptions {
     pub http: HttpOptions,
     pub auto_resume: bool,
     pub cache_directory: Option<PathBuf>,
+}
+impl SchedulerOptions {
+    pub fn apply_limits(&mut self, limits: DownloadLimits) {
+        self.max_active_tasks = limits.active_tasks as usize;
+        self.http.max_connections = limits.download_threads as usize;
+    }
 }
 impl Default for SchedulerOptions {
     fn default() -> Self {
@@ -59,6 +65,8 @@ pub enum SchedulerEvent {
 
 #[derive(Clone)]
 struct Active {
+    batch: Option<TaskId>,
+    plugin: Option<String>,
     cancel: CancellationToken,
     stop: CancellationToken,
     manual_pause: Arc<AtomicBool>,
@@ -98,6 +106,9 @@ pub struct Scheduler(Arc<Inner>);
 impl Scheduler {
     pub fn start(store: Arc<Store>, mut options: SchedulerOptions) -> Result<Self> {
         let runtime = tokio::runtime::Handle::try_current().map_err(|_| Error::InvalidState)?;
+        if let Some(limits) = store.download_limits()? {
+            options.apply_limits(limits);
+        }
         options.max_active_tasks = options.max_active_tasks.clamp(1, 32);
         if options.auto_resume {
             store.recover_interrupted()?;
@@ -197,6 +208,35 @@ impl Scheduler {
         options.max_active_tasks = options.max_active_tasks.clamp(1, 32);
         *self.0.options.write().unwrap() = options;
         self.notify();
+    }
+
+    pub fn refresh_download_limits(&self) {
+        if let Ok(Some(limits)) = self.0.store.download_limits() {
+            self.0.options.write().unwrap().apply_limits(limits);
+        }
+        self.notify();
+    }
+
+    pub fn uninstall_plugin(&self, id: &str) -> Result<()> {
+        let _maintenance = self.0.maintenance.write().unwrap();
+        if self
+            .0
+            .active
+            .lock()
+            .unwrap()
+            .values()
+            .any(|worker| worker.plugin.as_deref() == Some(id))
+            || self
+                .0
+                .store
+                .list_queued()?
+                .iter()
+                .any(|task| plugin_id(task) == Some(id))
+        {
+            return Err(Error::InvalidState);
+        }
+        crate::plugins::PluginRegistry::new(self.0.store.profile_directory()).remove(id)?;
+        Ok(())
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<SchedulerEvent> {
@@ -359,6 +399,16 @@ async fn dispatch(inner: Arc<Inner>) {
             return;
         }
         let notified = inner.wake.notified();
+        if let Ok(Some((sequence, id, command))) = inner.store.next_task_command() {
+            let scheduler = Scheduler(inner.clone());
+            let _ = match command {
+                TaskCommand::Pause => scheduler.pause(id).await,
+                TaskCommand::Resume => scheduler.resume(id).await,
+            };
+            if inner.store.finish_task_command(sequence).is_ok() {
+                continue;
+            }
+        }
         if let Ok(requests) = inner.store.pending_discards()
             && let Some(id) = requests.first().copied()
         {
@@ -375,7 +425,7 @@ async fn dispatch(inner: Arc<Inner>) {
             .max_active_tasks
             .saturating_sub(inner.active.lock().unwrap().len());
         if capacity > 0 {
-            let queued = match inner.store.list() {
+            let queued = match inner.store.list_queued() {
                 Ok(tasks) => tasks,
                 Err(_) => {
                     tokio::select! { _ = inner.shutdown.cancelled() => return, _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {} }
@@ -383,26 +433,51 @@ async fn dispatch(inner: Arc<Inner>) {
                 }
             };
             let mut started = 0;
-            for task in queued
-                .into_iter()
-                .filter(|task| task.state == TaskState::Queued)
-            {
+            let mut engine_limits = HashMap::new();
+            for task in queued {
                 if started >= capacity || inner.shutdown.is_cancelled() {
                     break;
                 }
                 let _maintenance = inner.maintenance.read().unwrap();
-                let mut active = inner.active.lock().unwrap();
-                if active.contains_key(&task.id) {
-                    continue;
-                }
                 let Ok(Some(task)) = inner.store.get(task.id) else {
                     continue;
                 };
                 if task.state != TaskState::Queued {
                     continue;
                 }
+                let plugin = plugin_id(&task);
+                let plugin_limit = plugin.and_then(|id| {
+                    *engine_limits.entry(id.to_owned()).or_insert_with(|| {
+                        crate::plugins::PluginRegistry::new(inner.store.profile_directory())
+                            .get(id)
+                            .ok()
+                            .flatten()
+                            .map(|engine| engine.manifest.limits.active_tasks as usize)
+                    })
+                });
+                let mut active = inner.active.lock().unwrap();
+                if active.contains_key(&task.id)
+                    || task.policy.batch.is_some_and(|batch| {
+                        active
+                            .values()
+                            .filter(|job| job.batch == Some(batch.id))
+                            .count()
+                            >= batch.active_tasks as usize
+                    })
+                    || plugin_limit.is_some_and(|limit| {
+                        active
+                            .values()
+                            .filter(|job| job.plugin.as_deref() == plugin)
+                            .count()
+                            >= limit
+                    })
+                {
+                    continue;
+                }
                 let (done_tx, done) = watch::channel(false);
                 let job = Active {
+                    batch: task.policy.batch.map(|batch| batch.id),
+                    plugin: plugin.map(str::to_owned),
                     cancel: CancellationToken::new(),
                     stop: CancellationToken::new(),
                     manual_pause: Arc::new(AtomicBool::new(false)),
@@ -428,6 +503,13 @@ async fn dispatch(inner: Arc<Inner>) {
             }
         }
         tokio::select! { _ = inner.shutdown.cancelled() => return, _ = notified => {} }
+    }
+}
+
+fn plugin_id(task: &Task) -> Option<&str> {
+    match &task.options {
+        TaskOptions::Plugin(options) => Some(&options.id),
+        _ => None,
     }
 }
 
@@ -601,7 +683,13 @@ fn task_options(task: &Task, defaults: &SchedulerOptions) -> TaskOptions {
 }
 
 async fn execute_one(inner: &Arc<Inner>, task: &Task, active: &Active) -> Result<()> {
-    let options = task_options(task, &inner.options.read().unwrap());
+    let (options, default_threads) = {
+        let defaults = inner.options.read().unwrap();
+        (
+            task_options(task, &defaults),
+            defaults.http.max_connections.clamp(1, 256) as u32,
+        )
+    };
     match options {
         TaskOptions::Auto | TaskOptions::AutoHttp => match inner.store.start(task.id) {
             Ok(()) => {
@@ -610,15 +698,31 @@ async fn execute_one(inner: &Arc<Inner>, task: &Task, active: &Active) -> Result
             }
             Err(error) => Err(error),
         },
-        TaskOptions::Http(options) => execute_http(
-            &inner.store,
-            task.id,
-            &options,
-            active.cancel.clone(),
-            active.progress.clone(),
-        )
-        .await
-        .map(|_| ()),
+        TaskOptions::Http(mut options) => {
+            if let Some(threads) = task.policy.download_threads {
+                options.max_connections = threads as usize;
+            }
+            execute_http(
+                &inner.store,
+                task.id,
+                &options,
+                active.cancel.clone(),
+                active.progress.clone(),
+            )
+            .await
+            .map(|_| ())
+        }
+        TaskOptions::Plugin(options) => {
+            crate::plugin_transfer::execute(
+                &inner.store,
+                task.id,
+                options,
+                default_threads,
+                active.cancel.clone(),
+                active.progress.clone(),
+            )
+            .await
+        }
         TaskOptions::Ftp(options) => execute_ftp(
             &inner.store,
             task.id,

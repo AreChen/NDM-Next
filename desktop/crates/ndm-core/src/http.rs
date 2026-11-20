@@ -155,6 +155,16 @@ impl ProgressSnapshot {
 }
 
 impl DownloadProgress {
+    pub(crate) fn engine_progress(&self, progress: ndm_plugin_sdk::TransferProgress) {
+        self.set_total(progress.total);
+        self.0
+            .downloaded
+            .store(progress.downloaded, Ordering::Relaxed);
+        self.0
+            .transferred
+            .fetch_max(progress.transferred, Ordering::Relaxed);
+    }
+
     pub fn snapshot(&self) -> ProgressSnapshot {
         ProgressSnapshot {
             downloaded: self.0.downloaded.load(Ordering::Relaxed),

@@ -45,6 +45,8 @@
 
 每次 Release 均附带对应版本的扩展 ZIP。按照[扩展安装说明](docs/extension-install.md)连接浏览器。
 
+可在插件市场为 NDM Next 安装更多下载引擎。Codex CLI 可选通过 MCP 和配套 Skill 接入。参见[插件与 AI 接入说明](docs/plugins-and-ai.md)。
+
 **平台说明** [Windows](desktop/packaging/windows/README.md#browser-extension) · [macOS](desktop/packaging/macos/README.md#browser-extension) · [Linux](desktop/packaging/linux/README.md#browser-extension)。扩展后端请选择 **NDM Next**。扩展也支持连接 Neat Download Manager。
 
 <details>
