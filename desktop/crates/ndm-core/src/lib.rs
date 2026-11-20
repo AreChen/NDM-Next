@@ -15,6 +15,7 @@ mod installation;
 mod instance;
 mod media;
 mod model;
+pub mod plugin_engine;
 mod scheduler;
 mod secrets;
 mod sftp;

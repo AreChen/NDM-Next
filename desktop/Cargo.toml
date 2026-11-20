@@ -1,5 +1,10 @@
 [workspace]
-members = ["crates/ndm-core", "crates/ndm-desktop", "crates/ndm-host"]
+members = [
+    "crates/ndm-core",
+    "crates/ndm-desktop",
+    "crates/ndm-host",
+    "crates/ndm-plugin-sdk",
+]
 exclude = ["vendor/gpui-motion-kit"]
 resolver = "3"
 
