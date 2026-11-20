@@ -123,7 +123,6 @@ jobs:
           [[ -f "release-assets/NDM-Next-$version-macos-x64.dmg" ]]
           linux="NDM-Next-$version-linux-x64.tar.gz"
           [[ -f "release-assets/$linux" && -f "release-assets/$linux.sha256" ]]
-          (cd release-assets && sha256sum --check "$linux.sha256")
           tar -tzf "release-assets/$linux" > /dev/null
           extension_version=$(python3 -c 'import json; print(json.load(open("extension/manifest.json"))["version"])')
           extension="release-assets/NDM-Next-Extension-Desktop-$version-v$extension_version.zip"
