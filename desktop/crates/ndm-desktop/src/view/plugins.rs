@@ -7,12 +7,14 @@ use ndm_core::plugins::{
 use ndm_host::harness::{CodexCli, Harness, Status, Target};
 use serde_json::{Map, Value, json};
 
+mod defaults;
 mod market;
 pub(super) use market::market_search_placeholder;
 
 #[derive(Default)]
 pub(super) struct Integration {
     market: market::Market,
+    defaults: Option<defaults::Editor>,
     ai_enabled: bool,
     codex: Option<Status>,
     codex_busy: bool,
@@ -35,6 +37,12 @@ struct Field {
     definition: OptionField,
     value: Option<Value>,
     input: Option<Entity<InputState>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OptionForm {
+    Download,
+    Defaults,
 }
 
 enum PackageAction {
@@ -272,35 +280,11 @@ impl Desktop {
                     return;
                 }
                 let (candidates, selected, fields, panel_error) = result.unwrap_or_default();
-                let fields = fields
-                    .into_iter()
-                    .map(|definition| {
-                        let value = definition.default.clone();
-                        let input = matches!(
-                            definition.control,
-                            OptionControl::Integer { .. } | OptionControl::Text { .. }
-                        )
-                        .then(|| {
-                            cx.new(|cx| {
-                                let initial = value
-                                    .as_ref()
-                                    .map(|value| {
-                                        value
-                                            .as_str()
-                                            .map(str::to_owned)
-                                            .unwrap_or_else(|| value.to_string())
-                                    })
-                                    .unwrap_or_default();
-                                InputState::new(window, cx).default_value(initial)
-                            })
-                        });
-                        Field {
-                            definition,
-                            value,
-                            input,
-                        }
-                    })
-                    .collect();
+                let saved_defaults = candidates
+                    .iter()
+                    .find(|plugin| selected.as_ref() == Some(&plugin.manifest.id))
+                    .map(|plugin| &plugin.option_defaults);
+                let fields = option_fields(fields, saved_defaults, window, cx);
                 this.integration.draft = Some(Draft {
                     source,
                     candidates,
@@ -338,8 +322,28 @@ impl Desktop {
             .iter()
             .find(|plugin| &plugin.manifest.id == id)
             .ok_or(self.text("插件已不可用。", "Plugin is unavailable."))?;
-        let mut values = Map::new();
+        let mut values = plugin.option_defaults.clone();
         for field in &draft.fields {
+            values.remove(&field.definition.key);
+        }
+        values.extend(self.read_plugin_options(&draft.fields, cx)?);
+        let values = plugin
+            .manifest
+            .complete_options(values)
+            .map_err(|_| self.text("请检查插件选项。", "Check the plugin options."))?;
+        Ok(Some(TaskOptions::Plugin(ndm_core::PluginOptions {
+            id: id.clone(),
+            values,
+        })))
+    }
+
+    fn read_plugin_options(
+        &self,
+        fields: &[Field],
+        cx: &App,
+    ) -> Result<Map<String, Value>, &'static str> {
+        let mut values = Map::new();
+        for field in fields {
             let value = if let Some(input) = &field.input {
                 let input = input.read(cx).value();
                 match &field.definition.control {
@@ -359,14 +363,7 @@ impl Desktop {
                 values.insert(field.definition.key.clone(), value);
             }
         }
-        let values = plugin
-            .manifest
-            .complete_options(values)
-            .map_err(|_| self.text("请检查插件选项。", "Check the plugin options."))?;
-        Ok(Some(TaskOptions::Plugin(ndm_core::PluginOptions {
-            id: id.clone(),
-            values,
-        })))
+        Ok(values)
     }
 
     pub(super) fn remember_engine_choice(&self, source: &reqwest::Url, options: &TaskOptions) {
@@ -477,7 +474,22 @@ impl Desktop {
                 "Plugin panel could not load. Default controls are available.",
             )));
         }
-        for (index, field) in draft.fields.iter().enumerate() {
+        panel
+            .child(self.plugin_option_controls(&draft.fields, OptionForm::Download, cx))
+            .into_any_element()
+    }
+
+    fn plugin_option_controls(
+        &self,
+        fields: &[Field],
+        form: OptionForm,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let chinese = self.preferences.language == Language::Chinese;
+        let dark = self.is_dark(cx);
+        let disabled = form == OptionForm::Defaults && self.integration.market.busy;
+        let mut panel = div().flex().flex_col().gap_2();
+        for (index, field) in fields.iter().enumerate() {
             let label = field.definition.label.for_language(chinese).to_owned();
             let control = match &field.definition.control {
                 OptionControl::Boolean => {
@@ -488,6 +500,7 @@ impl Desktop {
                         .unwrap_or(false);
                     Button::new(("plugin-toggle", index))
                         .small()
+                        .disabled(disabled)
                         .label(if enabled {
                             self.text("开", "On")
                         } else {
@@ -495,7 +508,7 @@ impl Desktop {
                         })
                         .accessibility_label(label.clone())
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.set_plugin_value(index, json!(!enabled), cx);
+                            this.set_plugin_value(form, index, json!(!enabled), cx);
                         }))
                         .into_any_element()
                 }
@@ -514,6 +527,7 @@ impl Desktop {
                     let view = cx.entity().downgrade();
                     Button::new(("plugin-choice", index))
                         .small()
+                        .disabled(disabled)
                         .label(caption)
                         .dropdown_caret(true)
                         .accessibility_label(label.clone())
@@ -530,7 +544,12 @@ impl Desktop {
                                     .on_click(
                                         move |_, _, cx| {
                                             let _ = view.update(cx, |this, cx| {
-                                                this.set_plugin_value(index, json!(chosen), cx)
+                                                this.set_plugin_value(
+                                                    form,
+                                                    index,
+                                                    json!(chosen),
+                                                    cx,
+                                                )
                                             });
                                         },
                                     ),
@@ -544,6 +563,7 @@ impl Desktop {
                     |input| {
                         Input::new(input)
                             .small()
+                            .disabled(disabled)
                             .aria_label(label.clone())
                             .w(px(220.))
                             .into_any_element()
@@ -560,16 +580,29 @@ impl Desktop {
                     .child(control),
             );
         }
-        panel.into_any_element()
+        panel
     }
 
-    fn set_plugin_value(&mut self, index: usize, value: Value, cx: &mut Context<Self>) {
-        if let Some(field) = self
-            .integration
-            .draft
-            .as_mut()
-            .and_then(|draft| draft.fields.get_mut(index))
-        {
+    fn set_plugin_value(
+        &mut self,
+        form: OptionForm,
+        index: usize,
+        value: Value,
+        cx: &mut Context<Self>,
+    ) {
+        let fields = match form {
+            OptionForm::Download => self
+                .integration
+                .draft
+                .as_mut()
+                .map(|draft| &mut draft.fields),
+            OptionForm::Defaults => self
+                .integration
+                .defaults
+                .as_mut()
+                .map(|editor| &mut editor.fields),
+        };
+        if let Some(field) = fields.and_then(|fields| fields.get_mut(index)) {
             field.value = Some(value);
             cx.notify();
         }
@@ -617,106 +650,199 @@ impl Desktop {
     }
 
     pub(super) fn ai_panel(&self, cx: &mut Context<Self>) -> AnyElement {
+        use gpui_kit::assets::IconName as AssetIcon;
         let tone = crate::motion::ThemeTone::current(cx);
-        let status = self.integration.codex.unwrap_or_default();
-        let installed = status.registered && status.skill_installed;
-        let enabled = self.integration.ai_enabled;
-        integration_card(
-            self.text("AI 集成", "AI integration"),
-            if installed {
-                self.text(
-                    "Codex CLI 已安装 MCP 与 Skill。",
-                    "MCP and Skill are installed for Codex CLI.",
-                )
-            } else {
-                self.text(
-                    "按需为 Codex CLI 安装 MCP 与 Skill。",
-                    "Install MCP and Skill for Codex CLI.",
-                )
-            },
-            div()
-                .flex()
-                .gap_2()
-                .child(
-                    Button::new("enable-ai-integration")
-                        .small()
-                        .label(if enabled {
-                            self.text("关闭 AI 接入", "Disable AI access")
-                        } else {
-                            self.text("开启 AI 接入", "Enable AI access")
-                        })
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            let enabled = !this.integration.ai_enabled;
-                            if this.store.set_ai_enabled(enabled).is_ok() {
-                                this.integration.ai_enabled = enabled;
+        let busy = self.integration.codex_busy;
+        let status = self.integration.codex;
+        let installed = status.is_some_and(|status| status.registered && status.skill_installed);
+        let view = cx.entity().downgrade();
+        let status_text = match status {
+            _ if busy => self.text("处理中…", "Working…"),
+            Some(_) if installed => self.text("MCP 与 Skill 已安装", "MCP and Skill installed"),
+            Some(_) => self.text("待安装 MCP 与 Skill", "MCP and Skill available to install"),
+            None => self.text("安装状态不可用", "Installation status unavailable"),
+        };
+
+        crate::view::settings::card_surface(7, tone)
+            .flex()
+            .flex_col()
+            .gap_3()
+            .p_3()
+            .border_color(rgb(tone.rgb(0x554681, 0xc9bce9)))
+            .bg(linear_gradient(
+                112.,
+                linear_color_stop(rgb(tone.rgb(0x2b2150, 0xf2eaff)), 0.),
+                linear_color_stop(rgb(tone.rgb(0x123542, 0xe7f8fc)), 1.),
+            ))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        div()
+                            .size(px(40.))
+                            .flex()
+                            .flex_shrink_0()
+                            .items_center()
+                            .justify_center()
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(rgba(tone.rgba(0xb59aff70, 0x885dff48)))
+                            .bg(rgba(tone.rgba(0x885dff55, 0x885dff20)))
+                            .text_color(rgb(tone.rgb(0xebddff, 0x5936a5)))
+                            .child(Icon::new(AssetIcon::Sparkles).with_size(px(20.))),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div().text_base().font_weight(FontWeight::SEMIBOLD).child(
+                                    self.display_text(self.text("AI 集成", "AI integration")),
+                                ),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(tone.rgb(0xc2c8e3, 0x455272)))
+                                    .child(self.text(
+                                        "让 Codex CLI 发起和管理下载",
+                                        "Start and manage downloads from Codex CLI",
+                                    )),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .bg(rgba(tone.rgba(0x0c142b66, 0xffffffb0)))
+                            .child(
+                                crate::motion::Switch::new("enable-ai-integration")
+                                    .checked(self.integration.ai_enabled)
+                                    .label(self.text("AI 接入", "AI access"))
+                                    .on_click(move |enabled, _, cx| {
+                                        let _ = view.update(cx, |this, cx| {
+                                            if this.store.set_ai_enabled(*enabled).is_ok() {
+                                                this.integration.ai_enabled = *enabled;
+                                            } else {
+                                                this.set_notice(
+                                                    this.text(
+                                                        "无法保存 AI 设置。",
+                                                        "Could not save AI settings.",
+                                                    )
+                                                    .into(),
+                                                    cx,
+                                                );
+                                            }
+                                            cx.notify();
+                                        });
+                                    }),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .border_t_1()
+                    .border_color(rgba(tone.rgba(0xb5acdf40, 0x76689932)))
+                    .pt_3()
+                    .child(
+                        Icon::new(AssetIcon::Terminal)
+                            .with_size(px(16.))
+                            .text_color(rgb(tone.rgb(0x96e4f1, 0x26687b))),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .items_center()
+                            .flex_wrap()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child("Codex CLI"),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(if installed && !busy {
+                                        tone.rgb(0x8be0c6, 0x226958)
+                                    } else {
+                                        tone.rgb(0xc2c8e3, 0x455272)
+                                    }))
+                                    .child(status_text),
+                            ),
+                    )
+                    .child(
+                        Button::new("install-codex-integration")
+                            .small()
+                            .primary()
+                            .flex_shrink_0()
+                            .disabled(busy)
+                            .loading(busy)
+                            .label(if installed {
+                                self.text("卸载", "Uninstall")
                             } else {
-                                this.set_notice(
-                                    this.text("无法保存 AI 设置。", "Could not save AI settings.")
-                                        .into(),
+                                self.text("安装", "Install")
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.codex_action(
+                                    if installed {
+                                        CodexAction::Remove
+                                    } else {
+                                        CodexAction::Install
+                                    },
                                     cx,
                                 );
-                            }
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    Button::new("install-codex-integration")
-                        .small()
-                        .primary()
-                        .disabled(self.integration.codex_busy)
-                        .label(if installed {
-                            self.text("卸载", "Remove")
-                        } else {
-                            self.text("安装", "Install")
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.codex_action(
-                                if installed {
-                                    CodexAction::Remove
-                                } else {
-                                    CodexAction::Install
-                                },
-                                cx,
-                            );
-                        })),
-                ),
-            tone,
-        )
-        .into_any_element()
+                            })),
+                    ),
+            )
+            .into_any_element()
     }
 }
 
-fn integration_card(
-    name: &str,
-    description: &str,
-    actions: impl IntoElement,
-    tone: crate::motion::ThemeTone,
-) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .gap_3()
-        .p_3()
-        .border_1()
-        .rounded_lg()
-        .border_color(rgb(tone.rgb(0x28344b, 0xe3e8f6)))
-        .bg(rgb(tone.rgb(0x111625, 0xf8f9fd)))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(name.to_owned()),
-                )
-                .child(div().text_xs().opacity(0.8).child(description.to_owned())),
-        )
-        .child(actions)
+fn option_fields(
+    definitions: Vec<OptionField>,
+    defaults: Option<&Map<String, Value>>,
+    window: &mut Window,
+    cx: &mut Context<Desktop>,
+) -> Vec<Field> {
+    definitions
+        .into_iter()
+        .map(|definition| {
+            let value = defaults
+                .and_then(|defaults| defaults.get(&definition.key).cloned())
+                .or_else(|| definition.default.clone());
+            let input = matches!(
+                definition.control,
+                OptionControl::Integer { .. } | OptionControl::Text { .. }
+            )
+            .then(|| {
+                let initial = value.as_ref().map_or_else(String::new, |value| {
+                    value
+                        .as_str()
+                        .map_or_else(|| value.to_string(), str::to_owned)
+                });
+                cx.new(|cx| InputState::new(window, cx).default_value(initial))
+            });
+            Field {
+                definition,
+                value,
+                input,
+            }
+        })
+        .collect()
 }
 
 fn panel_fields(

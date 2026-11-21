@@ -2117,6 +2117,9 @@ impl Render for Desktop {
             )
             .key_context("NDMNext")
             .on_action(cx.listener(|this, _: &FocusSearch, window, cx| {
+                if this.section == Section::Plugins && this.plugin_defaults_open() {
+                    return;
+                }
                 if this.section == Section::Settings {
                     this.section = Section::All;
                 }

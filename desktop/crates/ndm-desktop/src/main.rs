@@ -281,6 +281,8 @@ mod asset_tests {
         for icon in [
             IconName::LayoutDashboard,
             IconName::Store,
+            IconName::Sparkles,
+            IconName::Terminal,
             IconName::Film,
             IconName::Network,
             IconName::Puzzle,

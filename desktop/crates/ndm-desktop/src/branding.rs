@@ -15,7 +15,9 @@ gpui_kit::assets::icon_assets!(
         Puzzle,
         SearchX,
         PackageOpen,
-        ArrowDownToLine
+        ArrowDownToLine,
+        Sparkles,
+        Terminal
     ]
 );
 

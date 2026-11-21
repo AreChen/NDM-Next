@@ -617,6 +617,7 @@ impl Desktop {
                                 )),
                         ),
                 );
+        panel = panel.child(self.ai_panel(cx));
         let mut cards = cards.into_iter();
         let mut row_index = 0;
         while let Some(first) = cards.next() {
@@ -627,7 +628,7 @@ impl Desktop {
             panel = panel.child(settings_row(first, second, stack));
             row_index += 1;
         }
-        panel.child(self.ai_panel(cx)).child(about)
+        panel.child(about)
     }
 }
 
@@ -820,7 +821,10 @@ fn settings_card(
         )
 }
 
-fn card_surface(index: usize, tone: impl Into<crate::motion::ThemeTone>) -> Stateful<Div> {
+pub(super) fn card_surface(
+    index: usize,
+    tone: impl Into<crate::motion::ThemeTone>,
+) -> Stateful<Div> {
     let tone = tone.into();
     div()
         .id(("settings-card", index))

@@ -135,6 +135,7 @@ impl Artifact {
 pub struct InstalledPlugin {
     pub manifest: PluginManifest,
     pub directory: PathBuf,
+    pub option_defaults: Map<String, Value>,
 }
 
 impl InstalledPlugin {
@@ -152,6 +153,20 @@ impl InstalledPlugin {
             })
             .transpose()
     }
+
+    fn complete_options(&self, values: Map<String, Value>) -> io::Result<Map<String, Value>> {
+        let mut defaults = self.option_defaults.clone();
+        defaults.extend(values);
+        self.manifest.complete_options(defaults)
+    }
+
+    pub fn option_schema(&self, tool: &DownloadTool) -> Value {
+        let mut tool = tool.clone();
+        let mut defaults = self.option_defaults.clone();
+        defaults.append(&mut tool.defaults);
+        tool.defaults = defaults;
+        self.manifest.option_schema(&tool)
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -159,6 +174,18 @@ pub struct InstalledPlugins {
     active: BTreeMap<String, String>,
     #[serde(default)]
     preferred: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    option_defaults: BTreeMap<String, Map<String, Value>>,
+}
+
+impl InstalledPlugins {
+    fn set_defaults(&mut self, id: &str, defaults: Map<String, Value>) {
+        if defaults.is_empty() {
+            self.option_defaults.remove(id);
+        } else {
+            self.option_defaults.insert(id.to_owned(), defaults);
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -187,6 +214,9 @@ impl PluginRegistry {
         fs::create_dir_all(&self.root)?;
         let mut pending = tempfile::NamedTempFile::new_in(&self.root)?;
         serde_json::to_writer(&mut pending, snapshot).map_err(io::Error::other)?;
+        if pending.as_file().metadata()?.len() > JSON_LIMIT {
+            return Err(invalid("plugin registry exceeds its size limit"));
+        }
         pending.as_file().sync_all()?;
         pending
             .persist(self.root.join("installed.json"))
@@ -206,7 +236,12 @@ impl PluginRegistry {
         Ok(file)
     }
 
-    fn installed(&self, id: &str, revision: &str) -> io::Result<InstalledPlugin> {
+    fn installed(
+        &self,
+        id: &str,
+        revision: &str,
+        snapshot: &InstalledPlugins,
+    ) -> io::Result<InstalledPlugin> {
         if !valid_identifier(id) || !valid_package_path(revision) || revision.contains('/') {
             return Err(invalid("invalid installed plugin reference"));
         }
@@ -217,25 +252,29 @@ impl PluginRegistry {
         if manifest.id != id {
             return Err(invalid("invalid plugin package identity"));
         }
+        let option_defaults = validated_defaults(&manifest, snapshot);
         Ok(InstalledPlugin {
             manifest,
             directory,
+            option_defaults,
         })
     }
 
     pub fn list(&self) -> io::Result<Vec<InstalledPlugin>> {
-        self.load()?
+        let snapshot = self.load()?;
+        snapshot
             .active
             .iter()
-            .map(|(id, revision)| self.installed(id, revision))
+            .map(|(id, revision)| self.installed(id, revision, &snapshot))
             .collect()
     }
 
     pub fn get(&self, id: &str) -> io::Result<Option<InstalledPlugin>> {
-        self.load()?
+        let snapshot = self.load()?;
+        snapshot
             .active
             .get(id)
-            .map(|revision| self.installed(id, revision))
+            .map(|revision| self.installed(id, revision, &snapshot))
             .transpose()
     }
 
@@ -247,7 +286,7 @@ impl PluginRegistry {
         let preferred = host.and_then(|host| snapshot.preferred.get(host));
         let mut matches = Vec::new();
         for (id, revision) in &snapshot.active {
-            let Ok(plugin) = self.installed(id, revision) else {
+            let Ok(plugin) = self.installed(id, revision, &snapshot) else {
                 continue;
             };
             if let Some(score) = plugin
@@ -283,6 +322,42 @@ impl PluginRegistry {
         self.save(&snapshot)
     }
 
+    /// Save defaults for this installed revision. Each task can override them.
+    pub fn save_option_defaults(
+        &self,
+        plugin: &InstalledPlugin,
+        mut defaults: Map<String, Value>,
+    ) -> io::Result<InstalledPlugin> {
+        let _lock = self.mutation_lock()?;
+        let mut snapshot = self.load()?;
+        let id = &plugin.manifest.id;
+        let revision = snapshot
+            .active
+            .get(id)
+            .ok_or_else(|| invalid("plugin is no longer installed"))?;
+        let mut installed = self.installed(id, revision, &snapshot)?;
+        if installed.directory != plugin.directory {
+            return Err(invalid("installed plugin revision changed"));
+        }
+        if defaults
+            .iter()
+            .any(|(key, value)| !installed.manifest.accepts_option(key, value))
+        {
+            return Err(invalid("invalid plugin option default"));
+        }
+        defaults.retain(|key, value| {
+            !installed
+                .manifest
+                .options
+                .iter()
+                .any(|field| field.key == *key && field.default.as_ref() == Some(value))
+        });
+        snapshot.set_defaults(id, defaults.clone());
+        self.save(&snapshot)?;
+        installed.option_defaults = defaults;
+        Ok(installed)
+    }
+
     pub fn task_options(
         &self,
         source: &Url,
@@ -301,7 +376,7 @@ impl PluginRegistry {
         };
         match selected {
             Some(plugin) => {
-                let values = plugin.manifest.complete_options(values)?;
+                let values = plugin.complete_options(values)?;
                 Ok(Some(crate::TaskOptions::Plugin(crate::PluginOptions {
                     id: plugin.manifest.id,
                     values,
@@ -401,6 +476,8 @@ impl PluginRegistry {
         let directory = versions.join(&revision);
         fs::rename(staging.path(), &directory)?;
         snapshot.active.insert(manifest.id.clone(), revision);
+        let option_defaults = validated_defaults(&manifest, &snapshot);
+        snapshot.set_defaults(&manifest.id, option_defaults.clone());
         if let Err(error) = self.save(&snapshot) {
             let _ = fs::remove_dir_all(&directory);
             return Err(error);
@@ -408,6 +485,7 @@ impl PluginRegistry {
         Ok(InstalledPlugin {
             manifest,
             directory,
+            option_defaults,
         })
     }
 
@@ -422,9 +500,23 @@ impl PluginRegistry {
             ));
         }
         snapshot.preferred.retain(|_, preferred| preferred != id);
+        snapshot.option_defaults.remove(id);
         self.save(&snapshot)?;
         fs::remove_dir_all(self.root.join(id))
     }
+}
+
+fn validated_defaults(
+    manifest: &PluginManifest,
+    snapshot: &InstalledPlugins,
+) -> Map<String, Value> {
+    let mut defaults = snapshot
+        .option_defaults
+        .get(&manifest.id)
+        .cloned()
+        .unwrap_or_default();
+    defaults.retain(|key, value| manifest.accepts_option(key, value));
+    defaults
 }
 
 pub fn parse_source(input: &str) -> io::Result<Url> {
@@ -543,8 +635,10 @@ fn invalid(reason: &'static str) -> io::Error {
 
 #[cfg(test)]
 mod tests {
-    use super::Catalog;
+    use super::{Catalog, Map, Path, PluginRegistry, Url, Value};
+    use crate::TaskOptions;
     use serde_json::json;
+    use std::{fs::File, io::Write};
 
     #[test]
     fn catalog_accepts_old_listings_and_validates_category_references() {
@@ -571,5 +665,96 @@ mod tests {
             new.categories["video-audio"].for_language(true),
             "视频与音频"
         );
+    }
+
+    fn write_package(path: &Path, manifest: &Value) {
+        let mut zip = zip::ZipWriter::new(File::create(path).unwrap());
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("plugin.json", options).unwrap();
+        zip.write_all(manifest.to_string().as_bytes()).unwrap();
+        zip.start_file(manifest["engine"].as_str().unwrap(), options)
+            .unwrap();
+        zip.write_all(b"fixture").unwrap();
+        zip.finish().unwrap();
+    }
+
+    #[test]
+    fn plugin_defaults_persist_and_follow_the_installed_schema() {
+        let profile = tempfile::tempdir().unwrap();
+        let registry = PluginRegistry::new(profile.path());
+        let archive = profile.path().join("plugin.zip");
+        let mut manifest: Value =
+            serde_json::from_str(include_str!("../../ndm-plugin-sdk/examples/file-copy.json"))
+                .unwrap();
+        if cfg!(windows) {
+            manifest["engine"] = json!("file-copy.exe");
+        }
+        manifest["inputs"] = json!([{"schemes": ["https"], "hosts": ["example.test"]}]);
+        manifest["options"] = json!([{
+            "key": "pieces", "kind": "integer", "min": 1, "max": 16,
+            "label": {"en": "Pieces"}, "default": 4
+        }]);
+        write_package(&archive, &manifest);
+        let original = registry.import(&archive).unwrap();
+        let source = Url::parse("https://example.test/example").unwrap();
+        let defaults = |pieces| Map::from_iter([("pieces".into(), json!(pieces))]);
+        let resolved = |values| {
+            let TaskOptions::Plugin(options) = PluginRegistry::new(profile.path())
+                .task_options(&source, None, values)
+                .unwrap()
+                .unwrap()
+            else {
+                panic!("expected plugin options");
+            };
+            options.values["pieces"].as_i64().unwrap()
+        };
+        assert_eq!(resolved(Map::new()), 4);
+        let saved = registry
+            .save_option_defaults(&original, defaults(8))
+            .unwrap();
+        assert_eq!(resolved(Map::new()), 8);
+        assert_eq!(resolved(defaults(2)), 2);
+        let mut tool = saved.manifest.tools[0].clone();
+        assert_eq!(
+            saved.option_schema(&tool)["properties"]["pieces"]["default"],
+            8
+        );
+        tool.defaults = defaults(2);
+        assert_eq!(
+            saved.option_schema(&tool)["properties"]["pieces"]["default"],
+            2
+        );
+        assert!(
+            registry
+                .save_option_defaults(&original, defaults(17))
+                .is_err()
+        );
+        assert_eq!(resolved(Map::new()), 8);
+
+        registry
+            .save_option_defaults(&original, Map::new())
+            .unwrap();
+        assert_eq!(resolved(Map::new()), 4);
+        registry
+            .save_option_defaults(&original, defaults(8))
+            .unwrap();
+        manifest["version"] = json!("0.2.0");
+        manifest["options"][0]["max"] = json!(6);
+        write_package(&archive, &manifest);
+        let updated = registry.import(&archive).unwrap();
+        assert!(updated.option_defaults.is_empty());
+        assert_eq!(resolved(Map::new()), 4);
+        assert!(
+            registry
+                .save_option_defaults(&original, defaults(2))
+                .is_err()
+        );
+
+        registry
+            .save_option_defaults(&updated, defaults(3))
+            .unwrap();
+        registry.remove("file-copy").unwrap();
+        registry.import(&archive).unwrap();
+        assert_eq!(resolved(Map::new()), 4);
     }
 }

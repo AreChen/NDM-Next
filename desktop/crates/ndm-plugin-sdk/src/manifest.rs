@@ -161,7 +161,7 @@ impl PluginManifest {
                 || tool
                     .defaults
                     .iter()
-                    .any(|(key, value)| !self.accepts(key, value))
+                    .any(|(key, value)| !self.accepts_option(key, value))
             {
                 return Err(invalid("invalid plugin tool definition"));
             }
@@ -173,7 +173,10 @@ impl PluginManifest {
         &self,
         mut values: Map<String, Value>,
     ) -> io::Result<Map<String, Value>> {
-        if values.iter().any(|(key, value)| !self.accepts(key, value)) {
+        if values
+            .iter()
+            .any(|(key, value)| !self.accepts_option(key, value))
+        {
             return Err(invalid("invalid plugin option"));
         }
         for field in &self.options {
@@ -234,7 +237,7 @@ impl PluginManifest {
         Ok(fields)
     }
 
-    fn accepts(&self, key: &str, value: &Value) -> bool {
+    pub fn accepts_option(&self, key: &str, value: &Value) -> bool {
         self.options
             .iter()
             .any(|field| field.key == key && field.control.accepts(value))

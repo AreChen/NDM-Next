@@ -156,11 +156,10 @@ impl Desktop {
         }
     }
 
-    pub(in crate::view) fn market_panel(
-        &self,
-        width: f32,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    pub(in crate::view) fn market_panel(&self, width: f32, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(editor) = &self.integration.defaults {
+            return self.plugin_defaults_panel(editor, cx);
+        }
         let tone = ThemeTone::current(cx);
         let market = &self.integration.market;
         let busy = market.busy || matches!(self.update_state, UpdateState::Installing);
@@ -320,7 +319,7 @@ impl Desktop {
                     }),
             );
         }
-        panel
+        panel.into_any_element()
     }
 
     fn market_filters(&self, tone: ThemeTone, cx: &mut Context<Self>) -> Div {
@@ -567,8 +566,22 @@ impl Desktop {
         let actions = div().flex().items_center().gap_2();
         let candidate = listing.filter(|plugin| plugin.artifact().is_some());
         if let Some(installed) = installed {
+            let settings_id = installed.id.clone();
             let id = installed.id.clone();
             return actions
+                .when(!installed.options.is_empty(), |actions| {
+                    actions.child(
+                        Button::new(("plugin-settings", index))
+                            .small()
+                            .ghost()
+                            .disabled(busy)
+                            .icon(IconName::Settings2)
+                            .label(self.text("设置", "Settings"))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.open_plugin_defaults(&settings_id, window, cx);
+                            })),
+                    )
+                })
                 .when_some(
                     candidate
                         .filter(|plugin| plugin.version > installed.version)
@@ -686,6 +699,7 @@ mod tests {
             installed: vec![InstalledPlugin {
                 manifest,
                 directory: PathBuf::new(),
+                option_defaults: Default::default(),
             }],
             ..Market::default()
         };

@@ -181,7 +181,7 @@ impl Server {
                     .as_object_mut()
                     .expect("tool fields are an object")
                     .remove("plugin");
-                fields["options"] = plugin.manifest.option_schema(action);
+                fields["options"] = plugin.option_schema(action);
                 if let Some(limit) = plugin.manifest.limits.download_threads {
                     fields["download_threads"]["maximum"] = json!(limit);
                 } else {

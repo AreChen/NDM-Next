@@ -7,6 +7,10 @@ The market validates the downloaded package against its published SHA-256
 checksum. **Import plugin** also accepts a compatible local ZIP from a
 developer you trust. An engine package contains a native executable.
 
+Open **Settings** on an installed plugin card to save default download options.
+They apply to new tasks, including downloads requested through Codex CLI.
+An option chosen for an individual task takes precedence.
+
 Paste a URL or select a local source file in **New download**. NDM Next
 selects an installed engine that supports the source. When several match,
 choose one in the **Download engine** menu. Choosing a plugin for a site
@@ -37,6 +41,9 @@ A plugin defines how it uses its thread setting.
 可按分类筛选，也可以选择 **仅已安装**。卡片与分类跟随应用语言。市场会校验安装包的
 SHA-256。也可以通过 **导入插件** 安装你信任的开发者提供的本地 ZIP。
 插件包包含可执行的下载引擎。
+
+在已安装的插件卡片上打开 **设置**，可保存该插件的默认下载选项。默认值用于
+新任务，也适用于 Codex CLI 发起的下载。单次任务可单独修改选项。
 
 新建下载时粘贴链接或选择本地文件，NDM Next 会匹配已安装的引擎。
 有多个匹配项时，可在 **下载引擎** 中手动选择。为某个网站选择插件后，
