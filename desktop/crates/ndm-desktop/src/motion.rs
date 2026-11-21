@@ -1,9 +1,9 @@
 use gpui_kit::{
-    App, Global, Hsla, Rgba, Window,
+    App, ElementId, Global, Hsla, Pixels, Rgba, SharedString, Window,
     component::{Theme as ComponentTheme, theme::ThemeColor},
 };
 use gpui_motion_kit::core::{Easing, Transition};
-use std::time::Duration;
+use std::{rc::Rc, sync::Arc, time::Duration};
 
 /// Presentation state is shared by all windows, independently of target mode.
 #[derive(Clone, Copy)]
@@ -269,6 +269,111 @@ pub(crate) fn scramble(text: &str, progress: f32) -> String {
         .collect()
 }
 
+type SegmentChange = dyn Fn(&usize, &mut Window, &mut App);
+
+#[derive(gpui_kit::IntoElement)]
+pub(crate) struct SegmentedControl {
+    pub id: ElementId,
+    /// Stable button IDs and the labels shown in this language.
+    pub segments: Vec<(SharedString, SharedString)>,
+    pub selected: Option<usize>,
+    pub accessibility_label: Option<SharedString>,
+    pub width: Option<Pixels>,
+    pub disabled: bool,
+    pub on_change: Rc<SegmentChange>,
+}
+
+impl gpui_kit::RenderOnce for SegmentedControl {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl gpui_kit::IntoElement {
+        use gpui_kit::{
+            component::{
+                Disableable, Sizable,
+                button::{Button, ButtonVariants},
+            },
+            prelude::*,
+            *,
+        };
+        use gpui_motion_kit::{
+            MotionState,
+            core::{Motion, Target},
+        };
+
+        let tone = ThemeTone::current(cx);
+        let count = self.segments.len() as f32;
+        let mut track = div().relative().h(px(24.)).w_full().flex();
+        if let Some(index) = self.selected {
+            let key = ElementId::NamedChild(Arc::new(self.id.clone()), "position".into());
+            let state = window.use_keyed_state(key, cx, |_, _| MotionState::default());
+            let position = state.update(cx, |state, cx| {
+                state
+                    .frame(
+                        Motion::new(Target::default().x(index as f32)).transition(tween(180)),
+                        window,
+                        cx,
+                    )
+                    .target()
+                    .x_px()
+            });
+            let debug_id = format!("{}-indicator", self.id);
+            track = track.child(
+                div()
+                    .id("segment-indicator")
+                    .debug_selector(move || debug_id)
+                    .absolute()
+                    .top_0()
+                    .left(relative(position / count))
+                    .w(relative(1. / count))
+                    .h_full()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgba(0xa78bfa55))
+                    .bg(rgb(tone.rgb(0x51447e, 0xe5ddff))),
+            );
+        }
+        for (index, (id, label)) in self.segments.into_iter().enumerate() {
+            let on_change = self.on_change.clone();
+            let accessible_name = self
+                .accessibility_label
+                .as_ref()
+                .map_or_else(|| label.clone(), |group| format!("{group} {label}").into());
+            track = track.child(
+                Button::new(id.clone())
+                    .ghost()
+                    .small()
+                    .disabled(self.disabled)
+                    .toggled(self.selected == Some(index))
+                    .flex_1()
+                    .min_w_0()
+                    .h(px(24.))
+                    .px_0()
+                    .label(label.clone())
+                    .tooltip(label)
+                    .accessibility_label(accessible_name)
+                    .text_size(px(11.))
+                    .bg(rgba(0))
+                    .text_color(rgb(tone.rgb(0xede8ff, 0x44366b)))
+                    .debug_selector(move || id.to_string())
+                    .on_click(move |_, window, cx| on_change(&index, window, cx)),
+            );
+        }
+        div()
+            .id(self.id)
+            .when(self.width.is_none(), |group| group.flex_1())
+            .when_some(self.width, |group, width| {
+                group.w(width).max_w(relative(1.))
+            })
+            .min_w_0()
+            .p(px(2.))
+            .rounded_lg()
+            .border_1()
+            .border_color(rgb(tone.rgb(0x3b4160, 0xd9deec)))
+            .bg(rgb(tone.rgb(0x151c2d, 0xf0f2f8)))
+            .opacity(if self.disabled { 0.55 } else { 1. })
+            .block_mouse_except_scroll()
+            .child(track)
+    }
+}
+
 #[derive(gpui_kit::IntoElement)]
 pub(crate) struct Switch {
     id: &'static str,
@@ -526,6 +631,66 @@ mod tests {
         assert_eq!(
             cx.debug_bounds("test-switch-thumb").unwrap().left(),
             start + px(12.)
+        );
+    }
+
+    #[gpui_kit::test]
+    fn segmented_switches_animate_independently_and_respect_reduced_motion(
+        cx: &mut TestAppContext,
+    ) {
+        struct Options([usize; 2]);
+        impl Render for Options {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                div()
+                    .flex()
+                    .flex_col()
+                    .children(
+                        self.0
+                            .iter()
+                            .enumerate()
+                            .map(|(index, &choice)| SegmentedControl {
+                                id: format!("option-{index}").into(),
+                                segments: vec![
+                                    (format!("option-{index}-off").into(), "Off".into()),
+                                    (format!("option-{index}-on").into(), "On".into()),
+                                ],
+                                selected: Some(choice),
+                                accessibility_label: Some("Plugin toggle".into()),
+                                width: Some(px(104.)),
+                                disabled: false,
+                                on_change: Rc::new(cx.listener(
+                                    move |view, selected: &usize, _, cx| {
+                                        view.0[index] = *selected;
+                                        cx.notify();
+                                    },
+                                )),
+                            }),
+                    )
+            }
+        }
+        cx.update(gpui_kit::init);
+        let (view, cx) = cx.add_window_view(|_, _| Options([0, 1]));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let off = cx.debug_bounds("option-0-off").unwrap();
+        let on = cx.debug_bounds("option-0-on").unwrap();
+        let other = cx.debug_bounds("option-1-indicator").unwrap();
+        cx.simulate_click(on.center(), Modifiers::default());
+        cx.update(|window, cx| {
+            assert_eq!(view.read(cx).0, [1, 1]);
+            window.draw(cx).clear(cx);
+        });
+        cx.background_executor
+            .advance_clock(Duration::from_millis(80));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let midway = cx.debug_bounds("option-0-indicator").unwrap().left();
+        assert!(off.left() < midway && midway < on.left());
+        assert_eq!(cx.debug_bounds("option-1-indicator").unwrap(), other);
+        cx.update(|_, cx| cx.set_reduce_motion(true));
+        cx.simulate_click(off.center(), Modifiers::default());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert_eq!(
+            cx.debug_bounds("option-0-indicator").unwrap().left(),
+            off.left()
         );
     }
 

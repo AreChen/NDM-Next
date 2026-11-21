@@ -1,5 +1,5 @@
 use super::*;
-use crate::motion::Switch;
+use crate::motion::{SegmentedControl, Switch};
 use gpui_motion_kit::{
     Frame, MotionState,
     core::{Motion, Target},
@@ -684,96 +684,26 @@ fn theme_switch(
     theme: Theme,
     zh: bool,
     on_change: impl Fn(&usize, &mut Window, &mut App) + 'static,
-) -> ThemeSwitch {
-    ThemeSwitch {
-        theme,
-        zh,
-        on_change: std::rc::Rc::new(on_change),
-    }
-}
-
-type ThemeChange = std::rc::Rc<dyn Fn(&usize, &mut Window, &mut App)>;
-
-#[derive(IntoElement)]
-struct ThemeSwitch {
-    theme: Theme,
-    zh: bool,
-    on_change: ThemeChange,
-}
-
-impl RenderOnce for ThemeSwitch {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        use gpui_motion_kit::{
-            MotionState,
-            core::{Motion, Target},
-        };
-        let index = match self.theme {
+) -> SegmentedControl {
+    SegmentedControl {
+        id: "theme-switch".into(),
+        segments: [
+            ("theme-system", if zh { "跟随系统" } else { "System" }),
+            ("theme-light", if zh { "亮色" } else { "Light" }),
+            ("theme-dark", if zh { "暗色" } else { "Dark" }),
+        ]
+        .into_iter()
+        .map(|(id, label)| (id.into(), label.into()))
+        .collect(),
+        selected: Some(match theme {
             Theme::System => 0,
             Theme::Light => 1,
             Theme::Dark => 2,
-        };
-        let state =
-            window.use_keyed_state(("theme-switch", 0usize), cx, |_, _| MotionState::default());
-        let position = state.update(cx, |state, cx| {
-            state
-                .frame(
-                    Motion::new(Target::default().x(index as f32))
-                        .transition(crate::motion::tween(180)),
-                    window,
-                    cx,
-                )
-                .target()
-                .x_px()
-        });
-        let tone = crate::motion::ThemeTone::current(cx);
-        let mut segments = div().relative().h(px(24.)).w_full().flex().child(
-            div()
-                .absolute()
-                .top_0()
-                .left(relative(position / 3.))
-                .w(relative(1. / 3.))
-                .h_full()
-                .rounded_md()
-                .border_1()
-                .border_color(rgba(0xa78bfa55))
-                .bg(rgb(tone.rgb(0x51447e, 0xe5ddff))),
-        );
-        for (i, (id, label)) in [
-            ("theme-system", if self.zh { "跟随系统" } else { "System" }),
-            ("theme-light", if self.zh { "亮色" } else { "Light" }),
-            ("theme-dark", if self.zh { "暗色" } else { "Dark" }),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let on_change = self.on_change.clone();
-            segments = segments.child(
-                Button::new(id)
-                    .ghost()
-                    .small()
-                    .flex_1()
-                    .min_w_0()
-                    .h(px(24.))
-                    .px_0()
-                    .label(label)
-                    .text_size(px(11.))
-                    .bg(rgba(0))
-                    .text_color(rgb(tone.rgb(0xede8ff, 0x44366b)))
-                    .debug_selector(move || id.into())
-                    .on_click(move |_, window, cx| on_change(&i, window, cx)),
-            );
-        }
-        div()
-            .id("theme-switch")
-            .flex_1()
-            .min_w_0()
-            .p(px(2.))
-            .rounded_lg()
-            .border_1()
-            .border_color(rgb(tone.rgb(0x3b4160, 0xd9deec)))
-            .bg(rgb(tone.rgb(0x151c2d, 0xf0f2f8)))
-            .block_mouse_except_scroll()
-            .child(segments)
+        }),
+        accessibility_label: Some(if zh { "主题" } else { "Theme" }.into()),
+        width: None,
+        disabled: false,
+        on_change: std::rc::Rc::new(on_change),
     }
 }
 

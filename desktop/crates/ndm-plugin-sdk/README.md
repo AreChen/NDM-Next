@@ -64,6 +64,9 @@ manifest are both checked before installation.
   or `choice`. Integer fields set `min` and `max`. Text fields set
   `max_length`. Each choice has a `value` and localized `label`.
   Fields can declare a `default` or be marked `required`.
+  The desktop uses a sliding two-segment control for `boolean`. Choices
+  with two or three short labels can also use sliding segments. These
+  controls are available in the download form and plugin settings.
 - `tools` can expose named MCP download actions. Each has a stable `id`,
   localized `name` and `description`, and optional preset `defaults` for
   the options. NDM registers them while AI integration is enabled.

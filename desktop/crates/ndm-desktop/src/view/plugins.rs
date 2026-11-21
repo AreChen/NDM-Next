@@ -1,4 +1,5 @@
 use super::*;
+use crate::motion::SegmentedControl;
 use gpui_kit::component::Disableable;
 use ndm_core::plugins::{
     Catalog, CatalogPlugin, InstalledPlugin, OptionControl, OptionField, Panel, PluginRegistry,
@@ -488,6 +489,10 @@ impl Desktop {
         let chinese = self.preferences.language == Language::Chinese;
         let dark = self.is_dark(cx);
         let disabled = form == OptionForm::Defaults && self.integration.market.busy;
+        let segment_group = match form {
+            OptionForm::Download => "plugin-download-segments",
+            OptionForm::Defaults => "plugin-default-segments",
+        };
         let mut panel = div().flex().flex_col().gap_2();
         for (index, field) in fields.iter().enumerate() {
             let label = field.definition.label.for_language(chinese).to_owned();
@@ -498,65 +503,121 @@ impl Desktop {
                         .as_ref()
                         .and_then(Value::as_bool)
                         .unwrap_or(false);
-                    Button::new(("plugin-toggle", index))
-                        .small()
-                        .disabled(disabled)
-                        .label(if enabled {
-                            self.text("开", "On")
-                        } else {
-                            self.text("关", "Off")
-                        })
-                        .accessibility_label(label.clone())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.set_plugin_value(form, index, json!(!enabled), cx);
-                        }))
-                        .into_any_element()
+                    SegmentedControl {
+                        id: (segment_group, index).into(),
+                        segments: vec![
+                            (
+                                format!("{}-off", field.definition.key).into(),
+                                self.text("关", "Off").into(),
+                            ),
+                            (
+                                format!("{}-on", field.definition.key).into(),
+                                self.text("开", "On").into(),
+                            ),
+                        ],
+                        selected: Some(usize::from(enabled)),
+                        accessibility_label: Some(label.clone().into()),
+                        width: Some(px(104.)),
+                        disabled,
+                        on_change: std::rc::Rc::new(cx.listener(
+                            move |this, selected: &usize, _, cx| {
+                                this.set_plugin_value(form, index, json!(*selected == 1), cx);
+                            },
+                        )),
+                    }
+                    .into_any_element()
                 }
                 OptionControl::Choice { choices } => {
-                    let values = choices.clone();
-                    let value = field
-                        .value
-                        .as_ref()
-                        .and_then(Value::as_str)
-                        .map(str::to_owned);
-                    let caption = values
+                    let value = field.value.as_ref().and_then(Value::as_str);
+                    let selected = choices
                         .iter()
-                        .find(|choice| Some(&choice.value) == value.as_ref())
-                        .map(|choice| choice.label.for_language(chinese).to_owned())
-                        .unwrap_or_else(|| self.text("选择", "Choose").to_owned());
-                    let view = cx.entity().downgrade();
-                    Button::new(("plugin-choice", index))
-                        .small()
-                        .disabled(disabled)
-                        .label(caption)
-                        .dropdown_caret(true)
-                        .accessibility_label(label.clone())
-                        .dropdown_menu(move |menu, _, _| {
-                            values.iter().fold(menu, |menu, choice| {
-                                let view = view.clone();
-                                let chosen = choice.value.clone();
-                                menu.item(
-                                    crate::chrome::choice_item(
-                                        choice.label.for_language(chinese).to_owned(),
-                                        value.as_ref() == Some(&chosen),
-                                        dark,
+                        .position(|choice| Some(choice.value.as_str()) == value);
+                    let labels = choices
+                        .iter()
+                        .map(|choice| choice.label.for_language(chinese));
+                    let longest = labels
+                        .clone()
+                        .map(|label| {
+                            label
+                                .chars()
+                                .map(|ch| if ch.is_ascii() { 1 } else { 2 })
+                                .sum::<usize>()
+                        })
+                        .max()
+                        .unwrap_or_default();
+                    if (2..=3).contains(&choices.len()) && longest <= 24 {
+                        let values: Vec<_> =
+                            choices.iter().map(|choice| choice.value.clone()).collect();
+                        let button_width = (24. + 7. * longest as f32).max(64.);
+                        SegmentedControl {
+                            id: (segment_group, index).into(),
+                            segments: choices
+                                .iter()
+                                .zip(labels)
+                                .map(|(choice, label)| {
+                                    (
+                                        format!("{}-{}", field.definition.key, choice.value).into(),
+                                        label.to_owned().into(),
                                     )
-                                    .on_click(
-                                        move |_, _, cx| {
-                                            let _ = view.update(cx, |this, cx| {
-                                                this.set_plugin_value(
-                                                    form,
-                                                    index,
-                                                    json!(chosen),
-                                                    cx,
-                                                )
-                                            });
-                                        },
-                                    ),
+                                })
+                                .collect(),
+                            selected,
+                            accessibility_label: Some(label.clone().into()),
+                            width: Some(px(button_width * choices.len() as f32 + 6.)),
+                            disabled,
+                            on_change: std::rc::Rc::new(cx.listener(
+                                move |this, chosen: &usize, _, cx| {
+                                    this.set_plugin_value(form, index, json!(values[*chosen]), cx);
+                                },
+                            )),
+                        }
+                        .into_any_element()
+                    } else {
+                        let menu_items: Vec<_> = choices
+                            .iter()
+                            .zip(labels)
+                            .map(|(choice, label)| (choice.value.clone(), label.to_owned()))
+                            .collect();
+                        let caption = selected
+                            .map(|index| menu_items[index].1.clone())
+                            .unwrap_or_else(|| self.text("选择", "Choose").to_owned());
+                        let view = cx.entity().downgrade();
+                        Button::new(("plugin-choice", index))
+                            .small()
+                            .disabled(disabled)
+                            .label(caption)
+                            .dropdown_caret(true)
+                            .accessibility_label(label.clone())
+                            .dropdown_menu(move |menu, _, _| {
+                                menu_items.iter().enumerate().fold(
+                                    menu,
+                                    |menu, (item, (value, label))| {
+                                        let view = view.clone();
+                                        let value = value.clone();
+                                        menu.item(
+                                            crate::chrome::choice_item(
+                                                label.clone(),
+                                                selected == Some(item),
+                                                dark,
+                                            )
+                                            .on_click(
+                                                move |_, _, cx| {
+                                                    let _ = view.update(cx, |this, cx| {
+                                                        this.set_plugin_value(
+                                                            form,
+                                                            index,
+                                                            json!(value),
+                                                            cx,
+                                                        );
+                                                    });
+                                                },
+                                            ),
+                                        )
+                                    },
                                 )
                             })
-                        })
-                        .into_any_element()
+                            .into_any_element()
+                    }
                 }
                 _ => field.input.as_ref().map_or_else(
                     || div().into_any_element(),
@@ -573,6 +634,7 @@ impl Desktop {
             panel = panel.child(
                 div()
                     .flex()
+                    .flex_wrap()
                     .items_center()
                     .gap_2()
                     .text_sm()
