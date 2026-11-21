@@ -90,7 +90,7 @@ fn verified_dmg_replaces_and_relaunches_the_app_in_place() {
     assert!(compiler.wait().unwrap().success());
     let host = new_binary.with_file_name("ndm-host");
     fs::copy(&new_binary, &host).unwrap();
-    for path in [&new_binary, &host, &candidate] {
+    for path in [&host, &new_binary, &candidate] {
         checked(
             Command::new("/usr/bin/codesign")
                 .args(["--force", "--sign", "-"])
