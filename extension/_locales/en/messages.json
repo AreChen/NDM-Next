@@ -1,0 +1,248 @@
+{
+  "extensionDescription": {
+    "message": "Browser download handoff and page resources for NDM Next."
+  },
+  "connecting": {
+    "message": "Connecting…"
+  },
+  "online": {
+    "message": "Connected"
+  },
+  "offline": {
+    "message": "Disconnected"
+  },
+  "currentSite": {
+    "message": "Current site"
+  },
+  "siteAllowed": {
+    "message": "Available on this site"
+  },
+  "siteBlocked": {
+    "message": "Blocked on this site"
+  },
+  "noSite": {
+    "message": "No web page selected"
+  },
+  "blockSite": {
+    "message": "Block site"
+  },
+  "unblockSite": {
+    "message": "Enable site"
+  },
+  "openMedia": {
+    "message": "Open page resources"
+  },
+  "resourceCount": {
+    "message": "$1 resources"
+  },
+  "mediaToggle": {
+    "message": "Detect page resources"
+  },
+  "enabled": {
+    "message": "Download takeover"
+  },
+  "enabledHint": {
+    "message": "Send eligible browser downloads to the manager."
+  },
+  "mediaHint": {
+    "message": "Find images, video, audio and stream playlists."
+  },
+  "inlineMedia": {
+    "message": "Buttons beside media"
+  },
+  "inlineHint": {
+    "message": "Show a compact button on hover or keyboard focus."
+  },
+  "settings": {
+    "message": "Settings"
+  },
+  "versions": {
+    "message": "Versions and plugins"
+  },
+  "extensionVersion": {
+    "message": "Browser extension"
+  },
+  "desktopVersion": {
+    "message": "NDM Next desktop"
+  },
+  "installedPlugins": {
+    "message": "Installed plugins"
+  },
+  "noPlugins": {
+    "message": "No installed plugins"
+  },
+  "pluginInfoUnavailable": {
+    "message": "Plugin information unavailable"
+  },
+  "backend": {
+    "message": "Download manager"
+  },
+  "backendHint": {
+    "message": "Neat Download Manager uses its original connection."
+  },
+  "captureMode": {
+    "message": "Takeover mode"
+  },
+  "automatic": {
+    "message": "Automatic"
+  },
+  "confirm": {
+    "message": "Ask for each download"
+  },
+  "confirmTitle": {
+    "message": "Send this download to NDM Next?"
+  },
+  "confirmAccept": {
+    "message": "Send to NDM Next"
+  },
+  "confirmKeep": {
+    "message": "Keep in browser"
+  },
+  "captureHint": {
+    "message": "Confirmation is available with NDM Next."
+  },
+  "transferPolicy": {
+    "message": "Takeover safety"
+  },
+  "safeTransfer": {
+    "message": "Verify before takeover"
+  },
+  "immediateTransfer": {
+    "message": "Take over immediately"
+  },
+  "transferHint": {
+    "message": "Verification can use extra traffic. A single-use link may need immediate takeover."
+  },
+  "size": {
+    "message": "Minimum file size (MB)"
+  },
+  "sizeHint": {
+    "message": "Set 0 to take over files of any known size."
+  },
+  "extensions": {
+    "message": "Excluded extensions"
+  },
+  "extensionsHint": {
+    "message": "Separate extensions with commas."
+  },
+  "domains": {
+    "message": "Blocked domains"
+  },
+  "domainsHint": {
+    "message": "One domain per line. Subdomains are included."
+  },
+  "language": {
+    "message": "Language"
+  },
+  "followBrowser": {
+    "message": "Follow browser"
+  },
+  "save": {
+    "message": "Save settings"
+  },
+  "saved": {
+    "message": "Settings saved"
+  },
+  "invalid": {
+    "message": "Enter a valid domain."
+  },
+  "title": {
+    "message": "Page resources"
+  },
+  "refresh": {
+    "message": "Refresh"
+  },
+  "search": {
+    "message": "Search name, source or format"
+  },
+  "all": {
+    "message": "All types"
+  },
+  "video": {
+    "message": "Video"
+  },
+  "audio": {
+    "message": "Audio"
+  },
+  "image": {
+    "message": "Image"
+  },
+  "media": {
+    "message": "Media"
+  },
+  "type": {
+    "message": "Resource type"
+  },
+  "list": {
+    "message": "Detected resources"
+  },
+  "selectAll": {
+    "message": "Select visible"
+  },
+  "empty": {
+    "message": "Refresh the source page or play a video to find resources."
+  },
+  "pausedDetection": {
+    "message": "Turn on resource detection in the extension to scan this page."
+  },
+  "noMatch": {
+    "message": "No matching resources."
+  },
+  "closed": {
+    "message": "The source tab is closed."
+  },
+  "downloadSelected": {
+    "message": "Download selected"
+  },
+  "download": {
+    "message": "Download"
+  },
+  "sending": {
+    "message": "Sending…"
+  },
+  "sent": {
+    "message": "Sent to download manager"
+  },
+  "sentShort": {
+    "message": "Sent ✓"
+  },
+  "unknown": {
+    "message": "Size unknown"
+  },
+  "count": {
+    "message": "$1 of $2 resources · $3 selected"
+  },
+  "done": {
+    "message": "Sent $1 of $2"
+  },
+  "pageDownload": {
+    "message": "Send page to a plugin"
+  },
+  "pagePlugin": {
+    "message": "Send page to $1"
+  },
+  "preview": {
+    "message": "Preview of $1"
+  },
+  "manager_unavailable": {
+    "message": "Unable to send. Check the download manager connection."
+  },
+  "unsupported_request": {
+    "message": "This media request cannot be replayed safely. Try a direct download link."
+  },
+  "capture_expired": {
+    "message": "Media details expired. Play the media again and retry."
+  },
+  "media_unavailable": {
+    "message": "This resource is unavailable. Refresh the page and try again."
+  },
+  "plugin_unavailable": {
+    "message": "This plugin is unavailable for the page. Refresh and try again."
+  },
+  "hideInline": {
+    "message": "Hide buttons on this page"
+  },
+  "showMore": {
+    "message": "Show more"
+  }
+}

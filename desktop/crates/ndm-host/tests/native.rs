@@ -1,5 +1,10 @@
-use std::{io::Cursor, sync::Arc};
+use std::{
+    fs::File,
+    io::{Cursor, Write},
+    sync::Arc,
+};
 
+use ndm_core::plugins::PluginRegistry;
 use ndm_core::{Store, TaskId, TaskOptions, TaskState};
 use ndm_host::{Host, MAX_MESSAGE_BYTES, read_frame, write_frame};
 use serde_json::{Value, json};
@@ -10,6 +15,59 @@ fn request(id: TaskId) -> Value {
         "suggested_filename":"file.zip", "expected_size":123,
         "headers":{"cookie":"session=private", "authorization":"Bearer private"}
     }})
+}
+
+#[test]
+fn browser_context_exposes_versions_and_requires_an_eligible_page_engine() {
+    let directory = tempfile::tempdir().unwrap();
+    let profile = directory.path();
+    let store = Arc::new(Store::open(&profile.join("tasks.db")).unwrap());
+    let package = profile.join("page.zip");
+    let mut archive = zip::ZipWriter::new(File::create(&package).unwrap());
+    let file = zip::write::SimpleFileOptions::default();
+    let engine = format!("page-engine{}", std::env::consts::EXE_SUFFIX);
+    archive.start_file("plugin.json", file).unwrap();
+    serde_json::to_writer(
+        &mut archive,
+        &json!({
+            "schema": 1, "id": "page-fixture", "version": "0.2.0",
+            "name": {"en":"Page fixture","zh":"网页插件"}, "description": {"en":"A fixture"},
+            "engine": engine, "engine_protocol": 1, "limits": {"active_tasks": 1},
+            "inputs": [{"schemes":["https"],"hosts":["video.test"]}],
+            "manual_inputs": [{"schemes":["http"],"hosts":["media.test"]}],
+            "capabilities": {"browser_page": true}
+        }),
+    )
+    .unwrap();
+    archive.start_file(&engine, file).unwrap();
+    archive.write_all(b"fixture").unwrap();
+    archive.finish().unwrap();
+    PluginRegistry::new(profile).import(&package).unwrap();
+    let host = Host::new(store.clone(), profile.join("downloads"));
+
+    let page = "http://media.test/watch";
+    let context = host.handle(json!({"type":"browser_context","page_url":page}));
+    assert_eq!(context["desktop_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        context["plugins"],
+        json!([{
+            "id":"page-fixture", "name":{"en":"Page fixture","zh":"网页插件"}, "version":"0.2.0", "page":true
+        }])
+    );
+    let id = TaskId::new_v4();
+    let handoff = json!({"type":"prepare","id":id,"task":{"url":page,"plugin":"page-fixture"}});
+    assert_eq!(host.handle(handoff.clone())["state"], "prepared");
+    assert_eq!(host.handle(handoff)["state"], "prepared");
+    assert!(matches!(
+        store.get(id).unwrap().unwrap().options,
+        TaskOptions::Plugin(options) if options.id == "page-fixture"
+    ));
+    let other = "http://example.test/watch";
+    assert_eq!(
+        host.handle(json!({"type":"browser_context","page_url":other}))["plugins"][0]["page"],
+        false
+    );
+    assert_eq!(host.handle(json!({"type":"prepare","id":TaskId::new_v4(),"task":{"url":other,"plugin":"page-fixture"}}))["error"], "plugin_unavailable");
 }
 
 #[test]

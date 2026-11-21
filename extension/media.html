@@ -1,14 +1,51 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NDM Next · Media</title><link rel="icon" href="icons/icon-32.png"><link rel="stylesheet" href="media.css"></head>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NDM Next · Page resources</title>
+  <link rel="icon" href="icons/icon-32.png">
+  <link rel="stylesheet" href="ui.css">
+  <link rel="stylesheet" href="media.css">
+</head>
 <body>
-<header><img src="icons/icon-48.png" width="36" height="36" alt=""><div class="heading"><h1 data-i18n="title">Media library</h1><p id="source"></p></div><button id="refresh" class="quiet" data-i18n="refresh">Refresh</button></header>
+<header class="header">
+  <img src="icons/icon-48.png" width="36" height="36" alt="">
+  <div class="heading"><h1 data-i18n="title">Page resources</h1><p id="source" class="muted"></p></div>
+  <button id="refresh" class="quiet" type="button" data-i18n="refresh">Refresh</button>
+</header>
 <main>
-  <div class="toolbar"><label class="search"><span aria-hidden="true">⌕</span><input id="search" type="search" data-placeholder="search" placeholder="Search name, source or format" autocomplete="off"></label><select id="kind" aria-label="Media type"><option value="all" data-i18n="all">All formats</option><option value="video" data-i18n="video">Video</option><option value="audio" data-i18n="audio">Audio</option><option value="hls">HLS</option><option value="dash">DASH</option></select></div>
-  <div class="selection"><label><input id="selectAll" type="checkbox"><span data-i18n="selectAll">Select visible</span></label><span id="count"></span></div>
-  <div id="list" aria-label="Detected media"></div>
-  <p id="empty" data-i18n="empty">Play media on the source page to discover resources.</p>
+  <div class="tools">
+    <div id="pageActions" class="page-actions" hidden></div>
+    <div class="toolbar">
+      <input id="search" type="search" data-placeholder="search" data-aria="search" placeholder="Search name, source or format" autocomplete="off">
+      <select id="kind" data-aria="type">
+        <option value="all" data-i18n="all">All types</option>
+        <option value="video" data-i18n="video">Video</option>
+        <option value="audio" data-i18n="audio">Audio</option>
+        <option value="image" data-i18n="image">Image</option>
+        <option value="hls">HLS</option>
+        <option value="dash">DASH</option>
+      </select>
+    </div>
+    <div class="selection">
+      <label><input id="selectAll" type="checkbox"><span data-i18n="selectAll">Select visible</span></label>
+      <span id="count" class="muted small"></span>
+    </div>
+  </div>
+  <div id="list" class="resource-list" data-aria="list"></div>
+  <p id="empty" class="empty" data-i18n="empty"></p>
+  <button id="showMore" class="quiet more" type="button" data-i18n="showMore" hidden>Show more</button>
 </main>
-<footer><div><p id="feedback" role="status" aria-live="polite"></p><span class="hint" data-i18n="hint">Streams are merged by NDM Next. Their total size may be unknown.</span></div><button id="download" class="primary" disabled data-i18n="download">Download selected</button></footer>
-<script src="rules.js"></script><script src="media-ui.js"></script><script src="media-library.js"></script><script src="media.js"></script>
-</body></html>
+<footer>
+  <p id="feedback" class="message" role="status" aria-live="polite"></p>
+  <button id="download" class="primary" type="button" disabled data-i18n="downloadSelected">Download selected</button>
+</footer>
+<script src="rules.js"></script>
+<script src="i18n.js"></script>
+<script src="media-ui.js"></script>
+<script src="media-library.js"></script>
+<script src="previews.js"></script>
+<script src="media.js"></script>
+</body>
+</html>

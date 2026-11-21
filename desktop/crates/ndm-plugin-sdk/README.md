@@ -63,6 +63,9 @@ manifest are both checked before installation.
   example, an engine can offer general HTTP(S) media pages here and limit
   `inputs` to known sites. Hosts that support these matchers require at
   least one matcher across the two lists.
+- Set `capabilities.browser_page` to offer a matching HTTP or HTTPS
+  webpage in the companion extension. The user selects the engine to
+  submit the page URL. Page matching uses both input lists.
 - `limits.active_tasks` sets the engine's maximum simultaneous tasks.
   `limits.download_threads` is an optional per-task cap. The passed hint
   already includes the user's chosen setting and the declared cap. The

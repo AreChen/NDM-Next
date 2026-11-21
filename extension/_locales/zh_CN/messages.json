@@ -1,0 +1,248 @@
+{
+  "extensionDescription": {
+    "message": "将浏览器下载交给 NDM Next，并查看网页资源。"
+  },
+  "connecting": {
+    "message": "正在连接…"
+  },
+  "online": {
+    "message": "已连接"
+  },
+  "offline": {
+    "message": "未连接"
+  },
+  "currentSite": {
+    "message": "当前站点"
+  },
+  "siteAllowed": {
+    "message": "当前站点已启用"
+  },
+  "siteBlocked": {
+    "message": "当前站点已停用"
+  },
+  "noSite": {
+    "message": "当前标签页不是网页"
+  },
+  "blockSite": {
+    "message": "停用本站"
+  },
+  "unblockSite": {
+    "message": "启用本站"
+  },
+  "openMedia": {
+    "message": "打开网页资源"
+  },
+  "resourceCount": {
+    "message": "$1 项资源"
+  },
+  "mediaToggle": {
+    "message": "探测网页资源"
+  },
+  "enabled": {
+    "message": "下载接管"
+  },
+  "enabledHint": {
+    "message": "将符合条件的浏览器下载交给下载管理器。"
+  },
+  "mediaHint": {
+    "message": "发现图片、视频、音频和流媒体清单。"
+  },
+  "inlineMedia": {
+    "message": "网页媒体按钮"
+  },
+  "inlineHint": {
+    "message": "鼠标悬停或键盘聚焦时显示小巧的下载按钮。"
+  },
+  "settings": {
+    "message": "设置"
+  },
+  "versions": {
+    "message": "版本与插件"
+  },
+  "extensionVersion": {
+    "message": "浏览器扩展"
+  },
+  "desktopVersion": {
+    "message": "NDM Next 桌面端"
+  },
+  "installedPlugins": {
+    "message": "已安装插件"
+  },
+  "noPlugins": {
+    "message": "未安装下载插件"
+  },
+  "pluginInfoUnavailable": {
+    "message": "暂时无法读取插件信息"
+  },
+  "backend": {
+    "message": "下载管理器"
+  },
+  "backendHint": {
+    "message": "Neat Download Manager 使用原有连接方式。"
+  },
+  "captureMode": {
+    "message": "接管方式"
+  },
+  "automatic": {
+    "message": "自动接管"
+  },
+  "confirm": {
+    "message": "每次询问"
+  },
+  "confirmTitle": {
+    "message": "将此下载交给 NDM Next？"
+  },
+  "confirmAccept": {
+    "message": "交给 NDM Next"
+  },
+  "confirmKeep": {
+    "message": "留在浏览器"
+  },
+  "captureHint": {
+    "message": "NDM Next 支持接管前询问。"
+  },
+  "transferPolicy": {
+    "message": "接管时机"
+  },
+  "safeTransfer": {
+    "message": "验证后接管"
+  },
+  "immediateTransfer": {
+    "message": "立即接管"
+  },
+  "transferHint": {
+    "message": "验证可能产生额外流量。一次性链接可能需要立即接管。"
+  },
+  "size": {
+    "message": "自动接管的最小大小（MB）"
+  },
+  "sizeHint": {
+    "message": "设为 0 可接管任意大小的文件。"
+  },
+  "extensions": {
+    "message": "排除的文件扩展名"
+  },
+  "extensionsHint": {
+    "message": "用逗号分隔多个扩展名。"
+  },
+  "domains": {
+    "message": "停用的域名"
+  },
+  "domainsHint": {
+    "message": "每行一个域名，包含其子域名。"
+  },
+  "language": {
+    "message": "语言"
+  },
+  "followBrowser": {
+    "message": "跟随浏览器"
+  },
+  "save": {
+    "message": "保存设置"
+  },
+  "saved": {
+    "message": "设置已保存"
+  },
+  "invalid": {
+    "message": "请输入有效域名。"
+  },
+  "title": {
+    "message": "网页资源"
+  },
+  "refresh": {
+    "message": "刷新"
+  },
+  "search": {
+    "message": "搜索名称、来源或格式"
+  },
+  "all": {
+    "message": "全部类型"
+  },
+  "video": {
+    "message": "视频"
+  },
+  "audio": {
+    "message": "音频"
+  },
+  "image": {
+    "message": "图片"
+  },
+  "media": {
+    "message": "媒体"
+  },
+  "type": {
+    "message": "资源类型"
+  },
+  "list": {
+    "message": "已发现的资源"
+  },
+  "selectAll": {
+    "message": "选择当前结果"
+  },
+  "empty": {
+    "message": "刷新来源网页或播放视频后，这里会显示发现的资源。"
+  },
+  "pausedDetection": {
+    "message": "在扩展内开启网页资源探测后即可查看此页面。"
+  },
+  "noMatch": {
+    "message": "没有匹配的资源。"
+  },
+  "closed": {
+    "message": "来源标签页已关闭。"
+  },
+  "downloadSelected": {
+    "message": "下载所选"
+  },
+  "download": {
+    "message": "下载"
+  },
+  "sending": {
+    "message": "正在发送…"
+  },
+  "sent": {
+    "message": "已发送到下载管理器"
+  },
+  "sentShort": {
+    "message": "已发送 ✓"
+  },
+  "unknown": {
+    "message": "大小未知"
+  },
+  "count": {
+    "message": "显示 $1 / $2 项 · 已选 $3 项"
+  },
+  "done": {
+    "message": "已发送 $1 / $2 项"
+  },
+  "pageDownload": {
+    "message": "交给插件解析网页"
+  },
+  "pagePlugin": {
+    "message": "用 $1 解析本页"
+  },
+  "preview": {
+    "message": "$1 的预览图"
+  },
+  "manager_unavailable": {
+    "message": "发送失败，请检查下载管理器连接。"
+  },
+  "unsupported_request": {
+    "message": "此媒体请求无法安全重放，请尝试直接下载链接。"
+  },
+  "capture_expired": {
+    "message": "媒体信息已过期，请重新播放后重试。"
+  },
+  "media_unavailable": {
+    "message": "此资源已不可用，请刷新网页后重试。"
+  },
+  "plugin_unavailable": {
+    "message": "此插件无法处理当前网页，请刷新后重试。"
+  },
+  "hideInline": {
+    "message": "隐藏此页面的按钮"
+  },
+  "showMore": {
+    "message": "显示更多"
+  }
+}

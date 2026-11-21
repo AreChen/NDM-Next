@@ -5,7 +5,9 @@ use std::{
     sync::Arc,
 };
 
+use ndm_core::plugins::PluginRegistry;
 use ndm_core::{DashOptions, HlsOptions, NewTask, Store, TaskId, TaskOptions, TaskState};
+use reqwest::Url;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -88,6 +90,7 @@ pub fn write_frame(writer: &mut impl Write, message: &[u8]) -> io::Result<()> {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum Command {
     Status,
+    BrowserContext { page_url: Option<String> },
     Prepare { id: TaskId, task: BrowserTask },
     Commit { id: TaskId },
     Abort { id: TaskId },
@@ -106,24 +109,28 @@ struct BrowserTask {
     media_type: Option<String>,
     #[serde(default)]
     headers: BTreeMap<String, String>,
+    plugin: Option<String>,
+}
+
+fn web_url(value: &str) -> Option<Url> {
+    if value.len() > 65_536 {
+        return None;
+    }
+    let url = Url::parse(value).ok()?;
+    (matches!(url.scheme(), "http" | "https")
+        && url.host_str().is_some()
+        && url.username().is_empty()
+        && url.password().is_none())
+    .then_some(url)
 }
 
 impl BrowserTask {
     fn validate(self, destination: PathBuf) -> Option<(NewTask, TaskOptions)> {
-        fn web_url(value: &str) -> bool {
-            reqwest::Url::parse(value).is_ok_and(|url| {
-                matches!(url.scheme(), "http" | "https")
-                    && url.host_str().is_some()
-                    && url.username().is_empty()
-                    && url.password().is_none()
-            })
-        }
-        if self.url.len() > 65_536
-            || !web_url(&self.url)
+        if web_url(&self.url).is_none()
             || self
                 .source_url
                 .as_ref()
-                .is_some_and(|source| source.len() > 65_536 || !web_url(source))
+                .is_some_and(|source| web_url(source).is_none())
             || self
                 .suggested_filename
                 .as_ref()
@@ -230,7 +237,29 @@ impl Host {
         };
         match command {
             Command::Status => json!({"ok":true,"protocol":1}),
-            Command::Prepare { id, task } => {
+            Command::BrowserContext { page_url } => {
+                let page = page_url.as_deref().and_then(web_url);
+                let registry = PluginRegistry::new(self.store.profile_directory());
+                let plugins: Vec<_> = registry
+                    .list()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .take(128)
+                    .map(|plugin| {
+                        let eligible = page
+                            .as_ref()
+                            .is_some_and(|url| plugin.matches_browser_page(url));
+                        json!({
+                            "id": plugin.manifest.id,
+                            "name": plugin.manifest.name,
+                            "version": plugin.manifest.version,
+                            "page": eligible,
+                        })
+                    })
+                    .collect();
+                json!({"ok":true,"protocol":1,"desktop_version":env!("CARGO_PKG_VERSION"),"plugins":plugins})
+            }
+            Command::Prepare { id, mut task } => {
                 // A retry of an existing handoff keeps its original destination even
                 // when the application default changes between prepare requests.
                 let (destination, original_options) = match self.store.get(id) {
@@ -238,19 +267,34 @@ impl Host {
                     Ok(None) => (self.destination.clone(), None),
                     Err(_) => return json!({"ok":false,"error":"prepare_failed"}),
                 };
+                let requested_plugin = task.plugin.take();
                 let Some((task, mut options)) = task.validate(destination) else {
                     return json!({"ok":false,"error":"invalid_request"});
                 };
-                if let Some(TaskOptions::Plugin(original)) = &original_options
+                if let Some(plugin) = requested_plugin.as_deref() {
+                    if options != TaskOptions::Auto {
+                        return json!({"ok":false,"error":"invalid_request"});
+                    }
+                    let selected = match original_options {
+                        Some(TaskOptions::Plugin(original)) if original.id == plugin => {
+                            Some(TaskOptions::Plugin(original))
+                        }
+                        None => self.browser_page_options(&task.url, plugin),
+                        _ => None,
+                    };
+                    let Some(selected) = selected else {
+                        return json!({"ok":false,"error":"plugin_unavailable"});
+                    };
+                    options = selected;
+                } else if let Some(TaskOptions::Plugin(original)) = &original_options
                     && options == TaskOptions::Auto
                 {
                     options = TaskOptions::Plugin(original.clone());
                 } else if original_options.is_none()
                     && options == TaskOptions::Auto
-                    && let Ok(url) = reqwest::Url::parse(&task.url)
-                    && let Ok(Some(plugin)) =
-                        ndm_core::plugins::PluginRegistry::new(self.store.profile_directory())
-                            .task_options(&url, None, Default::default())
+                    && let Ok(url) = Url::parse(&task.url)
+                    && let Ok(Some(plugin)) = PluginRegistry::new(self.store.profile_directory())
+                        .task_options(&url, None, Default::default())
                 {
                     options = plugin;
                 }
@@ -285,6 +329,19 @@ impl Host {
                 Err(_) => json!({"ok":false,"error":"inspect_failed"}),
             },
         }
+    }
+
+    fn browser_page_options(&self, page: &str, id: &str) -> Option<TaskOptions> {
+        let source = web_url(page)?;
+        let registry = PluginRegistry::new(self.store.profile_directory());
+        let plugin = registry.get(id).ok().flatten()?;
+        if !plugin.matches_browser_page(&source) {
+            return None;
+        }
+        registry
+            .task_options(&source, Some(id), Default::default())
+            .ok()
+            .flatten()
     }
 }
 

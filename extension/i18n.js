@@ -1,0 +1,66 @@
+const EXTENSION_LANGUAGES = {
+  en: {directory: 'en', label: 'English'},
+  zh: {directory: 'zh_CN', label: '简体中文'},
+};
+const extensionCatalogs = new Map();
+const catalogLoads = new Map();
+
+function extensionLocale(preference = 'auto', browserLanguage = 'en') {
+  if (Object.hasOwn(EXTENSION_LANGUAGES, preference)) return preference;
+  const browser = String(browserLanguage).toLowerCase().replaceAll('_', '-');
+  return Object.keys(EXTENSION_LANGUAGES).find(locale => locale.toLowerCase() === browser)
+    || Object.keys(EXTENSION_LANGUAGES).find(locale => locale.toLowerCase() === browser.split('-')[0])
+    || 'en';
+}
+
+function installCatalog(locale, catalog) {
+  if (catalog && Object.hasOwn(EXTENSION_LANGUAGES, locale)) extensionCatalogs.set(locale, catalog);
+}
+
+async function loadCatalog(locale) {
+  if (extensionCatalogs.has(locale)) return extensionCatalogs.get(locale);
+  const entry = EXTENSION_LANGUAGES[locale];
+  if (!entry) return undefined;
+  if (!catalogLoads.has(locale)) {
+    catalogLoads.set(locale, (async () => {
+      try {
+        const response = await fetch(chrome.runtime.getURL(`_locales/${entry.directory}/messages.json`));
+        if (!response.ok) return undefined;
+        const catalog = await response.json();
+        installCatalog(locale, catalog);
+        return catalog;
+      } catch { return undefined; }
+      finally { catalogLoads.delete(locale); }
+    })());
+  }
+  return catalogLoads.get(locale);
+}
+
+function extensionMessage(key, locale, ...values) {
+  const message = extensionCatalogs.get(locale)?.[key]?.message || extensionCatalogs.get('en')?.[key]?.message;
+  if (message) return message.replace(/\$(\d+)/g, (_, index) => String(values[Number(index) - 1] ?? ''));
+  return (typeof chrome !== 'undefined' && chrome.i18n?.getMessage?.(key, values.map(String))) || key;
+}
+
+function localizeDocument(locale) {
+  document.documentElement.lang = locale === 'zh' ? 'zh-CN' : locale;
+  for (const node of document.querySelectorAll('[data-i18n]')) {
+    node.textContent = extensionMessage(node.dataset.i18n, locale);
+  }
+  for (const [selector, attribute, key] of [
+    ['[data-aria]', 'aria-label', 'aria'],
+    ['[data-placeholder]', 'placeholder', 'placeholder'],
+    ['[data-title]', 'title', 'title'],
+  ]) {
+    for (const node of document.querySelectorAll(selector)) {
+      node.setAttribute(attribute, extensionMessage(node.dataset[key], locale));
+    }
+  }
+}
+
+if (typeof module !== 'undefined') {
+  for (const [locale, entry] of Object.entries(EXTENSION_LANGUAGES)) {
+    installCatalog(locale, require(`./_locales/${entry.directory}/messages.json`));
+  }
+  module.exports = {extensionLocale, extensionMessage, installCatalog};
+}

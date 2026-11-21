@@ -1,4 +1,4 @@
-importScripts('rules.js', 'capture.js', 'handoff.js');
+importScripts('rules.js', 'capture.js', 'handoff.js', 'i18n.js', 'media-ui.js');
 
 const mediaByTab = new Map();
 const requests = new Map();
@@ -6,6 +6,8 @@ const pendingApprovals = new Map();
 const tabEpochs = new Map();
 const mediaNotices = new Map();
 const mediaOpenings = new Map();
+const pageContexts = new Map();
+const inlineDismissedTabs = new Set();
 const SETTING_KEYS = new Set(Object.keys(DEFAULTS));
 const HOST = 'com.ndmnext.host';
 const RECOVERY_ALARM = 'ndm-next-recover';
@@ -17,6 +19,7 @@ let recoveryTimer;
 let mediaSequence = 0;
 const MEDIA_SESSION_KEY = 'ndm-next-media-v1';
 const MEDIA_TTL = 1800000;
+const CONTEXT_TTL = 30000;
 const invalidatedMediaTabs = new Set();
 let mediaSessionTrusted = false;
 let mediaDirty = false;
@@ -77,7 +80,7 @@ async function restoreMedia() {
         replay.when=capture.when;
       }
       const entries=mediaByTab.get(tabId) || [];
-      if (entries.length >= 50) continue;
+      if (limitedMedia([...entries, entry]).length === entries.length) continue;
       entries.push({...entry,capture:replay});mediaByTab.set(tabId,entries);
       mediaSequence=Math.max(mediaSequence,entry.sequence);
     }
@@ -115,6 +118,8 @@ function persistMedia() {
 chrome.storage.onChanged?.addListener((changes,area) => {
   if (area === 'local' && Object.keys(changes).some(key=>SETTING_KEYS.has(key))) settings().then(config => {
     const tabIds=[...mediaByTab.keys()];
+    pageContexts.clear();
+    if (changes.inlineMedia?.newValue === true) inlineDismissedTabs.clear();
     setCaptureEnabled(config);
     for (const id of tabIds) notifyMedia(id);
   }).catch(() => {});
@@ -143,6 +148,7 @@ handoff.recover().catch(() => {});
 
 chrome.webRequest.onBeforeSendHeaders?.addListener(details => {
     // Store synchronously: response observers must not race storage initialization.
+    if (details.initiator?.startsWith('chrome-extension://')) return;
     if (captureInitialized && !captureEnabled && !mediaEnabled) return;
     const now = Date.now();
     for (const [id,entry] of requests) if (now-entry.when > 120000) requests.delete(id);
@@ -173,6 +179,86 @@ function reliablePage(value) {
     const url = new URL(value);
     return ['http:','https:'].includes(url.protocol) && !url.username && !url.password ? url.href : null;
   } catch { return null; }
+}
+
+function extensionLanguage(config) {
+  return extensionLocale(config.language, chrome.i18n?.getUILanguage?.());
+}
+
+function allowResource(item, config) {
+  return config.media && !shouldSkip({...item, size: undefined}, config)
+    && (!config.blockedDomains?.length || !!reliablePage(item.pageUrl));
+}
+
+function limitedMedia(entries) {
+  let images = 0;
+  let media = 0;
+  return entries.filter(({item}) => mediaKind(item) === 'image' ? images++ < 80 : media++ < 50);
+}
+
+async function browserContext(tabId, config, refresh) {
+  if (config.backend !== 'next') return {connected: await legacyStatus(), plugins: [], pages: []};
+  const epoch = tabEpochs.get(tabId);
+  const tab = tabId === null ? null : await chrome.tabs.get(tabId).catch(() => null);
+  const page = reliablePage(tab?.url);
+  const cached = pageContexts.get(tabId);
+  if (!refresh && cached?.url === page && Date.now() < cached.expires) return cached.context;
+  const eligible = page && allowResource({url: page, pageUrl: page}, config);
+  let response;
+  try {
+    response = await native({type: 'browser_context', page_url: eligible ? page : null});
+    if (response?.error === 'invalid_request') response = await native({type: 'status'});
+  } catch {}
+  const plugins = response?.ok && Array.isArray(response.plugins) ? response.plugins : [];
+  const pages = eligible && tabEpochs.get(tabId) === epoch
+    ? plugins.filter(plugin => plugin.page === true).map(plugin => ({
+      id: (cached?.url === page && cached.context.pages.find(entry => entry.plugin === plugin.id)?.id)
+        || `page-${++mediaSequence}`,
+      plugin: plugin.id,
+      name: plugin.name,
+      version: plugin.version,
+    })) : [];
+  const context = {connected: response?.ok === true, desktopVersion: response?.desktop_version, plugins, pages};
+  if (tabEpochs.get(tabId) === epoch) pageContexts.set(tabId, {url: page, context, expires: Date.now() + CONTEXT_TTL});
+  return context;
+}
+
+async function sendPage(tabId, id, config) {
+  const cached = pageContexts.get(tabId);
+  const selection = cached?.context.pages.find(page => page.id === id);
+  if (!selection || config.backend !== 'next') return {ok: false, error: 'plugin_unavailable'};
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  const url = reliablePage(tab?.url);
+  if (!url || url !== cached.url || pageContexts.get(tabId) !== cached
+      || !allowResource({url, pageUrl: url}, config)) return {ok: false, error: 'media_unavailable'};
+  const ok = await handoff.send({url, source_url: url, plugin: selection.plugin});
+  return {ok, error: ok ? undefined : 'manager_unavailable'};
+}
+
+async function mediaPosters(tabId, entries) {
+  const groups = new Map();
+  for (const {item} of entries) {
+    if (!['video', 'hls', 'dash'].includes(mediaKind(item))) continue;
+    const key = item.documentId ?? item.frameId;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  }
+  const posters = {};
+  await Promise.all([...groups.values()].slice(0, 8).map(async items => {
+    const {documentId, frameId} = items[0];
+    try {
+      const result = await chrome.tabs.sendMessage(tabId, {action: 'mediaPosters', items},
+        documentId ? {documentId, frameId} : {frameId});
+      for (const {id} of items) {
+        const value = result?.[id];
+        if (typeof value !== 'string') continue;
+        const image = value.length < 48000 && /^data:image\/(?:png|webp);base64,[a-z0-9+/=]+$/i.test(value);
+        const poster = image ? value : reliablePage(value);
+        if (poster && (image || poster.length < 4096)) posters[id] = poster;
+      }
+    } catch {}
+  }));
+  return posters;
 }
 
 function browserTask(item, download, mediaCapture, originalUrl) {
@@ -222,7 +308,8 @@ async function sendLegacy(item,capture) {
 async function askToTakeOver(download, task, config) {
   if (!chrome.notifications) return;
   const id = `ndm-next-confirm:${download.id}`;
-  const chinese = config.language === 'zh' || (config.language === 'auto' && chrome.i18n.getUILanguage().toLowerCase().startsWith('zh'));
+  const locale = extensionLanguage(config);
+  await loadCatalog(locale);
   const pending = {downloadId:download.id,task,policy:config.transferPolicy,expires:Date.now()+300000};
   pendingApprovals.set(id,pending);
   // Session storage is memory-only and survives a service-worker restart. Never
@@ -231,8 +318,8 @@ async function askToTakeOver(download, task, config) {
   try {
     await chrome.notifications.create(id, {
       type:'basic',iconUrl:'icons/icon-128.png',title:'NDM Next',
-      message:chinese ? '使用 NDM Next 下载此文件？' : 'Send this download to NDM Next?',
-      buttons:[{title:chinese ? '接管下载' : 'Send download'},{title:chinese ? '留在浏览器' : 'Keep in browser'}],
+      message:extensionMessage('confirmTitle', locale),
+      buttons:[{title:extensionMessage('confirmAccept', locale)},{title:extensionMessage('confirmKeep', locale)}],
     });
   } catch { await forgetApproval(id); }
 }
@@ -292,7 +379,11 @@ chrome.downloads.onCreated.addListener(async download => {
 chrome.downloads.onChanged?.addListener(delta => { if (delta.state || delta.error) handoff.recover().catch(scheduleRecovery); });
 
 chrome.webRequest.onHeadersReceived.addListener(async details => {
-  if (details.tabId < 0 || details.method !== 'GET') return;
+  if (details.tabId < 0 || details.method !== 'GET' || details.initiator?.startsWith('chrome-extension://')) return;
+  if (details.statusCode && (details.statusCode < 200 || details.statusCode >= 300)) return;
+  const headers = Object.fromEntries((details.responseHeaders || []).map(h => [h.name.toLowerCase(), h.value || '']));
+  const type = (headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+  if (!mediaKind({url:details.url,type})) return;
   const epoch = tabEpochs.get(details.tabId);
   const captured = requests.get(details.requestId);
   const replay = captured?.mediaCapture;
@@ -303,16 +394,12 @@ chrome.webRequest.onHeadersReceived.addListener(async details => {
   await captureReady;
   const sequence = ++mediaSequence;
   try {
-    const headers = Object.fromEntries((details.responseHeaders || []).map(h => [h.name.toLowerCase(), h.value || '']));
-    const type = (headers['content-type'] || '').split(';')[0].trim().toLowerCase();
-    if (!mediaKind({url:details.url,type})) return;
     const config = await settings(); if (!config.media) return;
-    if (details.statusCode && (details.statusCode < 200 || details.statusCode >= 300)) return;
     const tab = await chrome.tabs.get(details.tabId);
     const item = {id:`media-${sequence}`,url:details.url,pageUrl:tab.url,size:mediaSize(details,headers),type,frameId:details.frameId ?? 0,documentId:details.documentId || captured?.documentId};
     if (isMediaManifest(item)) item.size = undefined; // Manifest length is not the resulting media length.
     if (isMediaSegment(item)) item.size = undefined;
-    if (shouldSkip(item,config) || ((config.blockedDomains || []).length && !reliablePage(item.pageUrl))) return;
+    if (!allowResource(item, config)) return;
     if (tabEpochs.get(details.tabId) !== epoch) return;
     pruneMedia();
     const previous = mediaByTab.get(details.tabId) || [];
@@ -325,7 +412,7 @@ chrome.webRequest.onHeadersReceived.addListener(async details => {
     item.id=previous.find(same)?.item.id || item.id;
     const entries = previous.filter(entry => !same(entry) && !(isMediaManifest(item) && sameDocument(entry) && isMediaSegment(entry.item)));
     entries.unshift({item,capture,sequence,when:captured?.when ?? Date.now()});
-    mediaByTab.set(details.tabId,entries.slice(0,50));
+    mediaByTab.set(details.tabId, limitedMedia(entries));
     scheduleMediaPersist();
     notifyMedia(details.tabId);
   } catch {}
@@ -345,9 +432,9 @@ function mediaSize(details, headers) {
   return Number.isSafeInteger(size) && size > 0 ? size : undefined;
 }
 chrome.tabs.onUpdated.addListener((id,change) => {
-  if (change.status === 'loading') { invalidatedMediaTabs.add(id);mediaByTab.delete(id); tabEpochs.set(id,(tabEpochs.get(id) || 0)+1);mediaDirty=true;persistMedia().catch(()=>{});notifyMedia(id); }
+  if (change.status === 'loading' || change.url) { pageContexts.delete(id);inlineDismissedTabs.delete(id);invalidatedMediaTabs.add(id);mediaByTab.delete(id); tabEpochs.set(id,(tabEpochs.get(id) || 0)+1);mediaDirty=true;persistMedia().catch(()=>{});notifyMedia(id); }
 });
-chrome.tabs.onRemoved.addListener(id => { invalidatedMediaTabs.add(id);mediaByTab.delete(id); tabEpochs.set(id,(tabEpochs.get(id) || 0)+1);clearTimeout(mediaNotices.get(id));mediaNotices.delete(id);mediaDirty=true;persistMedia().catch(()=>{});notifyMedia(id); });
+chrome.tabs.onRemoved.addListener(id => { pageContexts.delete(id);inlineDismissedTabs.delete(id);invalidatedMediaTabs.add(id);mediaByTab.delete(id); tabEpochs.set(id,(tabEpochs.get(id) || 0)+1);clearTimeout(mediaNotices.get(id));mediaNotices.delete(id);mediaDirty=true;persistMedia().catch(()=>{});notifyMedia(id); });
 function resourceWindowTab(sender) {
   if (sender.id !== chrome.runtime.id || typeof sender.url !== 'string') return null;
   const prefix=chrome.runtime.getURL('media.html')+'?tab=';
@@ -371,8 +458,8 @@ function mediaTab(message,sender) {
   return null;
 }
 function visibleMedia(tabId,sender,config) {
-  return (mediaByTab.get(tabId) || []).filter(({item}) => config.media && !shouldSkip(item,config)
-    && (mediaUi(sender) || !sender.tab || (item.frameId === (sender.frameId ?? 0)
+  return (mediaByTab.get(tabId) || []).filter(({item}) => allowResource(item, config)
+    && (mediaUi(sender) || !sender.tab || (mediaKind(item) !== 'image' && item.frameId === (sender.frameId ?? 0)
       && (!item.documentId || !sender.documentId || item.documentId === sender.documentId))));
 }
 async function openMediaWindow(tabId) {
@@ -394,6 +481,16 @@ chrome.runtime.onMessage.addListener((message,sender,reply) => {
     let config = await settings();
     if (message.action === 'status') return {connected:await status(config)};
     const tabId = mediaTab(message,sender);
+    if (message.action === 'dismissInline') {
+      if (tabId === null || !sender.tab || mediaUi(sender)) return {ok: false, error: 'invalid_sender'};
+      inlineDismissedTabs.add(tabId);
+      notifyMedia(tabId);
+      return {ok: true};
+    }
+    if (message.action === 'context') {
+      if (!mediaUi(sender) || (tabId === null && resourceWindowTab(sender) !== null)) return {ok:false,error:'invalid_sender'};
+      return browserContext(tabId, config, message.refresh === true);
+    }
     if (message.action === 'openMediaWindow') {
       if (tabId === null || !mediaUi(sender)) return {ok:false,error:'invalid_sender'};
       return openMediaWindow(tabId);
@@ -406,10 +503,28 @@ chrome.runtime.onMessage.addListener((message,sender,reply) => {
     if (message.action === 'media') {
       if (tabId === null) return {ok:false,error:'invalid_sender'};
       const source=resourceWindowTab(sender) !== null ? await chrome.tabs.get(tabId).catch(()=>null) : undefined;
-      return {items:source === null ? [] : visibleMedia(tabId,sender,config).map(entry => entry.item),inlineMedia:config.inlineMedia,language:config.language,source:source && {title:source.title,url:source.url}};
+      const entries = source === null ? [] : visibleMedia(tabId, sender, config);
+      const epoch = tabEpochs.get(tabId);
+      const posters = source && message.posters === true ? await mediaPosters(tabId, entries) : {};
+      const locale = extensionLanguage(config);
+      const catalog = !mediaUi(sender) && locale !== message.locale ? await loadCatalog(locale) : undefined;
+      const labels = catalog && Object.fromEntries([...RESOURCE_MESSAGES].filter(key => catalog[key])
+        .map(key => [key, catalog[key]]));
+      const current = tabEpochs.get(tabId) === epoch;
+      return {
+        items: current ? entries.map(({item}) => ({...item, poster: posters[item.id]})) : [],
+        inlineMedia: config.inlineMedia && !inlineDismissedTabs.has(tabId),
+        detecting: config.enabled && config.media,
+        language: config.language,
+        labels,
+        source: source && {title: source.title, url: source.url},
+      };
     }
     if (message.action === 'send') {
       if (tabId === null) return {ok:false,error:'invalid_sender'};
+      if (typeof message.id === 'string' && message.id.startsWith('page-')) {
+        return mediaUi(sender) ? sendPage(tabId, message.id, config) : {ok:false,error:'invalid_sender'};
+      }
       const entry = visibleMedia(tabId,sender,config).find(entry => message.id ? entry.item.id === message.id : entry.item.url === message.item?.url);
       if (!entry || ((config.blockedDomains || []).length && !reliablePage(entry.item.pageUrl))) return {ok:false,error:'media_unavailable'};
       if (!entry.capture) return {ok:false,error:'unsupported_request'};

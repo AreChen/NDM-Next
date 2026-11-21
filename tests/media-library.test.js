@@ -35,15 +35,25 @@ function setup({language='en',failure}={}) {
   const document={documentElement:{},getElementById:get,querySelectorAll:()=>[],createElement:()=>new Element()};
   const ctx={document,chrome,location:{href:'chrome-extension://extension/media.html?tab=1'},URL,Intl,setTimeout:(fn,delay)=>{const id=++timerId;timers.set(id,{fn,delay});return id;},clearTimeout:id=>timers.delete(id)};
   vm.createContext(ctx);
-  for(const file of ['rules.js','media-ui.js','media-library.js','media.js'])vm.runInContext(fs.readFileSync('extension/'+file,'utf8'),ctx);
+  for (const file of ['rules.js', 'i18n.js', 'media-ui.js', 'media-library.js', 'previews.js', 'media.js']) {
+    vm.runInContext(fs.readFileSync("extension/" + file, "utf8"), ctx);
+    if (file === "i18n.js") {
+      for (const [locale, directory] of [["en", "en"], ["zh", "zh_CN"]]) {
+        const catalog = fs.readFileSync("extension/_locales/" + directory + "/messages.json", "utf8");
+        vm.runInContext("installCatalog(" + JSON.stringify(locale) + ", " + catalog + ")", ctx);
+      }
+    }
+  }
   return {get,sent,listeners,timers,setResult:value=>result=value,ready:()=>new Promise(resolve=>setImmediate(resolve))};
 }
 
 test('resource window filters, preserves selection and sends only selected opaque IDs',async()=>{
   const t=setup();await t.ready();assert.equal(t.get('list').children.length,2);
-  const stream=t.get('list').children[1];assert.match(stream.children[2].children[1].children[1].textContent,/Size unknown/);
+  const stream=t.get('list').children[1];assert.match(stream.children[2].children[1].textContent,/Size unknown/);
   stream.children[0].checked=true;stream.children[0].onchange();
   t.get('kind').value='video';t.get('kind').onchange();assert.equal(t.get('list').children.length,1);
+  assert.equal(t.get('download').disabled,true);
+  t.get('kind').value='hls';t.get('kind').onchange();
   assert.equal(t.get('download').disabled,false);assert.match(t.get('download').textContent,/\(1\)/);
   await t.get('download').onclick();
   const sends=t.sent.filter(message=>message.action==='send');
@@ -58,7 +68,7 @@ test('batch sends retain failed selection and show per-resource errors in Chines
   t.get('selectAll').checked=true;t.get('selectAll').onchange();
   await t.get('download').onclick();assert.equal(t.sent.filter(message=>message.action==='send').length,2);
   assert.match(t.get('feedback').textContent,/1 \/ 2/);assert.match(t.get('download').textContent,/下载所选 \(1\)/);
-  assert(t.get('list').children[1].children[2].children.some(child=>child.textContent.includes('无法安全重放')));
+  assert(t.get('list').children[1].children[2].children[2].children.some(child=>child.textContent.includes('无法安全重放')));
   assert.equal(t.get('download').disabled,false);
 });
 

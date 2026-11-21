@@ -1,60 +1,191 @@
-const dict = {
- en:{subtitle:'Your downloads, under control.',catcher:'Download catcher',catcherDesc:'Send eligible downloads to your download manager',currentSite:'CURRENT SITE',mediaTitle:'DETECTED MEDIA',settings:'Settings',backend:'Download manager',backendHint:'Neat Download Manager uses its original connection without durable confirmation.',captureMode:'Takeover mode',automatic:'Automatic',confirm:'Ask for each download',captureHint:'Confirmation is available with NDM Next.',size:'Minimum file size (MB)',sizeHint:'Smaller files stay in the browser; unknown sizes remain eligible. Set 0 to disable.',mediaToggle:'Detect media',mediaHint:'Find audio and video on this page.',extensions:'Excluded file extensions',extensionsHint:'Separate extensions with commas.',domains:'Blocked domains',domainsHint:'One domain per line. Subdomains are included.',language:'Language / 语言',save:'Save settings',blocked:'Blocked',allowed:'Catching enabled for this site',block:'Block site',unblock:'Unblock',empty:'No media detected on this page',download:'Send',saved:'Settings saved',online:'Download manager connected',offline:'Download manager unavailable',error:'Unable to send to download manager',sent:'Sent to download manager',invalid:'Please enter valid domains.'},
- zh:{subtitle:'让每一次下载，都恰到好处。',catcher:'下载接管',catcherDesc:'将符合规则的下载发送至下载管理器',currentSite:'当前网站',mediaTitle:'发现的媒体',settings:'设置',backend:'下载管理器',backendHint:'Neat Download Manager 使用原有连接，无法提供持久接单确认。',captureMode:'接管方式',automatic:'自动接管',confirm:'逐项确认',captureHint:'逐项确认适用于 NDM Next。',size:'最小文件大小（MB）',sizeHint:'较小的文件由浏览器处理；大小未知时仍可接管。设为 0 可关闭。',mediaToggle:'媒体识别',mediaHint:'发现当前页面上的音频和视频。',extensions:'排除的文件类型',extensionsHint:'使用英文逗号分隔扩展名。',domains:'域名黑名单',domainsHint:'每行一个域名，包含其子域名。',language:'语言 / Language',save:'保存设置',blocked:'此网站已排除',allowed:'此网站可触发下载接管',block:'排除此网站',unblock:'解除排除',empty:'当前页面暂未发现媒体',download:'发送',saved:'设置已保存',online:'下载管理器已连接',offline:'下载管理器未连接',error:'发送失败，请检查下载管理器连接',sent:'已发送至下载管理器',invalid:'请输入有效域名。'}
-};
-Object.assign(dict.en,{transferPolicy:'Takeover safety',safeTransfer:'Verify before takeover',immediateTransfer:'Take over immediately',transferHint:'Verification can temporarily use extra traffic. Immediate takeover may fail for single-use links.'});
-Object.assign(dict.zh,{transferPolicy:'接管安全性',safeTransfer:'验证后接管',immediateTransfer:'立即接管',transferHint:'验证期间可能产生额外流量；立即接管可能导致一次性链接下载失败。'});
-Object.assign(dict.en,{inlineMedia:'Buttons beside media',inlineHint:'Show a compact download button on web pages.',download:'Download'});
-Object.assign(dict.zh,{inlineMedia:'网页媒体下载按钮',inlineHint:'在网页视频和音频旁显示精简下载按钮。',download:'下载'});
-Object.assign(dict.en,{openMedia:'Open media library ↗'});
-Object.assign(dict.zh,{openMedia:'打开媒体资源窗口 ↗'});
-const $ = id => document.getElementById(id); let config, tab, lang, messageTimer;
-function showMediaNotice(message,error=false) {
-  clearTimeout(messageTimer);$('message').textContent=message;$('message').classList.toggle('error',error);
-  messageTimer=setTimeout(()=>{$('message').textContent='';},error?6000:2000);
+const $ = id => document.getElementById(id);
+let config, tab, language = 'en', messageTimer;
+let contextSequence = 0;
+
+function text(key, ...values) { return extensionMessage(key, language, ...values); }
+
+function notice(message, error = false) {
+  clearTimeout(messageTimer);
+  $('message').textContent = message;
+  $('message').classList.toggle('error', error);
+  messageTimer = setTimeout(() => { $('message').textContent = ''; }, error ? 6000 : 2400);
 }
-function text(key) { return dict[lang][key]; }
-function translate() { lang = config.language === 'auto' ? (chrome.i18n.getUILanguage().toLowerCase().startsWith('zh') ? 'zh' : 'en') : config.language; document.documentElement.lang=lang; document.querySelectorAll('[data-i18n]').forEach(el => el.textContent=text(el.dataset.i18n)); $('status').title=text($('status').classList.contains('online')?'online':'offline'); }
-function renderSite() { const domain=normalizeDomain(tab?.url || ''); $('domain').textContent=domain || '—'; const blocked=config.blockedDomains.some(d=>domainMatches(domain,d)); $('siteState').textContent=text(blocked?'blocked':'allowed'); $('blockSite').textContent=text(blocked?'unblock':'block'); $('blockSite').disabled=!domain; }
-function renderMedia(items) {
-  $('mediaCount').textContent=items.length;
-  const list=$('mediaList'); list.replaceChildren();
-  if (!items.length) { const el=document.createElement('div'); el.className='empty'; el.textContent=text('empty'); list.append(el); return; }
-  for (const item of items) {
-    const row=document.createElement('div'); row.className='media-item';
-    const info=document.createElement('div'); info.className='media-info';
-    const name=document.createElement('span'); name.className='media-name';
-    try { name.textContent=decodeURIComponent(new URL(item.url).pathname.split('/').pop()) || item.type; } catch { name.textContent=item.type; }
-    name.title=item.url;
-    const detail=document.createElement('span');detail.className='media-detail';
-    const format=isHls(item)?'HLS':isDash(item)?'DASH':(item.type || '').split('/').pop().toUpperCase();
-    detail.textContent=`${format} · ${mediaSizeLabel(item,lang)}`;
-    info.append(name,detail);
-    const button=document.createElement('button'); button.className='secondary'; button.textContent=text('download');
-    button.onclick=async()=> {
-      button.disabled=true;button.textContent=mediaMessage('sending',lang);$('message').textContent='';
-      try {
-        const result=await chrome.runtime.sendMessage({action:'send',tabId:tab?.id,id:item.id});
-        showMediaNotice(mediaMessage(result?.ok?'sent':result?.error,lang),!result?.ok);
-      } catch { showMediaNotice(mediaMessage('manager_unavailable',lang),true); }
-      finally {button.disabled=false;button.textContent=text('download');}
-    };
-    row.append(info,button); list.append(row);
+
+async function translate() {
+  language = extensionLocale(config.language, chrome.i18n.getUILanguage());
+  await loadCatalog(language);
+  localizeDocument(language);
+  $('language').replaceChildren(...[
+    ['auto', text('followBrowser')],
+    ...Object.entries(EXTENSION_LANGUAGES).map(([id, entry]) => [id, entry.label]),
+  ].map(([value, label]) => {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    return option;
+  }));
+  $('language').value = Object.hasOwn(EXTENSION_LANGUAGES, config.language) ? config.language : 'auto';
+}
+
+function renderSite() {
+  const domain = /^https?:/i.test(tab?.url || '') ? normalizeDomain(tab.url) : '';
+  const blocked = config.blockedDomains.some(rule => domainMatches(domain, rule));
+  $('domain').textContent = domain || '—';
+  $('siteState').textContent = text(!domain ? 'noSite' : blocked ? 'siteBlocked' : 'siteAllowed');
+  $('blockSite').textContent = text(blocked ? 'unblockSite' : 'blockSite');
+  $('blockSite').disabled = !domain;
+  $('openMedia').disabled = !domain;
+  $('media').disabled = !config.enabled;
+}
+
+async function renderResources() {
+  if (!Number.isInteger(tab?.id)) return;
+  const result = await chrome.runtime.sendMessage({action: 'media', tabId: tab.id});
+  const count = result?.items?.length ?? 0;
+  $('mediaCount').textContent = new Intl.NumberFormat(language).format(count);
+  $('mediaCount').title = text('resourceCount', count);
+  const list = $('mediaList');
+  list.replaceChildren();
+  const items = (result?.items || []).sort((a, b) => Number(mediaKind(a) === 'image') - Number(mediaKind(b) === 'image'));
+  list.hidden = !count;
+  for (const item of items.slice(0, 3)) {
+    const row = document.createElement('div');
+    const info = document.createElement('div');
+    info.className = 'stack';
+    const title = document.createElement('strong');
+    title.textContent = mediaName(item, language);
+    title.title = title.textContent;
+    const detail = document.createElement('span');
+    detail.className = 'small';
+    detail.textContent = mediaFormat(item) + ' · ' + mediaSizeLabel(item, language);
+    const button = document.createElement('button');
+    button.className = 'quiet';
+    button.textContent = text('download');
+    button.onclick = () => sendResource(item.id, button);
+    info.append(title, detail);
+    row.append(info, button);
+    list.append(row);
   }
 }
-async function start() { config={...DEFAULTS,...await chrome.storage.local.get(DEFAULTS)}; [tab]=await chrome.tabs.query({active:true,currentWindow:true}); translate(); $('enabled').checked=config.enabled; $('media').checked=config.media; $('inlineMedia').checked=config.inlineMedia; $('backend').value=config.backend; $('captureMode').value=config.captureMode; $('transferPolicy').value=config.transferPolicy; $('minSize').value=config.minBytes/1048576; $('extensions').value=config.excludedExtensions.join(', '); $('domains').value=config.blockedDomains.join('\n'); $('language').value=config.language; renderSite(); const result=await chrome.runtime.sendMessage({action:'media',tabId:tab?.id}); renderMedia(result.items || []); const connection=await chrome.runtime.sendMessage({action:'status'}); $('status').classList.toggle('online',connection.connected); $('status').title=text(connection.connected?'online':'offline'); }
-$('inlineMedia').onchange=async e=>{config.inlineMedia=e.target.checked;await chrome.storage.local.set({inlineMedia:config.inlineMedia});};
-chrome.runtime.onMessage.addListener(message=>{if(message.action==='mediaChanged' && tab && message.tabId===tab.id) chrome.runtime.sendMessage({action:'media',tabId:tab.id}).then(result=>renderMedia(result.items||[])).catch(()=>{});});
-$('openMedia').onclick=async()=>{
-  if(!Number.isInteger(tab?.id))return;
-  $('openMedia').disabled=true;
+
+async function sendResource(id, button) {
+  button.disabled = true;
   try {
-    const result=await chrome.runtime.sendMessage({action:'openMediaWindow',tabId:tab.id});
-    if(!result?.ok)showMediaNotice(mediaMessage('manager_unavailable',lang),true);
-  } catch {showMediaNotice(mediaMessage('manager_unavailable',lang),true);}
-  finally {$('openMedia').disabled=false;}
+    const result = await chrome.runtime.sendMessage({action: 'send', tabId: tab.id, id});
+    notice(mediaMessage(result?.ok ? 'sent' : result?.error, language), !result?.ok);
+  } catch {
+    notice(mediaMessage('manager_unavailable', language), true);
+  } finally { button.disabled = false; }
+}
+
+async function renderContext(refresh = false) {
+  const sequence = ++contextSequence;
+  const result = await chrome.runtime.sendMessage({action:'context', tabId:tab?.id, refresh}).catch(() => null);
+  if (sequence !== contextSequence) return;
+  const status = $('status');
+  const state = result?.connected ? 'online' : 'offline';
+  status.dataset.state = state;
+  status.textContent = text(state);
+  status.title = status.textContent;
+  $('desktopVersion').textContent = result?.desktopVersion ? 'v' + result.desktopVersion : '—';
+  const plugins = $('plugins');
+  plugins.replaceChildren();
+  for (const plugin of result?.plugins || []) {
+    const row = document.createElement('div');
+    const name = document.createElement('span');
+    name.textContent = pluginName(plugin, language);
+    const version = document.createElement('code');
+    version.textContent = 'v' + plugin.version;
+    row.append(name, version);
+    plugins.append(row);
+  }
+  if (!plugins.childElementCount) {
+    plugins.textContent = text(result?.desktopVersion ? 'noPlugins' : 'pluginInfoUnavailable');
+    plugins.classList.add('muted', 'small');
+  } else {
+    plugins.classList.remove('muted', 'small');
+  }
+  renderPageActions($('pageActions'), result?.pages || [], language, sendResource);
+}
+
+async function start() {
+  config = {...DEFAULTS, ...await chrome.storage.local.get(DEFAULTS)};
+  [tab] = await chrome.tabs.query({active: true, currentWindow: true});
+  await translate();
+  const version = chrome.runtime.getManifest?.().version;
+  $('extensionVersion').textContent = version ? 'v' + version : '—';
+  $('browserVersion').textContent = $('extensionVersion').textContent;
+  for (const key of ['enabled', 'media', 'inlineMedia']) $(key).checked = config[key];
+  for (const key of ['backend', 'captureMode', 'transferPolicy']) $(key).value = config[key];
+  $('minSize').value = config.minBytes / 1048576;
+  $('extensions').value = config.excludedExtensions.join(', ');
+  $('domains').value = config.blockedDomains.join('\n');
+  renderSite();
+  await Promise.all([renderResources(), renderContext(true)]);
+}
+
+async function refreshSettings() {
+  renderSite();
+  await Promise.all([renderResources(), renderContext(true)]);
+}
+
+for (const key of ['enabled', 'media', 'inlineMedia']) {
+  $(key).onchange = async event => {
+    config[key] = event.target.checked;
+    await chrome.storage.local.set({[key]: config[key]});
+    if (key !== 'inlineMedia') await refreshSettings();
+  };
+}
+
+$('openMedia').onclick = async () => {
+  if (!Number.isInteger(tab?.id)) return;
+  $('openMedia').disabled = true;
+  try {
+    const reply = await chrome.runtime.sendMessage({action: 'openMediaWindow', tabId: tab.id});
+    if (reply?.ok) window.close();
+    else notice(mediaMessage('media_unavailable', language), true);
+  } catch { notice(mediaMessage('media_unavailable', language), true); }
+  finally { renderSite(); }
 };
-$('enabled').onchange=async e=>{config.enabled=e.target.checked; await chrome.storage.local.set({enabled:config.enabled});};
-$('blockSite').onclick=async()=>{ const domain=normalizeDomain(tab?.url || ''); if(!domain)return; const matched=config.blockedDomains.filter(d=>domainMatches(domain,d)); config.blockedDomains=matched.length?config.blockedDomains.filter(d=>!matched.includes(d)):[...config.blockedDomains,domain]; await chrome.storage.local.set({blockedDomains:config.blockedDomains}); $('domains').value=config.blockedDomains.join('\n'); renderSite(); };
-$('save').onclick=async()=>{ const raw=$('domains').value.split(/\n/).map(s=>s.trim()).filter(Boolean); const domains=raw.map(normalizeDomain); if(domains.some(d=>!d)){ $('message').textContent=text('invalid'); return; } config={...config,backend:$('backend').value,captureMode:$('captureMode').value,transferPolicy:$('transferPolicy').value,minBytes:Math.max(0,Number($('minSize').value)||0)*1048576,excludedExtensions:$('extensions').value.split(',').map(s=>s.trim().toLowerCase().replace(/^\./,'')).filter(Boolean),blockedDomains:[...new Set(domains)],language:$('language').value,media:$('media').checked}; await chrome.storage.local.set(config); translate(); renderSite(); const result=await chrome.runtime.sendMessage({action:'media',tabId:tab?.id}); renderMedia(result.items||[]); const connection=await chrome.runtime.sendMessage({action:'status'}); $('status').classList.toggle('online',connection.connected); $('status').title=text(connection.connected?'online':'offline'); $('message').textContent=text('saved'); };
-start().catch(error=>{ $('message').textContent=error.message; });
+
+$('blockSite').onclick = async () => {
+  const domain = normalizeDomain(tab?.url || '');
+  if (!domain) return;
+  const matched = config.blockedDomains.filter(rule => domainMatches(domain, rule));
+  config.blockedDomains = matched.length
+    ? config.blockedDomains.filter(rule => !matched.includes(rule))
+    : [...config.blockedDomains, domain];
+  await chrome.storage.local.set({blockedDomains: config.blockedDomains});
+  $('domains').value = config.blockedDomains.join('\n');
+  await refreshSettings();
+};
+
+$('save').onclick = async () => {
+  const domains = $('domains').value.split(/\n/).map(value => value.trim()).filter(Boolean).map(normalizeDomain);
+  if (domains.some(domain => !domain)) {
+    notice(text('invalid'), true);
+    return;
+  }
+  config = {
+    ...config,
+    backend: $('backend').value,
+    captureMode: $('captureMode').value,
+    transferPolicy: $('transferPolicy').value,
+    minBytes: Math.max(0, Number($('minSize').value) || 0) * 1048576,
+    excludedExtensions: $('extensions').value.split(',').map(value => value.trim().toLowerCase().replace(/^\./, '')).filter(Boolean),
+    blockedDomains: [...new Set(domains)],
+    language: $('language').value,
+  };
+  await chrome.storage.local.set(config);
+  await translate();
+  await refreshSettings();
+  notice(text('saved'));
+};
+
+chrome.runtime.onMessage.addListener(message => {
+  if (message.action === 'mediaChanged' && tab && message.tabId === tab.id) {
+    renderResources().catch(() => {});
+  }
+});
+
+start().catch(() => notice(mediaMessage('manager_unavailable', language), true));

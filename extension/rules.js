@@ -16,12 +16,14 @@ function mediaKind(item) {
   const type=String(item.type || '').split(';')[0].trim().toLowerCase();
   if (type.startsWith('video/')) return 'video';
   if (type.startsWith('audio/')) return 'audio';
+  if (type.startsWith('image/')) return 'image';
   // Only infer from an explicit media suffix for missing/generic MIME types.
   if (type && !['application/octet-stream','binary/octet-stream','application/ogg'].includes(type)) return null;
   try {
     const path=new URL(item.url).pathname;
     if (/\.(mp4|m4v|webm|mkv|mov|avi|flv|ogv|mpeg|mpg)$/i.test(path)) return 'video';
     if (/\.(mp3|m4a|aac|ogg|oga|opus|flac|wav|aiff|aif)$/i.test(path)) return 'audio';
+    if (/\.(png|jpe?g|webp|gif|avif|svg|bmp|ico|tiff?|heic|heif)$/i.test(path)) return 'image';
   } catch {}
   return null;
 }

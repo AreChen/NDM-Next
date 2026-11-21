@@ -148,6 +148,20 @@ pub struct InstalledPlugin {
 }
 
 impl InstalledPlugin {
+    pub fn matches_browser_page(&self, source: &Url) -> bool {
+        if !self.manifest.capabilities.browser_page || !matches!(source.scheme(), "http" | "https")
+        {
+            return false;
+        }
+        let host = source.host_str().map(|host| host.trim_end_matches('.'));
+        let path = source.path().to_ascii_lowercase();
+        self.manifest
+            .inputs
+            .iter()
+            .chain(&self.manifest.manual_inputs)
+            .any(|input| input.score(source.scheme(), host, &path).is_some())
+    }
+
     pub fn executable(&self) -> PathBuf {
         self.directory.join(&self.manifest.engine)
     }

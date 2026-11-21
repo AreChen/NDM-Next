@@ -98,7 +98,8 @@ fn run() -> io::Result<()> {
         } else {
             true
         };
-        let mut result = if (matches!(kind, Some("status" | "prepare")) && !executable.is_file())
+        let mut result = if (matches!(kind, Some("status" | "browser_context" | "prepare"))
+            && !executable.is_file())
             || !can_commit
         {
             json!({"ok":false,"error":"desktop_unavailable"})

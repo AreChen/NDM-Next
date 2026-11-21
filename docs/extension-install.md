@@ -29,6 +29,19 @@ pwsh -File .\enable-dev-extension.ps1 -ExtensionId <extension-id>
 
 The desktop updater updates the desktop app. Unpacked extensions must be updated manually from the matching release ZIP.
 
+Use **Open page resources** to search and select the images, video, audio,
+HLS and DASH resources observed in a tab. The window shows available image
+and player previews. The takeover size setting applies to automatic browser
+downloads. Under **Settings**, select English, Simplified Chinese or the
+browser language. **Versions and plugins** lists the extension, desktop
+and installed plugin versions whenever the desktop provides them.
+
+The extension offers **Send page to a plugin** when the desktop reports
+a compatible installed engine. This sends the page URL to the selected
+engine after you click. The compact player control appears on hover or
+keyboard focus. Close it for the current page with **×**, or switch off
+**Buttons beside media** in the extension settings.
+
 ## 简体中文
 
 1. 安装并启动同一 GitHub Release 中的桌面程序。
@@ -47,3 +60,12 @@ Linux 用户从解压目录启动桌面应用一次，即可注册原生宿主�
 macOS 或 Linux 若要继续使用旧扩展，可复制扩展 ID，粘贴到 **NDM Next → 设置 → 浏览器扩展 → 修复连接**。Windows 自定义开发者 ID 可使用 ZIP 内的 `enable-dev-extension.ps1`。
 
 桌面自动更新只更新桌面程序。解压加载的扩展需手动下载对应 Release ZIP 更新。
+
+点 **打开网页资源** 可搜索和选择当前标签页已发现的图片、音视频、HLS 和 DASH。
+有可用的图片、播放器封面或视频帧时，资源条目会显示缩略图。文件大小门槛用于自动接管。
+在 **设置** 可选择简体中文、英文或跟随浏览器，**版本与插件** 会显示扩展、
+桌面端和已安装插件的版本。
+
+桌面端发现适用于当前网页的已安装引擎时，扩展会提供用该插件解析本页的入口。
+点击后才会把网页链接交给所选插件。播放器旁的小胶囊在鼠标悬停或键盘聚焦时显示。
+点 **×** 可在本页隐藏，也可以在扩展设置中关闭 **网页媒体按钮**。

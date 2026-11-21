@@ -1,9 +1,20 @@
 const test=require('node:test');
 const assert=require('node:assert/strict');
 const {mediaSizeLabel,matchMedia,mediaMessage,mediaButtonPosition}=require('../extension/media-ui.js');
+const {extensionLocale,extensionMessage}=require('../extension/i18n.js');
 
-test('media button sits above the player and stays inside the frame viewport',()=>{
-  assert.deepEqual(mediaButtonPosition({top:120,right:650},190,30,1000,800),{left:452,top:84});
+test('the language catalogs match and honor the browser locale or an explicit setting',()=>{
+  assert.equal(extensionLocale('auto','zh-CN'),'zh');
+  assert.equal(extensionLocale('en','zh-CN'),'en');
+  assert.equal(extensionMessage('pagePlugin','zh','流媒体下载'),'用 流媒体下载 解析本页');
+  assert.deepEqual(
+    Object.keys(require('../extension/_locales/en/messages.json')).sort(),
+    Object.keys(require('../extension/_locales/zh_CN/messages.json')).sort(),
+  );
+});
+
+test('the media control sits in the upper corner of the player',()=>{
+  assert.deepEqual(mediaButtonPosition({top:120,right:650},190,30,1000,800),{left:452,top:126});
   assert.deepEqual(mediaButtonPosition({top:0,right:1200},190,30,1000,800),{left:802,top:8});
   assert.deepEqual(mediaButtonPosition({top:-100,right:90},190,30,1000,800),{left:8,top:8});
 });

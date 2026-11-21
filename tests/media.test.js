@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 
 function setup(type, config={}, options={}) {
-  const listeners={}, prepared=[],localWrites=[],windowCalls=[];const openWindows=[];
+  const listeners={}, prepared=[],localWrites=[],windowCalls=[],nativeCalls=[];const openWindows=[];
   let pauseTab=false,releaseTab;
   const storage={get:async key=>key===null?{}:{...key,backend:'next',...config},set:async value=>localWrites.push(value),remove:async()=>{}};
   const session=options.session && {setAccessLevel:async value=>{options.session.access=value.accessLevel;},get:async key=>{await options.restoreGate;return structuredClone({[key]:options.session[key]});},set:async value=>{options.session.writes=(options.session.writes || 0)+1;Object.assign(options.session,structuredClone(value));}};
@@ -14,6 +14,8 @@ function setup(type, config={}, options={}) {
     tabs:{onUpdated:{addListener:fn=>listeners.navigation=fn},onRemoved:{addListener:fn=>listeners.removed=fn},get:async id=>{if(pauseTab)await new Promise(resolve=>releaseTab=resolve);return {url:`https://page.test/${id}`};}},
     windows:{getAll:async()=>openWindows,create:async options=>{windowCalls.push(options);const window={id:10,tabs:[{url:options.url}]};openWindows.push(window);return window;},update:async(id,options)=>windowCalls.push({id,...options})},
     runtime:{id:'extension',getURL:path=>'chrome-extension://extension/'+path,onInstalled:{addListener(){}},onMessage:{addListener:f=>listeners.message=f},sendNativeMessage:async (_host,msg)=>{
+      nativeCalls.push(msg);
+      if (msg.type==='browser_context' && options.context) return options.context;
       if(msg.type==='prepare') prepared.push(msg.task);
       return {ok:true,state:msg.type==='prepare'?'prepared':'queued'};
     }}, alarms:{create(){},onAlarm:{addListener(){}}},
@@ -22,12 +24,50 @@ function setup(type, config={}, options={}) {
     importScripts(...files){for(const file of files)vm.runInContext(fs.readFileSync('extension/'+file,'utf8'),ctx)}};
   vm.createContext(ctx); vm.runInContext(fs.readFileSync('extension/background.js','utf8'),ctx);
   const send=(message,sender={id:'extension',url:'chrome-extension://extension/popup.html'})=>new Promise(resolve=>listeners.message(message,sender,resolve));
-  return {prepared,localWrites,windowCalls,send,pauseTab:()=>pauseTab=true,releaseTab:()=>releaseTab(),navigate:()=>listeners.navigation(1,{status:'loading'}),remove:()=>listeners.removed(1),observe:async (tabId,requestId,cookie,extra={})=>{
+  return {prepared,localWrites,windowCalls,nativeCalls,send,pauseTab:()=>pauseTab=true,releaseTab:()=>releaseTab(),navigate:()=>listeners.navigation(1,{status:'loading'}),remove:()=>listeners.removed(1),observe:async (tabId,requestId,cookie,extra={})=>{
     const url=extra.url || 'https://video.test/playlist?id=42';
     listeners.headers({requestId,tabId,url,frameId:extra.frameId??0,documentId:extra.requestDocumentId??extra.documentId,method:'GET',requestHeaders:[{name:'Cookie',value:cookie},...(extra.requestHeaders||[])]});
-    await listeners.media({requestId,tabId,url,frameId:extra.frameId??0,documentId:extra.documentId,method:'GET',statusCode:extra.statusCode??200,responseHeaders:[{name:'Content-Type',value:type},{name:'Content-Length',value:'512'},...(extra.responseHeaders||[])]});
+    await listeners.media({requestId,tabId,url,frameId:extra.frameId??0,documentId:extra.documentId,method:'GET',statusCode:extra.statusCode??200,responseHeaders:[{name:'Content-Type',value:extra.type || type},{name:'Content-Length',value:'512'},...(extra.responseHeaders||[])]});
   }};
 }
+
+test('small images show up independently of the takeover threshold and stream capacity',async()=>{
+  const t=setup('image/webp');
+  await t.observe(1,'stream','media=1',{url:'https://video.test/watch.m3u8',type:'application/vnd.apple.mpegurl'});
+  for(let index=0;index<84;index++){
+    await t.observe(1,'image-'+index,'image=1',{url:'https://video.test/'+index+'.webp'});
+  }
+  const {items}=await t.send({action:'media',tabId:1});
+  assert.equal(items.filter(item=>item.type==='image/webp').length,80);
+  assert(items.some(item=>item.url.endsWith('.m3u8')));
+  const image=items.find(item=>item.type==='image/webp');
+  assert.equal((await t.send({action:'send',tabId:1,id:image.id})).ok,true);
+  assert.equal(t.prepared[0].expected_size,512);
+});
+
+test('desktop capabilities offer a page action scoped to its original tab',async()=>{
+  const t=setup('video/mp4',{},{
+    context:{ok:true,desktop_version:'0.4.3',plugins:[
+      {id:'yt-dlp',version:'0.2.0',name:{en:'Media Downloader'},page:true},
+      {id:'bittorrent',version:'0.1.1',name:{en:'BitTorrent'},page:false},
+    ]},
+  });
+  const data=await t.send({action:'context',tabId:1,page_url:'https://unrelated.test/'});
+  assert.equal(data.plugins.length,2);
+  assert.equal(data.pages.length,1);
+  assert.equal(data.pages[0].version,'0.2.0');
+  assert.equal(t.nativeCalls[0].page_url,'https://page.test/1');
+  const {id}=data.pages[0];
+  const sender={id:'extension',tab:{id:1},frameId:0,url:'https://page.test/1'};
+  assert.equal((await t.send({action:'send',id},sender)).error,'invalid_sender');
+  assert.equal((await t.send({action:'send',id,tabId:2})).ok,false);
+  assert.equal((await t.send({action:'send',id,tabId:1})).ok,true);
+  assert.equal(t.prepared[0].url,'https://page.test/1');
+  assert.equal(t.prepared[0].plugin,'yt-dlp');
+  assert.equal(t.prepared[0].headers,undefined);
+  t.navigate();
+  assert.equal((await t.send({action:'send',id,tabId:1})).ok,false);
+});
 
 for (const type of ['application/vnd.apple.mpegurl','application/dash+xml']) test(`small ${type} manifests remain selectable and use the latest capture from the correct tab`,async()=>{
   const t=setup(type); await new Promise(resolve=>setTimeout(resolve,0));

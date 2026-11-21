@@ -1,13 +1,15 @@
 // Shared by the popup and the isolated-world content script. No page messages
 // or page-provided request headers cross the extension boundary.
-const MEDIA_TEXT = {
-  en:{download:'Download',sending:'Sending…',sent:'Sent to download manager',unknown:'Size unknown',manager_unavailable:'Unable to send. Check the download manager connection.',unsupported_request:'This media request cannot be replayed safely. Try a direct download link.',capture_expired:'Media details expired. Play the media again and retry.',media_unavailable:'Media is no longer available. Play it again and retry.'},
-  zh:{download:'下载',sending:'正在发送…',sent:'已发送至下载管理器',unknown:'大小未知',manager_unavailable:'发送失败，请检查下载管理器连接。',unsupported_request:'此媒体请求无法安全重放，请尝试直接下载链接。',capture_expired:'媒体信息已过期，请重新播放后重试。',media_unavailable:'媒体已不可用，请重新播放后重试。'},
-};
+const RESOURCE_MESSAGES = new Set([
+  'download', 'sending', 'sent', 'sentShort', 'unknown', 'manager_unavailable',
+  'unsupported_request', 'capture_expired', 'media_unavailable', 'plugin_unavailable', 'hideInline',
+]);
+const mediaText = typeof module !== 'undefined' ? require('./i18n.js').extensionMessage : extensionMessage;
 const mediaManifest = typeof module !== 'undefined' ? require('./rules.js').isMediaManifest : isMediaManifest;
 const mediaSegment = typeof module !== 'undefined' ? require('./rules.js').isMediaSegment : isMediaSegment;
-function mediaLanguage(language,uiLanguage='en') { return language === 'zh' || (language === 'auto' && uiLanguage.toLowerCase().startsWith('zh')) ? 'zh' : 'en'; }
-function mediaMessage(key,language) { return MEDIA_TEXT[language]?.[key] || MEDIA_TEXT[language]?.manager_unavailable || MEDIA_TEXT.en.manager_unavailable; }
+function mediaMessage(key,language) {
+  return mediaText(RESOURCE_MESSAGES.has(key) ? key : 'manager_unavailable', language);
+}
 function mediaSizeLabel(item,language) {
   if (mediaManifest(item) || mediaSegment(item) || !Number.isSafeInteger(item.size) || item.size <= 0) return mediaMessage('unknown',language);
   const units=['B','KB','MB','GB','TB'];
@@ -33,10 +35,9 @@ function matchMedia(sources,items,playerCount) {
 function mediaButtonPosition(rect,width,height,viewportWidth,viewportHeight) {
   const edge=8,gap=6;
   const left=Math.max(edge,Math.min(rect.right-width-edge,viewportWidth-width-edge));
-  const above=rect.top-height-gap;
-  const top=Math.max(edge,Math.min(above>=edge ? above : rect.top+gap,viewportHeight-height-edge));
+  const top=Math.max(edge,Math.min(rect.top+gap,viewportHeight-height-edge));
   return {left,top};
 }
 if (typeof module !== 'undefined') {
-  module.exports={mediaLanguage,mediaMessage,mediaSizeLabel,matchMedia,mediaButtonPosition};
+  module.exports={mediaMessage,mediaSizeLabel,matchMedia,mediaButtonPosition};
 }

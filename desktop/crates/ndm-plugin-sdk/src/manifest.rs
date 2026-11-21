@@ -59,6 +59,9 @@ pub struct EngineCapabilities {
     pub inspect_files: bool,
     #[serde(default)]
     pub share_completed: bool,
+    /// The browser companion may offer this engine for a matching webpage.
+    #[serde(default)]
+    pub browser_page: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
