@@ -13,6 +13,14 @@ pub struct DesktopUpdateGuard {
     namespace: String,
 }
 
+#[cfg(target_os = "macos")]
+impl DesktopUpdateGuard {
+    /// Keep the update reservation locked across the desktop's exit.
+    pub fn into_installer_stdin(self) -> std::process::Stdio {
+        self._file.into()
+    }
+}
+
 // Unlike the existing singleton protocol, these new names normalize aliases so
 // Store handles opening the same profile share one admission boundary. Keep the
 // legacy singleton/shutdown/installer namespace algorithm unchanged.

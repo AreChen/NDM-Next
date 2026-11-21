@@ -66,6 +66,8 @@ pub(crate) fn apply_theme(theme: Theme, cx: &mut App) {
 }
 
 fn main() {
+    #[cfg(target_os = "macos")]
+    updates::macos::run_installer();
     let data_dir = ndm_core::application_data_directory();
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     if let Ok(executable) = std::env::current_exe() {
@@ -251,6 +253,8 @@ fn main() {
         if show_main && !background {
             cx.activate(true);
         }
+        #[cfg(target_os = "macos")]
+        updates::macos::finish_update();
     });
 }
 
