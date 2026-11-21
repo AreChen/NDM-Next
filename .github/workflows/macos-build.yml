@@ -6,6 +6,7 @@ on:
   push:
     tags-ignore:
       - 'desktop-v*'
+      - 'extension-v*'
     paths:
       - '.github/workflows/macos-build.yml'
       - 'desktop/**'

@@ -35,10 +35,14 @@ function renderPageActions(container, pages, language, send) {
   for (const page of pages) {
     const button = document.createElement('button');
     button.type = 'button';
-    button.textContent = extensionMessage('pagePlugin', language, pluginName(page, language)) + ' ';
+    const label = document.createElement('span');
+    label.className = 'page-action-label';
+    label.textContent = extensionMessage('pagePlugin', language, pluginName(page, language));
+    label.title = label.textContent;
     const version = document.createElement('span');
+    version.className = 'badge page-action-version';
     version.textContent = `v${page.version}`;
-    button.append(version);
+    button.append(label, ' ', version);
     button.onclick = () => send(page.id, button);
     container.append(button);
   }

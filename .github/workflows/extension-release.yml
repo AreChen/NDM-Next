@@ -1,0 +1,45 @@
+name: Browser extension release
+
+on:
+  push:
+    tags:
+      - 'extension-v*'
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    uses: ./.github/workflows/extension-build.yml
+
+  publish:
+    name: Publish browser extension ZIP
+    needs: package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: ndm-next-extension
+          path: extension-dist
+      - name: Verify and publish extension
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=$(python3 -c 'import json; print(json.load(open("extension/manifest.json"))["version"])')
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$GITHUB_REF_NAME" == "extension-v$version" ]]
+          desktop=$(python3 -c 'import tomllib; print(tomllib.load(open("desktop/Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+          filename="NDM-Next-Extension-Desktop-$desktop-v$version.zip"
+          (cd extension-dist && sha256sum --check "$filename.sha256")
+          unzip -t "extension-dist/$filename"
+          unzip -p "extension-dist/$filename" manifest.json | cmp - extension/manifest.json
+          gh release create "$GITHUB_REF_NAME" "extension-dist/$filename" "extension-dist/$filename.sha256" \
+            --title "NDM Next Extension $version" \
+            --notes-file "docs/releases/extension-$version.md" \
+            --verify-tag --draft --latest=false
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest=false

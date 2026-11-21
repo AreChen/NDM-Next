@@ -2,7 +2,7 @@
 
 ## English
 
-1. Install and start the desktop app from the same GitHub Release.
+1. Install and start the desktop version shown in the ZIP filename.
 2. Extract `NDM-Next-Extension-Desktop-<desktop-version>-v<extension-version>.zip` into a permanent folder.
 3. Open `chrome://extensions` (or `edge://extensions`), turn on Developer mode, choose **Load unpacked**, and select that folder containing `manifest.json`.
 4. Open the extension settings and choose **NDM Next** as the download manager. Eligible downloads are now captured; files smaller than 1 MB stay in the browser by default.
@@ -32,7 +32,9 @@ The desktop updater updates the desktop app. Unpacked extensions must be updated
 GitHub Actions tests and packages changes to the extension on the main branch.
 Use **Run workflow** to build a ZIP on demand and download the
 `ndm-next-extension` artifact from the completed run. Desktop releases
-include the extension ZIP built from the release tag. [Browser extension build](https://github.com/AreChen/NDM-Next/actions/workflows/extension-build.yml)
+include the extension ZIP built from the release tag. An `extension-v*` tag
+publishes the extension ZIP and checksum as a separate GitHub Release.
+[Browser extension build](https://github.com/AreChen/NDM-Next/actions/workflows/extension-build.yml)
 
 Use **Open page resources** to search and select the images, video, audio,
 HLS and DASH resources observed in a tab. The window shows available image
@@ -49,7 +51,7 @@ keyboard focus. Close it for the current page with **×**, or switch off
 
 ## 简体中文
 
-1. 安装并启动同一 GitHub Release 中的桌面程序。
+1. 安装并启动 ZIP 文件名标明的桌面版本。
 2. 将 `NDM-Next-Extension-Desktop-<桌面版本>-v<扩展版本>.zip` 解压到固定目录。
 3. 打开 `chrome://extensions`（Edge 为 `edge://extensions`），开启开发者模式，点击**加载已解压的扩展程序**，选择包含 `manifest.json` 的目录。
 4. 打开扩展设置，将下载管理器设为 **NDM Next**。符合规则的下载将自动接管；默认小于 1 MB 的文件仍由浏览器下载。
@@ -67,7 +69,8 @@ macOS 或 Linux 若要继续使用旧扩展，可复制扩展 ID，粘贴到 **N
 桌面自动更新只更新桌面程序。解压加载的扩展需手动下载对应 Release ZIP 更新。
 
 主分支的扩展改动会触发 GitHub Actions 测试和打包，也可以点 **Run workflow** 手动构建。
-构建完成后，在对应运行中下载 `ndm-next-extension` 产物。桌面发布附有同一标签构建的扩展 ZIP。[扩展构建](https://github.com/AreChen/NDM-Next/actions/workflows/extension-build.yml)
+构建完成后，在对应运行中下载 `ndm-next-extension` 产物。桌面发布附有同一标签构建的扩展 ZIP。
+`extension-v*` 标签会单独发布扩展 ZIP 和校验值。[扩展构建](https://github.com/AreChen/NDM-Next/actions/workflows/extension-build.yml)
 
 点 **打开网页资源** 可搜索和选择当前标签页已发现的图片、音视频、HLS 和 DASH。
 有可用的图片、播放器封面或视频帧时，资源条目会显示缩略图。文件大小门槛用于自动接管。
