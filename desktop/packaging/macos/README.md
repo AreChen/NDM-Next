@@ -28,4 +28,6 @@ New profiles enable startup at login and use 16 download connections. Upgrading 
 
 ## Updates
 
-The app checks the `desktop-v{version}` GitHub release stream. A verified DMG opens in Finder. Quit NDM Next, drag the new app over the old copy, and launch it again. The app keeps download records and settings across replacement.
+The app checks the `desktop-v{version}` GitHub release stream. Choose **Upgrade** to download and verify the DMG. After active downloads finish, NDM Next closes, replaces the application at its installed location, and reopens. The app keeps the previous bundle until the updated main window opens. Download records and settings stay in their existing directories.
+
+The installed application's folder must be writable for in-app replacement. When it needs a manual installation, NDM Next opens the verified DMG in Finder.

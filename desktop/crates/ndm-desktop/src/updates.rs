@@ -8,6 +8,9 @@ use std::sync::{
 use std::{path::PathBuf, time::Duration};
 use tokio::io::AsyncReadExt;
 
+#[cfg(target_os = "macos")]
+pub(crate) mod macos;
+
 const RELEASES_API: &str = "https://api.github.com/repos/AreChen/NDM-Next/releases?per_page=100";
 const MAX_RESPONSE: usize = 2 * 1024 * 1024;
 const MAX_INSTALLER: u64 = 256 * 1024 * 1024;
@@ -412,7 +415,13 @@ async fn wait_for_installer_handoff(
     }
 }
 
-pub(crate) async fn install(update: ReadyUpdate, _data_dir: PathBuf) -> Result<(), UpdateFailure> {
+pub(crate) async fn install(
+    update: ReadyUpdate,
+    _data_dir: PathBuf,
+    reservation: ndm_core::DesktopUpdateGuard,
+) -> Result<(), UpdateFailure> {
+    #[cfg(not(target_os = "macos"))]
+    let _reservation = reservation;
     verify_cached(&update)
         .await
         .map_err(|_| UpdateFailure::Integrity)?;
@@ -431,17 +440,7 @@ pub(crate) async fn install(update: ReadyUpdate, _data_dir: PathBuf) -> Result<(
     }
     #[cfg(target_os = "macos")]
     {
-        let status = tokio::process::Command::new("/usr/bin/open")
-            .arg("--")
-            .arg(&update.path)
-            .status()
-            .await
-            .map_err(|error| UpdateFailure::Launch(error.raw_os_error()))?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(UpdateFailure::Installer(status.code()))
-        }
+        macos::install(update, _data_dir, reservation).await
     }
     #[cfg(target_os = "linux")]
     {

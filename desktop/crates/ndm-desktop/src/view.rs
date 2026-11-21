@@ -510,6 +510,18 @@ impl Desktop {
             install_update_when_idle: false,
             install_wait: None,
         };
+        #[cfg(target_os = "macos")]
+        if std::env::args_os().any(|arg| arg == updates::macos::UPDATE_ROLLED_BACK) {
+            this.update_state = UpdateState::Failed(updates::UpdateFailure::Installer(None));
+            this.set_notice(
+                this.text(
+                    "升级未完成，已打开原版本。可以重试升级。",
+                    "The previous version reopened after an incomplete update. You can retry.",
+                )
+                .into(),
+                cx,
+            );
+        }
         if this
             .tasks
             .iter()

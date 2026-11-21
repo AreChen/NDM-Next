@@ -282,10 +282,7 @@ impl Desktop {
             // The installer requests the existing graceful shutdown path. Its
             // process survives this app exiting, and relaunches the installed app.
             let outcome = runtime
-                .spawn(async move {
-                    let _reservation = reservation;
-                    updates::install(ready, data_dir).await
-                })
+                .spawn(updates::install(ready, data_dir, reservation))
                 .await;
             let _ = view.update(cx, |this, cx| {
                 if !matches!(outcome, Ok(Ok(()))) {
@@ -296,8 +293,8 @@ impl Desktop {
                     #[cfg(target_os = "macos")]
                     {
                         this.set_notice(this.text(
-                            "更新磁盘镜像已打开。退出 NDM Next，然后将新版拖入 Applications 替换旧版。",
-                            "Update disk image opened. Quit NDM Next, then drag the new app into Applications to replace it.",
+                            "当前位置需要手动安装。退出 NDM Next 后，可从已打开的磁盘镜像安装。",
+                            "This location requires manual installation. Quit NDM Next, then install from the open disk image.",
                         ).into(), cx);
                         UpdateState::Available(manual_release)
                     }
