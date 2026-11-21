@@ -30,6 +30,16 @@ impl Worker {
 
     pub(super) async fn reap(mut self) -> io::Result<()> {
         let terminated = self.terminate();
+        // macOS can return EPERM while the last process in a group is exiting.
+        // Confirm that the worker exits, with the same deadline as a stop request.
+        #[cfg(target_os = "macos")]
+        if terminated
+            .as_ref()
+            .is_err_and(|error| error.raw_os_error() == Some(libc::EPERM))
+            && let Ok(status) = tokio::time::timeout(super::STOP_TIMEOUT, self.child.wait()).await
+        {
+            return status.map(|_| ());
+        }
         if terminated.is_err() {
             self.child.start_kill()?;
         }
