@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Desktop-vX.Y.Z tag to publish, or leave blank to build desktop artifacts only'
+        description: 'Existing desktop-vX.Y.Z tag to publish, or leave blank to build desktop artifacts only'
         required: false
         type: string
       artifact_run_id:
@@ -90,8 +90,11 @@ jobs:
       contents: write
       actions: read
     steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
       - name: Validate artifact provenance
-        id: provenance
         env:
           GH_TOKEN: ${{ github.token }}
           ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id || github.run_id }}
@@ -101,16 +104,11 @@ jobs:
           [[ "$RELEASE_TAG" =~ ^desktop-v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           [[ "$ARTIFACT_RUN_ID" =~ ^[0-9]+$ && "$ARM64_RUN_ID" =~ ^[0-9]+$ ]]
           run_sha=$(gh api "repos/$GH_REPO/actions/runs/$ARTIFACT_RUN_ID" --jq '.head_sha')
-          [[ "$run_sha" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$run_sha" == "$(git rev-parse HEAD)" ]]
           if [[ "$ARM64_RUN_ID" != "$ARTIFACT_RUN_ID" ]]; then
             arm64_sha=$(gh api "repos/$GH_REPO/actions/runs/$ARM64_RUN_ID" --jq '.head_sha')
             [[ "$arm64_sha" == "$run_sha" ]]
           fi
-          printf 'commit=%s\n' "$run_sha" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          ref: ${{ steps.provenance.outputs.commit }}
-          persist-credentials: false
       - name: Download Windows artifact
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
@@ -179,18 +177,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          commit=$(git rev-parse HEAD)
-          existing=$(gh api "repos/$GH_REPO/git/matching-refs/tags/$RELEASE_TAG" --jq ".[] | select(.ref == \"refs/tags/$RELEASE_TAG\") | .ref")
-          tag_args=(--target "$commit")
-          if [[ -n "$existing" ]]; then
-            tag_commit=$(gh api "repos/$GH_REPO/commits/$RELEASE_TAG" --jq '.sha')
-            [[ "$tag_commit" == "$commit" ]]
-            tag_args=(--verify-tag)
-          fi
           mapfile -t assets < <(find release-assets -maxdepth 1 -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' -o -name SHA256SUMS \) -print)
           gh release create "$RELEASE_TAG" "${assets[@]}" \
             --title "NDM Next ${RELEASE_TAG#desktop-v}" \
-            "${tag_args[@]}" \
+            --verify-tag \
             --draft \
             --notes-file "docs/releases/desktop-${RELEASE_TAG#desktop-v}.md" \
             --generate-notes
