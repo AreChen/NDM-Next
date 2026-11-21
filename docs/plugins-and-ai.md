@@ -10,6 +10,7 @@ developer you trust. An engine package contains a native executable.
 Open **Settings** on an installed plugin card to save default download options.
 They apply to new tasks, including downloads requested through Codex CLI.
 An option chosen for an individual task takes precedence.
+Saved defaults use the same local protection as download task options.
 
 Paste a URL or select a local source file in **New download**. NDM Next
 selects an installed engine that supports the source. When several match,
@@ -44,6 +45,7 @@ SHA-256。也可以通过 **导入插件** 安装你信任的开发者提供的�
 
 在已安装的插件卡片上打开 **设置**，可保存该插件的默认下载选项。默认值用于
 新任务，也适用于 Codex CLI 发起的下载。单次任务可单独修改选项。
+已保存的默认值与下载任务选项使用同样的本地加密方式。
 
 新建下载时粘贴链接或选择本地文件，NDM Next 会匹配已安装的引擎。
 有多个匹配项时，可在 **下载引擎** 中手动选择。为某个网站选择插件后，

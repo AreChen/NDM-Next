@@ -161,11 +161,25 @@ impl InstalledPlugin {
     }
 
     pub fn option_schema(&self, tool: &DownloadTool) -> Value {
-        let mut tool = tool.clone();
-        let mut defaults = self.option_defaults.clone();
-        defaults.append(&mut tool.defaults);
-        tool.defaults = defaults;
-        self.manifest.option_schema(&tool)
+        let mut schema = self.manifest.option_schema(tool);
+        if let Some(required) = schema["required"].as_array_mut() {
+            required.retain(|key| {
+                key.as_str()
+                    .is_none_or(|key| !self.option_defaults.contains_key(key))
+            });
+        }
+        // An agent can use the configured value by omitting the field.
+        // Keep its literal value out of the tool description.
+        for key in self
+            .option_defaults
+            .keys()
+            .filter(|key| !tool.defaults.contains_key(*key))
+        {
+            if let Some(property) = schema["properties"][key].as_object_mut() {
+                property.remove("default");
+            }
+        }
+        schema
     }
 }
 
@@ -175,7 +189,34 @@ pub struct InstalledPlugins {
     #[serde(default)]
     preferred: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    option_defaults: BTreeMap<String, Map<String, Value>>,
+    option_defaults: BTreeMap<String, StoredDefaults>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+enum StoredDefaults {
+    Protected(Vec<u8>),
+    Plain(Map<String, Value>),
+}
+
+impl StoredDefaults {
+    fn read(&self) -> io::Result<Map<String, Value>> {
+        match self {
+            Self::Protected(bytes) => {
+                let decoded = crate::secrets::unprotect(bytes).map_err(io::Error::other)?;
+                serde_json::from_slice(&decoded).map_err(io::Error::other)
+            }
+            Self::Plain(values) => Ok(values.clone()),
+        }
+    }
+
+    fn protect(&mut self) -> io::Result<()> {
+        if let Self::Plain(values) = self {
+            let bytes = serde_json::to_vec(values).map_err(io::Error::other)?;
+            *self = Self::Protected(crate::secrets::protect(&bytes).map_err(io::Error::other)?);
+        }
+        Ok(())
+    }
 }
 
 impl InstalledPlugins {
@@ -183,7 +224,8 @@ impl InstalledPlugins {
         if defaults.is_empty() {
             self.option_defaults.remove(id);
         } else {
-            self.option_defaults.insert(id.to_owned(), defaults);
+            self.option_defaults
+                .insert(id.to_owned(), StoredDefaults::Plain(defaults));
         }
     }
 }
@@ -210,7 +252,10 @@ impl PluginRegistry {
         }
     }
 
-    fn save(&self, snapshot: &InstalledPlugins) -> io::Result<()> {
+    fn save(&self, snapshot: &mut InstalledPlugins) -> io::Result<()> {
+        for defaults in snapshot.option_defaults.values_mut() {
+            defaults.protect()?;
+        }
         fs::create_dir_all(&self.root)?;
         let mut pending = tempfile::NamedTempFile::new_in(&self.root)?;
         serde_json::to_writer(&mut pending, snapshot).map_err(io::Error::other)?;
@@ -252,7 +297,7 @@ impl PluginRegistry {
         if manifest.id != id {
             return Err(invalid("invalid plugin package identity"));
         }
-        let option_defaults = validated_defaults(&manifest, snapshot);
+        let option_defaults = validated_defaults(&manifest, snapshot).unwrap_or_default();
         Ok(InstalledPlugin {
             manifest,
             directory,
@@ -319,7 +364,7 @@ impl PluginRegistry {
         snapshot
             .preferred
             .insert(host.trim_end_matches('.').to_owned(), id.to_owned());
-        self.save(&snapshot)
+        self.save(&mut snapshot)
     }
 
     /// Save defaults for this installed revision. Each task can override them.
@@ -353,7 +398,7 @@ impl PluginRegistry {
                 .any(|field| field.key == *key && field.default.as_ref() == Some(value))
         });
         snapshot.set_defaults(id, defaults.clone());
-        self.save(&snapshot)?;
+        self.save(&mut snapshot)?;
         installed.option_defaults = defaults;
         Ok(installed)
     }
@@ -477,15 +522,17 @@ impl PluginRegistry {
         fs::rename(staging.path(), &directory)?;
         snapshot.active.insert(manifest.id.clone(), revision);
         let option_defaults = validated_defaults(&manifest, &snapshot);
-        snapshot.set_defaults(&manifest.id, option_defaults.clone());
-        if let Err(error) = self.save(&snapshot) {
+        if let Some(defaults) = &option_defaults {
+            snapshot.set_defaults(&manifest.id, defaults.clone());
+        }
+        if let Err(error) = self.save(&mut snapshot) {
             let _ = fs::remove_dir_all(&directory);
             return Err(error);
         }
         Ok(InstalledPlugin {
             manifest,
             directory,
-            option_defaults,
+            option_defaults: option_defaults.unwrap_or_default(),
         })
     }
 
@@ -501,7 +548,7 @@ impl PluginRegistry {
         }
         snapshot.preferred.retain(|_, preferred| preferred != id);
         snapshot.option_defaults.remove(id);
-        self.save(&snapshot)?;
+        self.save(&mut snapshot)?;
         fs::remove_dir_all(self.root.join(id))
     }
 }
@@ -509,14 +556,10 @@ impl PluginRegistry {
 fn validated_defaults(
     manifest: &PluginManifest,
     snapshot: &InstalledPlugins,
-) -> Map<String, Value> {
-    let mut defaults = snapshot
-        .option_defaults
-        .get(&manifest.id)
-        .cloned()
-        .unwrap_or_default();
+) -> Option<Map<String, Value>> {
+    let mut defaults = snapshot.option_defaults.get(&manifest.id)?.read().ok()?;
     defaults.retain(|key, value| manifest.accepts_option(key, value));
-    defaults
+    Some(defaults)
 }
 
 pub fn parse_source(input: &str) -> io::Result<Url> {
@@ -690,10 +733,13 @@ mod tests {
             manifest["engine"] = json!("file-copy.exe");
         }
         manifest["inputs"] = json!([{"schemes": ["https"], "hosts": ["example.test"]}]);
-        manifest["options"] = json!([{
-            "key": "pieces", "kind": "integer", "min": 1, "max": 16,
-            "label": {"en": "Pieces"}, "default": 4
-        }]);
+        manifest["options"] = json!([
+            {
+                "key": "pieces", "kind": "integer", "min": 1, "max": 16,
+                "label": {"en": "Pieces"}, "default": 4
+            },
+            {"key": "token", "kind": "text", "max_length": 128, "label": {"en": "Token"}}
+        ]);
         write_package(&archive, &manifest);
         let original = registry.import(&archive).unwrap();
         let source = Url::parse("https://example.test/example").unwrap();
@@ -709,16 +755,24 @@ mod tests {
             options.values["pieces"].as_i64().unwrap()
         };
         assert_eq!(resolved(Map::new()), 4);
-        let saved = registry
-            .save_option_defaults(&original, defaults(8))
-            .unwrap();
+        let mut values = defaults(8);
+        values.insert("token".into(), json!("private-test-value"));
+        let saved = registry.save_option_defaults(&original, values).unwrap();
         assert_eq!(resolved(Map::new()), 8);
         assert_eq!(resolved(defaults(2)), 2);
-        let mut tool = saved.manifest.tools[0].clone();
         assert_eq!(
-            saved.option_schema(&tool)["properties"]["pieces"]["default"],
-            8
+            registry.get("file-copy").unwrap().unwrap().option_defaults["token"],
+            "private-test-value",
         );
+        let persisted =
+            std::fs::read_to_string(profile.path().join("plugins/installed.json")).unwrap();
+        assert!(!persisted.contains("private-test-value"));
+        let persisted: Value = serde_json::from_str(&persisted).unwrap();
+        assert!(persisted["option_defaults"]["file-copy"].is_array());
+        let mut tool = saved.manifest.tools[0].clone();
+        let schema = saved.option_schema(&tool);
+        assert!(schema["properties"]["pieces"].get("default").is_none());
+        assert!(!schema.to_string().contains("private-test-value"));
         tool.defaults = defaults(2);
         assert_eq!(
             saved.option_schema(&tool)["properties"]["pieces"]["default"],
