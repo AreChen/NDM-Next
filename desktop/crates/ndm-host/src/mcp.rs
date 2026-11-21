@@ -4,7 +4,7 @@ use std::{
     path::PathBuf,
     process::{Command, Stdio},
     sync::mpsc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use ndm_core::{
@@ -17,6 +17,7 @@ use serde_json::{Map, Value, json};
 
 const PROTOCOL: &str = "2025-11-25";
 const SOURCE_SCHEMA: &str = "An HTTP(S), FTP, FTPS, SFTP, or installed plugin source. For local files, pass an absolute path.";
+const TOOL_REFRESH: Duration = Duration::from_secs(1);
 
 pub fn run(profile: PathBuf) -> io::Result<()> {
     let server = Server {
@@ -37,8 +38,23 @@ pub fn run(profile: PathBuf) -> io::Result<()> {
     let mut initialized = false;
     let mut subscribed = false;
     let mut tools = Value::Null;
+    let mut next_refresh = Instant::now() + TOOL_REFRESH;
     loop {
-        match receive.recv_timeout(Duration::from_secs(1)) {
+        let now = Instant::now();
+        if now >= next_refresh {
+            next_refresh = now + TOOL_REFRESH;
+            if subscribed {
+                let next = json!(server.tools());
+                if tools != next {
+                    tools = next;
+                    write_message(
+                        &mut output,
+                        &json!({"jsonrpc":"2.0","method":"notifications/tools/list_changed"}),
+                    )?;
+                }
+            }
+        }
+        match receive.recv_timeout(next_refresh.saturating_duration_since(Instant::now())) {
             Ok(request) => {
                 let method = request.get("method").and_then(Value::as_str);
                 let id = request.get("id").cloned();
@@ -73,16 +89,6 @@ pub fn run(profile: PathBuf) -> io::Result<()> {
                     _ => Err((-32601, "Method not found")),
                 };
                 reply(&mut output, id, result)?;
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) if subscribed => {
-                let next = json!(server.tools());
-                if tools != next {
-                    tools = next;
-                    write_message(
-                        &mut output,
-                        &json!({"jsonrpc":"2.0","method":"notifications/tools/list_changed"}),
-                    )?;
-                }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
@@ -139,8 +145,18 @@ impl Server {
             ),
             tool(
                 "ndm_list_tasks",
-                "List recent tasks and their state, including completed output paths.",
-                json!({"limit":{"type":"integer","minimum":1,"maximum":128}}),
+                "List newest tasks with optional state filtering. Pass next_cursor back as cursor for the next page.",
+                json!({
+                    "limit":{"type":"integer","minimum":1,"maximum":128},
+                    "state":{"type":"string","enum":["prepared","queued","running","paused","completed","failed"]},
+                    "cursor":{"type":"integer","minimum":1}
+                }),
+                &[],
+            ),
+            tool(
+                "ndm_list_engines",
+                "Discover download engines available to AI, their options and tool names. Pass a source to check matches and the automatic selection without contacting the source.",
+                json!({"source":{"type":"string","description":SOURCE_SCHEMA}}),
                 &[],
             ),
             tool(
@@ -174,7 +190,13 @@ impl Server {
                 &[],
             ),
         ];
-        for plugin in self.registry.list().unwrap_or_default() {
+        for plugin in self
+            .registry
+            .list()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|p| p.ai_enabled)
+        {
             for action in &plugin.manifest.tools {
                 let mut fields = item_fields();
                 fields
@@ -191,7 +213,7 @@ impl Server {
                         .remove("download_threads");
                 }
                 tools.push(tool(
-                    &plugin_tool_name(&plugin, &action.id),
+                    &action.mcp_name(&plugin.manifest.id),
                     &action.description.en,
                     fields,
                     &["source"],
@@ -212,16 +234,18 @@ impl Server {
             .unwrap_or_else(|| json!({}));
         match name {
             "ndm_download" => self.download(parse_arguments(args)?),
+            "ndm_list_engines" => self.engines(parse_arguments(args)?),
             "ndm_list_tasks" => {
                 let args: List = parse_arguments(args)?;
-                let tasks = self.store.list().map_err(|_| "Could not read tasks.")?;
-                let tasks: Vec<_> = tasks
-                    .iter()
-                    .rev()
-                    .take(args.limit.unwrap_or(32).clamp(1, 128))
-                    .map(task_json)
-                    .collect();
-                Ok(json!({"tasks":tasks}))
+                if args.cursor.is_some_and(|cursor| cursor < 1) {
+                    return Err("Invalid task cursor.");
+                }
+                let (tasks, next_cursor) = self
+                    .store
+                    .recent_tasks(args.state, args.cursor, args.limit.unwrap_or(32))
+                    .map_err(|_| "Could not read tasks.")?;
+                let tasks: Vec<_> = tasks.iter().map(task_json).collect();
+                Ok(json!({"tasks":tasks,"next_cursor":next_cursor}))
             }
             "ndm_task_status" => {
                 let args: TaskArgument = parse_arguments(args)?;
@@ -276,9 +300,11 @@ impl Server {
                     .registry
                     .list()
                     .map_err(|_| "Could not read installed plugins.")?
+                    .into_iter()
+                    .filter(|plugin| plugin.ai_enabled)
                 {
                     for action in &plugin.manifest.tools {
-                        if plugin_tool_name(&plugin, &action.id) != name {
+                        if action.mcp_name(&plugin.manifest.id) != name {
                             continue;
                         }
                         item.plugin = Some(plugin.manifest.id.clone());
@@ -294,6 +320,63 @@ impl Server {
                 Err("Tool is not available. Refresh the tool list.")
             }
         }
+    }
+
+    fn engines(&self, query: EngineQuery) -> Result<Value, &'static str> {
+        let source = query
+            .source
+            .as_deref()
+            .map(parse_source)
+            .transpose()
+            .map_err(|_| "Invalid download source.")?;
+        let builtin = source.as_ref().map(built_in_source);
+        let candidates: Vec<(Option<bool>, InstalledPlugin)> = if let Some(source) = &source {
+            self.registry
+                .ai_candidates(source)
+                .map_err(|_| "Could not read installed plugins.")?
+                .into_iter()
+                .map(|(automatic, plugin)| (Some(automatic), plugin))
+                .collect()
+        } else {
+            self.registry
+                .list()
+                .map_err(|_| "Could not read installed plugins.")?
+                .into_iter()
+                .filter(|plugin| plugin.ai_enabled)
+                .map(|plugin| (None, plugin))
+                .collect()
+        };
+        let automatic = candidates
+            .first()
+            .filter(|(automatic, _)| *automatic == Some(true))
+            .map(|(_, plugin)| plugin.manifest.id.as_str())
+            .or_else(|| (builtin == Some(true)).then_some("builtin"));
+        let plugins: Vec<_> = candidates
+            .iter()
+            .map(|(automatic, plugin)| {
+                let manifest = &plugin.manifest;
+                let tools: Vec<_> = manifest
+                    .tools
+                    .iter()
+                    .map(|tool| tool.mcp_name(&manifest.id))
+                    .collect();
+                json!({
+                    "id":manifest.id,
+                    "name":manifest.name.en,
+                    "description":manifest.description.en,
+                    "version":manifest.version,
+                    "automatic_match":automatic,
+                    "tools":tools,
+                    "options":plugin.default_option_schema(),
+                    "limits":manifest.limits
+                })
+            })
+            .collect();
+        Ok(json!({
+            "automatic_engine":automatic,
+            "builtin":{"accepts_source":builtin,"protocols":["HTTP(S)","FTP(S)","SFTP","HLS","static DASH"]},
+            "plugins":plugins
+        }))
     }
 
     fn download(&self, batch: Batch) -> Result<Value, &'static str> {
@@ -319,7 +402,7 @@ impl Server {
             let source = parse_source(&item.source).map_err(|_| "Invalid download source.")?;
             let options = self
                 .registry
-                .task_options(&source, item.plugin.as_deref(), item.options)
+                .ai_task_options(&source, item.plugin.as_deref(), item.options)
                 .map_err(|_| "Plugin or plugin options do not match the source.")?;
             if options.is_none() && !built_in_source(&source) {
                 return Err("No installed download engine handles this source.");
@@ -432,6 +515,14 @@ struct Limits {
 #[serde(deny_unknown_fields)]
 struct List {
     limit: Option<usize>,
+    state: Option<TaskState>,
+    cursor: Option<i64>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EngineQuery {
+    source: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -441,23 +532,21 @@ struct TaskArgument {
 }
 
 fn task_json(task: &Task) -> Value {
-    let state = match task.state {
-        TaskState::Prepared => "prepared",
-        TaskState::Queued => "queued",
-        TaskState::Running => "running",
-        TaskState::Paused => "paused",
-        TaskState::Completed => "completed",
-        TaskState::Failed => "failed",
+    let engine = match &task.options {
+        TaskOptions::Plugin(plugin) => plugin.id.as_str(),
+        _ => "builtin",
     };
-    json!({"id":task.id,"state":state,"output":task.output_path,"progress":task.progress})
-}
-
-fn plugin_tool_name(plugin: &InstalledPlugin, action: &str) -> String {
-    format!(
-        "ndm_{}__{}",
-        plugin.manifest.id.replace('-', "_"),
-        action.replace('-', "_")
-    )
+    let name = task
+        .output_path
+        .as_deref()
+        .and_then(std::path::Path::file_name)
+        .map(|name| name.to_string_lossy())
+        .or_else(|| task.engine_title.as_deref().map(Into::into))
+        .or_else(|| task.request.suggested_filename.as_deref().map(Into::into));
+    json!({
+        "id":task.id,"name":name,"engine":engine,"state":task.state.as_str(),
+        "output":task.output_path,"progress":task.progress
+    })
 }
 
 fn object(fields: Value, required: &[&str]) -> Value {

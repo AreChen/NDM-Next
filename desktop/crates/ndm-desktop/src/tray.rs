@@ -1,5 +1,5 @@
 use crate::{instance::Command, preferences::Language};
-use gpui_kit::Window;
+use gpui_kit::{App, Window};
 #[cfg(windows)]
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use tokio::sync::mpsc::UnboundedSender;
@@ -17,6 +17,30 @@ pub struct Tray {
     _icon: TrayIcon,
     open: MenuItem,
     quit: MenuItem,
+}
+
+pub(crate) fn park(window: &mut Window, cx: &mut App) {
+    if let Some(view) = crate::view::Desktop::from_window(window, cx) {
+        view.update(cx, |this, cx| this.release_frontend(cx));
+        hide_after_draw(window, cx);
+    }
+}
+
+pub(crate) fn hide_after_draw(window: &Window, cx: &App) {
+    let handle = window.window_handle();
+    // Draw the empty foreground once, after returning the view's mutable lease,
+    // so the hidden window lets go of its previous element tree and hitboxes.
+    cx.spawn(async move |cx| {
+        let _ = handle.update(cx, |_, window, cx| {
+            if crate::view::Desktop::from_window(window, cx)
+                .is_some_and(|view| view.read(cx).is_parked())
+            {
+                window.draw(cx).clear(cx);
+                hide(window);
+            }
+        });
+    })
+    .detach();
 }
 
 impl Tray {
@@ -93,7 +117,7 @@ fn hwnd(window: &Window) -> Option<HWND> {
 }
 
 #[cfg(windows)]
-pub fn hide(window: &Window) {
+fn hide(window: &Window) {
     if let Some(handle) = hwnd(window) {
         // SAFETY: the handle belongs to this live GPUI window on its UI thread.
         unsafe {
@@ -115,7 +139,7 @@ pub fn show(window: &Window, _: &mut gpui_kit::App) {
 }
 
 #[cfg(target_os = "macos")]
-pub fn hide(window: &Window) {
+fn hide(window: &Window) {
     window.minimize_window();
 }
 #[cfg(target_os = "macos")]

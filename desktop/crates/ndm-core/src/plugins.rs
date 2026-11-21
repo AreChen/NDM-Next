@@ -1,6 +1,6 @@
 //! Installed engine packages and the official plugin catalog.
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     fs, io,
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -24,6 +24,7 @@ pub const CATALOG_URL: &str =
 const JSON_LIMIT: u64 = 2 * 1024 * 1024;
 const PACKAGE_LIMIT: u64 = 384 * 1024 * 1024;
 const EXTRACT_LIMIT: u64 = 1024 * 1024 * 1024;
+const SKILL_LIMIT: u64 = 32 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PackageProgress {
@@ -145,6 +146,7 @@ pub struct InstalledPlugin {
     pub manifest: PluginManifest,
     pub directory: PathBuf,
     pub option_defaults: Map<String, Value>,
+    pub ai_enabled: bool,
 }
 
 impl InstalledPlugin {
@@ -174,6 +176,14 @@ impl InstalledPlugin {
                 let bytes = bounded_file(&self.directory.join(script), 64 * 1024)?;
                 String::from_utf8(bytes).map_err(io::Error::other)
             })
+            .transpose()
+    }
+
+    pub fn read_skill(&self) -> io::Result<Option<String>> {
+        self.manifest
+            .skill
+            .as_deref()
+            .map(|path| read_skill(&self.directory, path))
             .transpose()
     }
 
@@ -210,7 +220,14 @@ impl InstalledPlugin {
     }
 
     pub fn option_schema(&self, tool: &DownloadTool) -> Value {
-        let mut schema = self.manifest.option_schema(tool);
+        self.apply_saved_options(self.manifest.option_schema(tool), &tool.defaults)
+    }
+
+    pub fn default_option_schema(&self) -> Value {
+        self.apply_saved_options(self.manifest.default_option_schema(), &Map::new())
+    }
+
+    fn apply_saved_options(&self, mut schema: Value, overrides: &Map<String, Value>) -> Value {
         if let Some(required) = schema["required"].as_array_mut() {
             required.retain(|key| {
                 key.as_str()
@@ -222,7 +239,7 @@ impl InstalledPlugin {
         for key in self
             .option_defaults
             .keys()
-            .filter(|key| !tool.defaults.contains_key(*key))
+            .filter(|key| !overrides.contains_key(*key))
         {
             if let Some(property) = schema["properties"][key].as_object_mut() {
                 property.remove("default");
@@ -239,6 +256,8 @@ pub struct InstalledPlugins {
     preferred: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     option_defaults: BTreeMap<String, StoredDefaults>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    ai_disabled: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -351,6 +370,7 @@ impl PluginRegistry {
             manifest,
             directory,
             option_defaults,
+            ai_enabled: !snapshot.ai_disabled.contains(id),
         })
     }
 
@@ -395,6 +415,33 @@ impl PluginRegistry {
             candidates.into_iter().map(|(_, plugin)| plugin).collect(),
             selected,
         ))
+    }
+
+    /// Candidates for an AI request, in the same order as desktop engine selection.
+    /// The boolean marks an automatic match.
+    pub fn ai_candidates(&self, source: &Url) -> io::Result<Vec<(bool, InstalledPlugin)>> {
+        Ok(self
+            .matching_plugins(source, true)?
+            .into_iter()
+            .filter(|(_, plugin)| plugin.ai_enabled)
+            .collect())
+    }
+
+    pub fn set_ai_access(&self, id: &str, enabled: bool) -> io::Result<()> {
+        let _lock = self.mutation_lock()?;
+        let mut snapshot = self.load()?;
+        if !snapshot.active.contains_key(id) {
+            return Err(invalid("plugin is no longer installed"));
+        }
+        let changed = if enabled {
+            snapshot.ai_disabled.remove(id)
+        } else {
+            snapshot.ai_disabled.insert(id.to_owned())
+        };
+        if changed {
+            self.save(&mut snapshot)?;
+        }
+        Ok(())
     }
 
     fn matching_plugins(
@@ -500,10 +547,30 @@ impl PluginRegistry {
         engine: Option<&str>,
         values: Map<String, Value>,
     ) -> io::Result<Option<crate::TaskOptions>> {
+        self.resolve_task_options(source, engine, values, false)
+    }
+
+    pub fn ai_task_options(
+        &self,
+        source: &Url,
+        engine: Option<&str>,
+        values: Map<String, Value>,
+    ) -> io::Result<Option<crate::TaskOptions>> {
+        self.resolve_task_options(source, engine, values, true)
+    }
+
+    fn resolve_task_options(
+        &self,
+        source: &Url,
+        engine: Option<&str>,
+        values: Map<String, Value>,
+        ai_only: bool,
+    ) -> io::Result<Option<crate::TaskOptions>> {
         let mut candidates = self
             .matching_plugins(source, engine.is_some())?
             .into_iter()
-            .map(|(_, plugin)| plugin);
+            .map(|(_, plugin)| plugin)
+            .filter(|plugin| !ai_only || plugin.ai_enabled);
         let selected = match engine {
             Some(engine) => Some(
                 candidates
@@ -630,6 +697,9 @@ impl PluginRegistry {
         if let Some(panel) = &manifest.panel {
             bounded_file(&staging.path().join(panel), 64 * 1024)?;
         }
+        if let Some(skill) = &manifest.skill {
+            read_skill(staging.path(), skill)?;
+        }
         make_executable(&engine)?;
         let _lock = self.mutation_lock()?;
         let mut snapshot = self.load()?;
@@ -648,6 +718,7 @@ impl PluginRegistry {
             return Err(error);
         }
         Ok(InstalledPlugin {
+            ai_enabled: !snapshot.ai_disabled.contains(&manifest.id),
             manifest,
             directory,
             option_defaults: option_defaults.unwrap_or_default(),
@@ -666,6 +737,7 @@ impl PluginRegistry {
         }
         snapshot.preferred.retain(|_, preferred| preferred != id);
         snapshot.option_defaults.remove(id);
+        snapshot.ai_disabled.remove(id);
         self.save(&mut snapshot)?;
         fs::remove_dir_all(self.root.join(id))
     }
@@ -740,6 +812,22 @@ fn bounded_file(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
         return Err(invalid("plugin file exceeds its limit"));
     }
     Ok(bytes)
+}
+
+fn read_skill(directory: &Path, relative: &str) -> io::Result<String> {
+    if !valid_package_path(relative) || !relative.ends_with(".md") {
+        return Err(invalid("invalid plugin Skill path"));
+    }
+    let mut path = directory.to_owned();
+    for part in relative.split('/') {
+        crate::cache::validate_directory(&path)?;
+        path.push(part);
+    }
+    let text = String::from_utf8(bounded_file(&path, SKILL_LIMIT)?).map_err(io::Error::other)?;
+    if text.trim().is_empty() {
+        return Err(invalid("empty plugin Skill"));
+    }
+    Ok(text)
 }
 
 fn unpack(

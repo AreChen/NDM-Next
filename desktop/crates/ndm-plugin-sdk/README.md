@@ -66,6 +66,12 @@ manifest are both checked before installation.
 - Set `capabilities.browser_page` to offer a matching HTTP or HTTPS
   webpage in the companion extension. The user selects the engine to
   submit the page URL. Page matching uses both input lists.
+- Set `skill` to package a self-contained UTF-8 Markdown guide at a portable
+  relative `.md` path, up to 32 KiB. Explain when to choose the engine, give tool
+  and option examples, and describe source limitations. NDM Next 0.6.0 and
+  later link this guide from the installed `ndm-next` Skill when the engine is
+  available to AI. Hosts can generate a basic guide from the manifest when
+  this field is omitted.
 - `limits.active_tasks` sets the engine's maximum simultaneous tasks.
   `limits.download_threads` is an optional per-task cap. The passed hint
   already includes the user's chosen setting and the declared cap. The

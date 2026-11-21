@@ -182,7 +182,12 @@ fn main() {
     #[cfg(target_os = "macos")]
     application.on_reopen(|cx| {
         for handle in cx.windows() {
-            let _ = handle.update(cx, |_, window, cx| chrome::activate_window(window, cx));
+            let _ = handle.update(cx, |_, window, cx| {
+                if let Some(view) = Desktop::from_window(window, cx) {
+                    view.update(cx, |this, cx| this.restore_frontend(cx));
+                }
+                chrome::activate_window(window, cx);
+            });
         }
     });
     application.run(move |cx| {
@@ -224,7 +229,7 @@ fn main() {
             |window, cx| {
                 chrome::configure_window_chrome(window);
                 cx.new(|cx| {
-                    Desktop::new(
+                    let desktop = Desktop::new(
                         view::DesktopServices {
                             store,
                             scheduler,
@@ -239,7 +244,9 @@ fn main() {
                         },
                         window,
                         cx,
-                    )
+                    );
+                    desktop.refresh_managed_skill(cx);
+                    desktop
                 })
             },
         )

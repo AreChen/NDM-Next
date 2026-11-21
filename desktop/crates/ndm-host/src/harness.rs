@@ -1,16 +1,15 @@
 //! Optional registration adapters for local AI clients.
 use std::{
     env, fs, io,
-    io::Write,
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
 
 use serde::Deserialize;
 
+mod skill;
+
 const SERVER: &str = "ndm-next";
-const SKILL: &str = include_str!("../skills/SKILL.md");
-const SKILL_OWNER: &str = "<!-- Managed by the NDM Next desktop integration. -->";
 
 pub struct Target {
     pub executable: PathBuf,
@@ -159,25 +158,16 @@ fn unregister(target: &Target) -> io::Result<()> {
     }
 }
 
-fn skill_is_managed(path: &Path) -> io::Result<bool> {
-    match fs::symlink_metadata(path) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error),
-        Ok(metadata) if metadata.is_file() && metadata.len() <= 64 * 1024 => {
-            if fs::read_to_string(path)?.contains(SKILL_OWNER) {
-                Ok(true)
-            } else {
-                Err(io::Error::new(
-                    io::ErrorKind::AlreadyExists,
-                    "a different ndm-next Skill already exists",
-                ))
-            }
-        }
-        Ok(_) => Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "the ndm-next Skill path is occupied",
-        )),
-    }
+fn integration_lock(target: &Target) -> io::Result<fs::File> {
+    fs::create_dir_all(&target.profile)?;
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(target.profile.join("codex-integration.lock"))?;
+    lock.lock()?;
+    Ok(lock)
 }
 
 fn managed_server(target: &Target) -> io::Result<Option<Server>> {
@@ -201,7 +191,7 @@ impl Harness for CodexCli {
             registered: server.is_some_and(|server| {
                 server.enabled && server.transport.command.as_deref() == Some(&target.executable)
             }),
-            skill_installed: skill_is_managed(&target.skill_path())?,
+            skill_installed: skill::is_installed(target)?,
         })
     }
 
@@ -215,28 +205,16 @@ impl Harness for CodexCli {
                 "NDM Next host is unavailable",
             ));
         }
+        let _lock = integration_lock(target)?;
         let current = managed_server(target)?;
-        let file = target.skill_path();
-        let directory = file
-            .parent()
-            .ok_or_else(|| io::Error::other("invalid Skill path"))?;
-        let existed = skill_is_managed(&file)?;
-        fs::create_dir_all(directory)?;
-        let mut pending = tempfile::NamedTempFile::new_in(directory)?;
-        pending.write_all(SKILL.as_bytes())?;
-        pending.as_file().sync_all()?;
+        skill::is_installed(target)?;
         let changed = current.as_ref().is_none_or(|server| {
             !server.enabled || server.transport.command.as_deref() != Some(&target.executable)
         });
         if changed {
             register(&target.executable, target)?;
         }
-        let result = if existed {
-            pending.persist(&file)
-        } else {
-            pending.persist_noclobber(&file)
-        };
-        if let Err(error) = result {
+        if let Err(error) = skill::write(target) {
             if changed {
                 if let Some(previous) = current.and_then(|server| server.transport.command) {
                     let _ = register(&previous, target);
@@ -244,20 +222,35 @@ impl Harness for CodexCli {
                     let _ = unregister(target);
                 }
             }
-            return Err(io::Error::other(error));
+            return Err(error);
         }
         Ok(())
     }
 
     fn remove(&self, target: &Target) -> io::Result<()> {
+        let _lock = integration_lock(target)?;
         let server = managed_server(target)?;
-        let file = target.skill_path();
-        let owned = skill_is_managed(&file)?;
+        let owned = skill::is_installed(target)?;
         if server.is_some() {
             unregister(target)?;
         }
         if owned {
-            fs::remove_file(file)?;
+            skill::remove(target)?;
+        }
+        Ok(())
+    }
+}
+
+impl CodexCli {
+    /// Refresh documentation for an existing app-managed installation.
+    pub fn sync_skill(&self, target: &Target) -> io::Result<()> {
+        if !skill::is_installed(target)? {
+            return Ok(());
+        }
+        let _lock = integration_lock(target)?;
+        // Read committed settings after locking so queued refreshes converge.
+        if skill::is_installed(target)? {
+            skill::write(target)?;
         }
         Ok(())
     }

@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use ndm_core::{Store, plugins::PluginRegistry};
+use ndm_core::{NewTask, Store, TaskId, plugins::PluginRegistry};
 use ndm_host::harness::{CodexCli, Harness, Target};
 use ndm_plugin_sdk::{read_message, write_message};
 use serde_json::{Value, json};
@@ -75,6 +75,10 @@ impl Drop for Server {
 }
 
 fn fixture(profile: &Path) -> io::Result<PathBuf> {
+    plugin_package(profile, "0.1.0", None)
+}
+
+fn plugin_package(profile: &Path, version: &str, guide: Option<&str>) -> io::Result<PathBuf> {
     let path = profile.join("fixture.zip");
     let mut zip = zip::ZipWriter::new(fs::File::create(&path)?);
     let options = zip::write::SimpleFileOptions::default();
@@ -83,14 +87,19 @@ fn fixture(profile: &Path) -> io::Result<PathBuf> {
     serde_json::to_writer(
         &mut zip,
         &json!({
-            "schema":1,"id":"fixture","version":"0.1.0","name":{"en":"Fixture"},
+            "schema":1,"id":"fixture","version":version,"name":{"en":"Fixture"},
             "description":{"en":"Test engine"},"engine":engine,"engine_protocol":1,
             "inputs":[{"schemes":["fixture"]}],"limits":{"active_tasks":1},
+            "skill": guide.map(|_| "docs/guide.md"),
             "tools":[{"id":"download","name":{"en":"Fixture download"},"description":{"en":"Fixture"} }]
         }),
     )?;
     zip.start_file(&engine, options.unix_permissions(0o755))?;
     zip.write_all(b"never executed")?;
+    if let Some(guide) = guide {
+        zip.start_file("docs/guide.md", options)?;
+        zip.write_all(guide.as_bytes())?;
+    }
     zip.finish()?;
     Ok(path)
 }
@@ -131,6 +140,38 @@ fn tools_follow_opt_in_and_current_plugin_registry() {
             .iter()
             .any(|tool| tool["name"] == "ndm_fixture__download")
     );
+    let discovery =
+        || json!({"name":"ndm_list_engines","arguments":{"source":"fixture://example/download"}});
+    let engines = server.call("tools/call", discovery());
+    assert_eq!(engines["structuredContent"]["automatic_engine"], "fixture");
+    assert_eq!(
+        engines["structuredContent"]["plugins"][0]["tools"],
+        json!(["ndm_fixture__download"])
+    );
+    PluginRegistry::new(profile.path())
+        .set_ai_access("fixture", false)
+        .unwrap();
+    assert_eq!(server.next()["method"], "notifications/tools/list_changed");
+    assert_eq!(
+        server.call("tools/call", discovery())["structuredContent"]["plugins"],
+        json!([])
+    );
+    for (name, arguments) in [
+        ("ndm_fixture__download", json!({"source":"fixture://test"})),
+        (
+            "ndm_download",
+            json!({"items":[{"source":"fixture://test"}]}),
+        ),
+        (
+            "ndm_download",
+            json!({"items":[{"source":"fixture://test","plugin":"fixture"}]}),
+        ),
+    ] {
+        assert_eq!(
+            server.call("tools/call", json!({"name":name,"arguments":arguments}))["isError"],
+            true
+        );
+    }
     let result = server.call(
         "tools/call",
         json!({
@@ -147,6 +188,111 @@ fn tools_follow_opt_in_and_current_plugin_registry() {
     assert_eq!(
         server.call("tools/call", json!({"name":"ndm_get_download_limits"}))["isError"],
         true
+    );
+}
+
+#[test]
+fn task_pages_filter_state_and_continue_without_repeating_ids() {
+    let profile = tempfile::tempdir().unwrap();
+    let store = Store::open(&profile.path().join("tasks.db")).unwrap();
+    store.set_ai_enabled(true).unwrap();
+    let create = |name: &str| {
+        let id = TaskId::new_v4();
+        store
+            .prepare(
+                id,
+                &NewTask {
+                    url: format!("https://example.test/{name}"),
+                    destination: profile.path().into(),
+                    suggested_filename: Some(name.into()),
+                    source_url: None,
+                    expected_size: None,
+                    headers: Default::default(),
+                },
+            )
+            .unwrap();
+        id
+    };
+    let first = create("first.zip");
+    store.commit(first).unwrap();
+    let second = create("second.zip");
+    store.commit(second).unwrap();
+    create("prepared.zip");
+    let mut server = Server::start(profile.path());
+    server.call("initialize", json!({"protocolVersion":"2025-11-25"}));
+    let page = server.call(
+        "tools/call",
+        json!({
+            "name":"ndm_list_tasks","arguments":{"state":"queued","limit":1}
+        }),
+    );
+    let page = &page["structuredContent"];
+    assert_eq!(page["tasks"][0]["id"], json!(second));
+    assert_eq!(page["tasks"][0]["name"], "second.zip");
+    let next = server.call("tools/call", json!({
+        "name":"ndm_list_tasks","arguments":{"state":"queued","limit":1,"cursor":page["next_cursor"]}
+    }));
+    assert_eq!(next["structuredContent"]["tasks"][0]["id"], json!(first));
+    assert!(next["structuredContent"]["next_cursor"].is_null());
+}
+
+#[test]
+fn managed_skill_refreshes_legacy_installs_and_plugin_guides() {
+    let root = tempfile::tempdir().unwrap();
+    let target = Target {
+        home: root.path().join("home"),
+        profile: root.path().join("profile"),
+        executable: env!("CARGO_BIN_EXE_ndm-host").into(),
+    };
+    fs::create_dir(&target.profile).unwrap();
+    let store = Store::open(&target.profile.join("tasks.db")).unwrap();
+    store.set_ai_enabled(true).unwrap();
+    let root = target.home.join(".agents/skills/ndm-next");
+    let registry = PluginRegistry::new(&target.profile);
+    CodexCli.sync_skill(&target).unwrap();
+    assert!(!root.exists());
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("SKILL.md"),
+        "<!-- Managed by the NDM Next desktop integration. -->\nOld guide\n",
+    )
+    .unwrap();
+
+    registry.import(&fixture(&target.profile).unwrap()).unwrap();
+    CodexCli.sync_skill(&target).unwrap();
+    let guides = root.join("references/plugins");
+    let guide = guides.join("plugin-fixture.md");
+    assert!(
+        fs::read_to_string(root.join("SKILL.md"))
+            .unwrap()
+            .contains("ndm_list_engines")
+    );
+    assert!(
+        fs::read_to_string(&guide)
+            .unwrap()
+            .contains("ndm_fixture__download")
+    );
+
+    let update = plugin_package(&target.profile, "0.2.0", Some("Engine usage example")).unwrap();
+    registry.import(&update).unwrap();
+    CodexCli.sync_skill(&target).unwrap();
+    let text = fs::read_to_string(&guide).unwrap();
+    assert!(text.contains("0.2.0") && text.contains("Engine usage example"));
+    fs::write(guides.join("plugin-local.md"), "User guide").unwrap();
+    registry.set_ai_access("fixture", false).unwrap();
+    CodexCli.sync_skill(&target).unwrap();
+    assert!(!guide.exists());
+    assert!(guides.join("plugin-local.md").exists());
+    registry.set_ai_access("fixture", true).unwrap();
+    CodexCli.sync_skill(&target).unwrap();
+    assert!(guide.exists());
+    store.set_ai_enabled(false).unwrap();
+    CodexCli.sync_skill(&target).unwrap();
+    assert!(!guide.exists());
+    assert!(
+        fs::read_to_string(guides.join("index.md"))
+            .unwrap()
+            .contains("AI access is off")
     );
 }
 

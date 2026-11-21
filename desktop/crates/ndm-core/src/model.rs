@@ -107,7 +107,8 @@ impl fmt::Debug for NewTask {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TaskState {
     Prepared,
     Queued,
@@ -118,6 +119,17 @@ pub enum TaskState {
 }
 
 impl TaskState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Prepared => "prepared",
+            Self::Queued => "queued",
+            Self::Running => "running",
+            Self::Paused => "paused",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+        }
+    }
+
     pub(crate) fn from_database(value: &str) -> crate::Result<Self> {
         match value {
             "prepared" => Ok(Self::Prepared),

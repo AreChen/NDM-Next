@@ -454,6 +454,53 @@ impl Store {
         self.list_tasks(false)
     }
 
+    /// Read a newest-first page without decoding the rest of the task history.
+    pub fn recent_tasks(
+        &self,
+        state: Option<TaskState>,
+        cursor: Option<i64>,
+        limit: usize,
+    ) -> Result<(Vec<Task>, Option<i64>)> {
+        let limit = limit.clamp(1, 128);
+        let conn = self.connection()?;
+        let mut statement = conn.prepare(
+            "SELECT rowid AS page_cursor, id, request, state, output, error, size_verified,
+             options, progress, policy, engine_title,
+             (SELECT root FROM cache_workspaces w WHERE w.id = tasks.id) AS cache_directory
+             FROM tasks WHERE (?1 IS NULL OR state = ?1) AND (?2 IS NULL OR rowid < ?2)
+             ORDER BY rowid DESC LIMIT ?3",
+        )?;
+        let mut rows = statement.query(params![
+            state.map(TaskState::as_str),
+            cursor,
+            limit as i64 + 1
+        ])?;
+        let mut tasks = Vec::with_capacity(limit);
+        let mut last = None;
+        while let Some(row) = rows.next()? {
+            if tasks.len() == limit {
+                return Ok((tasks, last));
+            }
+            tasks.push(decode_task(row)?);
+            last = Some(row.get("page_cursor")?);
+        }
+        Ok((tasks, None))
+    }
+
+    /// IDs visible after handoff, without loading request data or building a UI index.
+    pub fn download_ids(&self) -> Result<Vec<TaskId>> {
+        let conn = self.connection()?;
+        let mut statement =
+            conn.prepare("SELECT id FROM tasks WHERE state != 'prepared' ORDER BY rowid")?;
+        let mut rows = statement.query([])?;
+        let mut ids = Vec::new();
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            ids.push(TaskId::parse_str(&id).map_err(|_| Error::InvalidStoredState)?);
+        }
+        Ok(ids)
+    }
+
     pub(crate) fn list_queued(&self) -> Result<Vec<Task>> {
         self.list_tasks(true)
     }

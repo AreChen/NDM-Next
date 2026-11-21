@@ -131,6 +131,7 @@ pub(crate) struct Desktop {
     #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     startup_enabled: bool,
     section: Section,
+    in_tray: bool,
     tasks: Vec<Task>,
     seen_tasks: HashSet<TaskId>,
     progress_windows: HashMap<TaskId, (AnyWindowHandle, WeakEntity<ProgressWindow>)>,
@@ -290,12 +291,21 @@ impl Desktop {
         let tray = {
             match crate::tray::Tray::create(ui_sender, preferences.language) {
                 Ok(tray) => {
-                    window.on_window_should_close(cx, |window, _| {
-                        crate::tray::hide(window);
+                    window.on_window_should_close(cx, |window, cx| {
+                        crate::tray::park(window, cx);
                         false
                     });
+                    cx.observe_window_activation(window, |this, window, cx| {
+                        if window.is_window_active() {
+                            this.restore_frontend(cx);
+                        }
+                    })
+                    .detach();
                     if std::env::args_os().any(|argument| argument == "--background") {
-                        cx.defer_in(window, |_, window, _| crate::tray::hide(window));
+                        cx.defer_in(window, |this, window, cx| {
+                            this.release_frontend(cx);
+                            crate::tray::hide_after_draw(window, cx);
+                        });
                     }
                     Some(tray)
                 }
@@ -321,8 +331,10 @@ impl Desktop {
                     match command {
                         crate::instance::Command::Show => {
                             #[cfg(any(windows, target_os = "macos"))]
-                            let _ =
-                                view.update_in(cx, |_, window, cx| crate::tray::show(window, cx));
+                            let _ = view.update_in(cx, |this, window, cx| {
+                                this.restore_frontend(cx);
+                                crate::tray::show(window, cx);
+                            });
                             #[cfg(target_os = "linux")]
                             let _ = view.update_in(cx, |_, window, cx| {
                                 crate::chrome::activate_window(window, cx);
@@ -406,10 +418,12 @@ impl Desktop {
                                     this.set_notice(this.text("SFTP 服务器密钥已改变，请谨慎核对。", "The SFTP server key has changed; verify it carefully.").into(), cx);
                                 },
                                 SchedulerEvent::Finished { id, progress } => {
-                                    this.retained_progress.insert(id, progress);
-                                    this.speed.remove(&id);
-                                    this.sample.remove(&id);
-                                    this.refilter();
+                                    if !this.in_tray {
+                                        this.retained_progress.insert(id, progress);
+                                        this.speed.remove(&id);
+                                        this.sample.remove(&id);
+                                        this.refilter();
+                                    }
                                     this.try_install_update(cx);
                                 }
                             }
@@ -494,6 +508,7 @@ impl Desktop {
             #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             startup_enabled,
             section: Section::All,
+            in_tray: false,
             tasks,
             seen_tasks,
             progress_windows: HashMap::new(),
@@ -578,7 +593,51 @@ impl Desktop {
             cx.notify();
         }
     }
+    #[cfg(any(windows, target_os = "macos", test))]
+    pub(crate) fn from_window(window: &Window, cx: &App) -> Option<Entity<Self>> {
+        window
+            .root::<gpui_kit::base::Root>()
+            .flatten()?
+            .read(cx)
+            .view()
+            .clone()
+            .downcast()
+            .ok()
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    pub(crate) fn is_parked(&self) -> bool {
+        self.in_tray
+    }
+
+    #[cfg(any(windows, target_os = "macos", test))]
+    pub(crate) fn release_frontend(&mut self, cx: &mut Context<Self>) {
+        if self.in_tray {
+            return;
+        }
+        self.in_tray = true;
+        self.tasks = Vec::new();
+        self.task_index = TaskIndex::default();
+        self.matching_tasks = Vec::new();
+        self.retained_progress = HashMap::new();
+        self.sample = HashMap::new();
+        self.speed = HashMap::new();
+        cx.notify();
+    }
+
+    #[cfg(any(windows, target_os = "macos", test))]
+    pub(crate) fn restore_frontend(&mut self, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.in_tray) {
+            self.reload();
+            self.track_progress(cx);
+            cx.notify();
+        }
+    }
+
     fn reload(&mut self) {
+        if self.in_tray {
+            return;
+        }
         if let Ok(tasks) = self.store.list() {
             self.tasks = tasks;
             self.task_index.update(&self.tasks);
@@ -644,16 +703,20 @@ impl Desktop {
         self.selection_anchor = self.selection_anchor.filter(|id| visible.contains(id));
     }
     fn discover_new_tasks(&mut self, cx: &mut Context<Self>) {
-        self.reload();
-        let new_tasks: Vec<_> = self
-            .tasks
-            .iter()
-            .filter(|task| task.state != TaskState::Prepared && !self.seen_tasks.contains(&task.id))
-            .map(|task| task.id)
-            .collect();
-        for id in new_tasks {
-            self.seen_tasks.insert(id);
-            self.show_progress(id, cx);
+        let ids = if self.in_tray {
+            self.store.download_ids().unwrap_or_default()
+        } else {
+            self.reload();
+            self.tasks
+                .iter()
+                .filter(|task| task.state != TaskState::Prepared)
+                .map(|task| task.id)
+                .collect()
+        };
+        for id in ids {
+            if self.seen_tasks.insert(id) {
+                self.show_progress(id, cx);
+            }
         }
         cx.notify();
     }
@@ -711,7 +774,7 @@ impl Desktop {
         }
     }
     fn track_progress(&mut self, cx: &mut Context<Self>) {
-        if self.tracking {
+        if self.tracking || self.in_tray {
             return;
         }
         self.tracking = true;
@@ -724,6 +787,10 @@ impl Desktop {
                 refresh_tick = (refresh_tick + 1) % 10;
                 let keep_tracking = view
                     .update(cx, |this, cx| {
+                        if this.in_tray {
+                            this.tracking = false;
+                            return false;
+                        }
                         if refresh_tick == 0 {
                             this.reload();
                         }
@@ -1617,6 +1684,9 @@ impl Desktop {
 
 impl Render for Desktop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.in_tray {
+            return div().id("parked-main-window").size_full();
+        }
         if let Some(transition) = &mut self.theme_transition
             && !transition.frame(window, cx)
         {
@@ -2189,11 +2259,11 @@ impl Render for Desktop {
                 sidebar.target().width_px().unwrap_or(180.),
                 self.preferences.language == Language::Chinese,
                 {
-                    #[cfg(target_os = "macos")]
+                    #[cfg(any(windows, target_os = "macos"))]
                     {
                         self.tray.is_some()
                     }
-                    #[cfg(not(target_os = "macos"))]
+                    #[cfg(not(any(windows, target_os = "macos")))]
                     {
                         false
                     }
@@ -2263,5 +2333,100 @@ impl Render for Desktop {
                     )
                     .child(content_frame.apply(content)),
             )
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tray_tests {
+    use super::{Desktop, DesktopServices, NewTask, Preferences, Scheduler, Store, TaskId};
+    use gpui_kit::{TestAppContext, WindowOptions, prelude::*};
+    use std::{collections::HashSet, sync::Arc};
+
+    #[gpui_kit::test]
+    fn parked_view_releases_task_history_and_rebuilds_from_the_live_store(cx: &mut TestAppContext) {
+        let profile = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::open(&profile.path().join("tasks.db")).unwrap());
+        let save_paused = |name: &str| {
+            let id = TaskId::new_v4();
+            store
+                .prepare(
+                    id,
+                    &NewTask {
+                        url: format!("https://example.test/{name}"),
+                        destination: profile.path().to_owned(),
+                        suggested_filename: None,
+                        source_url: None,
+                        expected_size: None,
+                        headers: Default::default(),
+                    },
+                )
+                .unwrap();
+            store.commit(id).unwrap();
+            store.pause(id).unwrap();
+            id
+        };
+        let original = save_paused("first.zip");
+        let preferences = Preferences {
+            auto_resume: false,
+            download_dir: profile.path().to_owned(),
+            cache_dir: profile.path().join("cache"),
+            ..Preferences::default()
+        };
+        let runtime = Arc::new(
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap(),
+        );
+        let scheduler = {
+            let _guard = runtime.enter();
+            Scheduler::start(store.clone(), preferences.scheduler_options()).unwrap()
+        };
+        let (sender, commands) = tokio::sync::mpsc::unbounded_channel();
+        let services = DesktopServices {
+            store: store.clone(),
+            scheduler,
+            runtime,
+            preferences,
+            preferences_path: profile.path().join("preferences.json"),
+            prepared_at_launch: HashSet::new(),
+            commands,
+        };
+        cx.update(gpui_kit::init);
+        let (handle, view) = cx.update(|cx| {
+            gpui_kit::open_window(WindowOptions::default(), cx, move |window, cx| {
+                cx.new(|cx| Desktop::new(services, window, cx))
+            })
+            .unwrap()
+        });
+        cx.update(|cx| {
+            handle
+                .update(cx, |_, window, cx| {
+                    let desktop = Desktop::from_window(window, cx).expect("expected a Kit root");
+                    assert_eq!(desktop.entity_id(), view.entity_id());
+                    desktop.update(cx, |this, cx| {
+                        assert_eq!(this.tasks.len(), 1);
+                        this.release_frontend(cx);
+                        assert!(this.seen_tasks.contains(&original));
+                        assert_eq!(this.tasks.capacity(), 0);
+                        assert_eq!(this.matching_tasks.capacity(), 0);
+                    });
+                    window.draw(cx).clear(cx);
+                })
+                .unwrap();
+        });
+        let added = save_paused("second.zip");
+        cx.update(|cx| {
+            view.update(cx, |this, cx| {
+                this.discover_new_tasks(cx);
+                assert!(this.seen_tasks.contains(&added));
+                assert!(this.progress_windows.contains_key(&added));
+                assert_eq!(this.tasks.capacity(), 0);
+                this.restore_frontend(cx);
+                assert_eq!(this.tasks.len(), 2);
+                assert_eq!(this.matching_tasks.len(), 2);
+            });
+        });
+        drop(sender);
     }
 }

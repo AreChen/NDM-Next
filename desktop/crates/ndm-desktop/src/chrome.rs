@@ -130,7 +130,14 @@ pub(crate) fn main_toolbar(
 ) -> TitleBar {
     let tone = tone.into();
     let bar = TitleBar::new()
-        .on_close_window(|_, _, cx| cx.quit())
+        .on_close_window(move |_, _window, cx| {
+            #[cfg(any(windows, target_os = "macos"))]
+            if minimize_on_close {
+                crate::tray::park(_window, cx);
+                return;
+            }
+            cx.quit();
+        })
         .pl_3()
         .h(px(TOOLBAR_HEIGHT))
         .bg(rgb(tone.rgb(0x111625, 0xf8f9fd)))
@@ -389,9 +396,9 @@ impl RenderOnce for MacWindowControls {
                         text("关闭窗口", "Close window"),
                     )
                     .custom(danger)
-                    .on_click(move |_, window, _| {
+                    .on_click(move |_, window, cx| {
                         if self.minimize_on_close {
-                            crate::tray::hide(window);
+                            crate::tray::park(window, cx);
                         } else {
                             window.remove_window();
                         }

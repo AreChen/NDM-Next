@@ -49,6 +49,9 @@ pub struct PluginManifest {
     pub options: Vec<OptionField>,
     #[serde(default)]
     pub panel: Option<String>,
+    /// Optional UTF-8 Markdown guide for AI clients, relative to the package root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill: Option<String>,
     #[serde(default)]
     pub tools: Vec<DownloadTool>,
 }
@@ -89,6 +92,16 @@ pub struct DownloadTool {
     pub description: Localized,
     #[serde(default)]
     pub defaults: Map<String, Value>,
+}
+
+impl DownloadTool {
+    pub fn mcp_name(&self, plugin_id: &str) -> String {
+        format!(
+            "ndm_{}__{}",
+            plugin_id.replace('-', "_"),
+            self.id.replace('-', "_")
+        )
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -180,6 +193,10 @@ impl PluginManifest {
                 .panel
                 .as_ref()
                 .is_some_and(|p| !valid_package_path(p) || !p.ends_with(".js"))
+            || self
+                .skill
+                .as_ref()
+                .is_some_and(|p| !valid_package_path(p) || !p.ends_with(".md"))
             || (self.inputs.is_empty() && self.manual_inputs.is_empty())
             || self.inputs.len() > 32
             || self.inputs.iter().any(|input| !input.valid())
@@ -314,6 +331,14 @@ impl PluginManifest {
     }
 
     pub fn option_schema(&self, tool: &DownloadTool) -> Value {
+        self.option_schema_with_defaults(&tool.defaults)
+    }
+
+    pub fn default_option_schema(&self) -> Value {
+        self.option_schema_with_defaults(&Map::new())
+    }
+
+    fn option_schema_with_defaults(&self, defaults: &Map<String, Value>) -> Value {
         let mut properties = Map::new();
         let mut required = Vec::new();
         for field in &self.options {
@@ -322,7 +347,7 @@ impl PluginManifest {
                 Some(help) => format!("{}. {}", field.label.en, help.en),
                 None => field.label.en.clone(),
             });
-            if let Some(default) = tool.defaults.get(&field.key).or(field.default.as_ref()) {
+            if let Some(default) = defaults.get(&field.key).or(field.default.as_ref()) {
                 schema["default"] = default.clone();
             } else if field.required {
                 required.push(&field.key);

@@ -1,25 +1,52 @@
 ---
 name: ndm-next
-description: Queue downloads in the local NDM Next app, check task status, and control batch or global download concurrency via the ndm-next MCP server.
+description: Use the local NDM Next MCP server to download files, media, playlists, and torrents, choose installed engines, track and control tasks, or manage download concurrency.
 ---
 
 <!-- Managed by the NDM Next desktop integration. -->
 
 # NDM Next downloads
 
-Use the local `ndm-next` MCP server when the user wants to download files with
-NDM Next. The app's AI integration switch must be enabled.
+## Choose an engine
 
-- Call `ndm_download` with the requested sources. Leave `destination` out to
-  use the app's default folder. For an explicit folder, pass its absolute path.
-- Installed plugins can expose their own download tools. Discover them through
-  MCP and use the advertised options. The generic download tool accepts a
-  `plugin` ID when the user selects an engine. The app resolves matching
-  plugins automatically when the ID is omitted.
-- Use `batch_active_tasks` to limit simultaneous downloads in one request.
-  Use `download_threads` for the transfer threads of those tasks. Engine limits
-  and the app-wide active-task limit still apply.
-- Use `ndm_set_download_limits` only for an explicit application-wide settings
-  change. A one-time batch request belongs in `ndm_download`.
-- Report the returned task IDs. Use `ndm_task_status` to confirm completion
-  and the actual output path. Use the pause and resume tools if requested.
+- Use the `ndm-next` MCP server. If its tools are unavailable, check that Codex
+  CLI integration is installed and **Settings → AI integration → AI access**
+  is enabled in NDM Next. After installing or updating the server, restart an
+  existing Codex session if its tools still show the previous version.
+- Direct HTTP(S), FTP(S), SFTP, HLS and static DASH downloads use the built-in
+  engine when there is no automatic plugin match. Pass URLs as supplied or use
+  absolute paths for local inputs such as torrent files.
+- For a webpage, magnet link, torrent, or a request for engine-specific options,
+  call `ndm_list_engines` with the source. Its `automatic_engine` reports the
+  default route. An engine with `automatic_match: false` requires explicit
+  selection. See the [installed plugin guides](references/plugins/index.md) and
+  read the matching guide for examples and source-specific options. The live MCP
+  tool schemas describe what the current installation accepts.
+- For one download, use the plugin's tool when it fits the request. For a batch
+  or a plugin without a dedicated tool, use `ndm_download`. Specify `plugin`
+  with the exact engine ID when the user chooses one. Omit `plugin` to use
+  automatic routing and omit unspecified options to use the app's defaults.
+
+## Download and report
+
+This `ndm_download` request queues a direct file.
+
+```json
+{"items":[{"source":"https://example.com/archive.zip"}]}
+```
+
+- Omit `destination` to use the app's default. An explicit destination must be
+  an absolute directory. An item-specific destination overrides the batch folder.
+- `batch_active_tasks` limits simultaneous downloads within the request.
+  `download_threads` sets the thread count for the batch or an individual item.
+  The app-wide limit and engine limits still apply. Use
+  `ndm_get_download_limits` to inspect global defaults and
+  `ndm_set_download_limits` for an explicit application-wide change.
+- Report the returned task IDs and say the tasks were queued. To confirm
+  completion, use `ndm_task_status` with a returned ID. A completed task's
+  `output` is the path to report. Summarize any failure with its task ID.
+- Use `ndm_list_tasks` when you need to find a task or look at recent activity.
+  Filter by `state` when appropriate. Pass `next_cursor` back as `cursor` with
+  the same filter to read the next page. A null cursor means the list ended.
+- Use `ndm_pause_task` and `ndm_resume_task` for requested task actions and
+  check the resulting state with `ndm_task_status` when confirmation matters.

@@ -55,6 +55,7 @@ enum PackageAction {
     Install(Box<CatalogPlugin>),
     Import(PathBuf),
     Remove(String),
+    AiAccess { id: String, enabled: bool },
 }
 
 #[derive(Clone, Copy)]
@@ -157,7 +158,7 @@ impl Desktop {
                 updating: false,
                 progress,
             }),
-            PackageAction::Remove(_) => None,
+            PackageAction::Remove(_) | PackageAction::AiAccess { .. } => None,
         };
         if market.package.is_some() {
             cx.spawn(async move |view, cx| {
@@ -191,32 +192,48 @@ impl Desktop {
         let registry = self.registry();
         let scheduler = self.scheduler.clone();
         let runtime = self.runtime.clone();
+        let profile = self.store.profile_directory().to_owned();
         cx.spawn(async move |view, cx| {
             let result = runtime.spawn(async move {
-                let report = move |progress| { reports.send_replace(progress); };
-                match action {
-                    PackageAction::Install(plugin) => {
-                        registry.download_and_install_with_progress(&plugin, report).await?;
+                let change = async {
+                    let report = move |progress| { reports.send_replace(progress); };
+                    match action {
+                        PackageAction::Install(plugin) => {
+                            registry.download_and_install_with_progress(&plugin, report).await?;
+                        }
+                        PackageAction::Import(path) => {
+                            let registry = registry.clone();
+                            tokio::task::spawn_blocking(move || registry.import_with_progress(&path, report)).await.map_err(std::io::Error::other)??;
+                        }
+                        PackageAction::Remove(id) => scheduler.uninstall_plugin(&id).map_err(std::io::Error::other)?,
+                        PackageAction::AiAccess { id, enabled } => registry.set_ai_access(&id, enabled)?,
                     }
-                    PackageAction::Import(path) => {
-                        let registry = registry.clone();
-                        tokio::task::spawn_blocking(move || registry.import_with_progress(&path, report)).await.map_err(std::io::Error::other)??;
-                    }
-                    PackageAction::Remove(id) => scheduler.uninstall_plugin(&id).map_err(std::io::Error::other)?,
-                }
-                registry.list()
+                    Ok::<_, std::io::Error>(())
+                }.await;
+                // A package operation can change the registry before cleanup reports an error.
+                let synced = tokio::task::spawn_blocking(move || sync_skill(profile)).await;
+                change?;
+                let installed = registry.list()?;
+                Ok::<_, std::io::Error>((installed, matches!(synced, Ok(Ok(())))))
             }).await;
             let _ = view.update(cx, |this, cx| {
                 this.integration.market.busy = false;
                 this.integration.market.package = None;
                 match result {
-                    Ok(Ok(installed)) => {
+                    Ok(Ok((installed, synced))) => {
                         this.scheduler.update_plugin_capabilities(&installed);
                         this.integration.market.installed = installed;
                         this.integration.market.rebuild();
                         this.integration.draft = None;
                         this.scheduler.notify();
-                        this.set_notice(this.text("插件已更新。", "Plugin changes saved.").into(), cx);
+                        this.set_notice(if synced {
+                            this.text("插件已更新。", "Plugin changes saved.")
+                        } else {
+                            this.text(
+                                "插件已更新，但无法刷新 Codex Skill。",
+                                "Plugin changes saved. The Codex Skill could not be refreshed.",
+                            )
+                        }.into(), cx);
                     }
                     _ => this.set_notice(this.text(
                         "无法完成插件操作。请检查安装包，或暂停下载、清除排队任务并停止做种后重试。",
@@ -798,6 +815,27 @@ impl Desktop {
         self.codex_action(CodexAction::Inspect, cx);
     }
 
+    pub(crate) fn refresh_managed_skill(&self, cx: &mut Context<Self>) {
+        let profile = self.store.profile_directory().to_owned();
+        let task = self.runtime.spawn_blocking(move || sync_skill(profile));
+        cx.spawn(async move |view, cx| {
+            if !matches!(task.await, Ok(Ok(()))) {
+                let _ = view.update(cx, |this, cx| {
+                    this.set_notice(
+                        this.text(
+                            "无法刷新 Codex Skill。请检查 AI 集成设置。",
+                            "Could not refresh the Codex Skill. Check AI integration settings.",
+                        )
+                        .into(),
+                        cx,
+                    );
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
     fn codex_action(&mut self, action: CodexAction, cx: &mut Context<Self>) {
         if self.integration.codex_busy {
             return;
@@ -809,7 +847,7 @@ impl Desktop {
             let status = runtime.spawn_blocking(move || {
                 let target = Target::for_desktop(profile)?;
                 match action {
-                    CodexAction::Inspect => {}
+                    CodexAction::Inspect => CodexCli.sync_skill(&target)?,
                     CodexAction::Install => CodexCli.install(&target)?,
                     CodexAction::Remove => CodexCli.remove(&target)?,
                 }
@@ -916,6 +954,7 @@ impl Desktop {
                                         let _ = view.update(cx, |this, cx| {
                                             if this.store.set_ai_enabled(*enabled).is_ok() {
                                                 this.integration.ai_enabled = *enabled;
+                                                this.refresh_managed_skill(cx);
                                             } else {
                                                 this.set_notice(
                                                     this.text(
@@ -996,6 +1035,10 @@ impl Desktop {
             )
             .into_any_element()
     }
+}
+
+fn sync_skill(profile: PathBuf) -> std::io::Result<()> {
+    CodexCli.sync_skill(&Target::for_desktop(profile)?)
 }
 
 fn option_fields(

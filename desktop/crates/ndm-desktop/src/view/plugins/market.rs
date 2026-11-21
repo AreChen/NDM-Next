@@ -523,7 +523,8 @@ impl Desktop {
         let market = &self.integration.market;
         let entry = &market.entries[index];
         let listing = market.listing(entry);
-        let installed = entry.installed.map(|i| &market.installed[i].manifest);
+        let installed_plugin = entry.installed.map(|i| &market.installed[i]);
+        let installed = installed_plugin.map(|plugin| &plugin.manifest);
         let (name, description) = if let Some(plugin) = listing {
             (&plugin.name, &plugin.description)
         } else {
@@ -607,22 +608,57 @@ impl Desktop {
                                     .child(category_label.to_owned()),
                             ),
                     )
-                    .when(installed.is_some(), |header| {
-                        header.child(
-                            div()
-                                .flex()
-                                .flex_shrink_0()
-                                .items_center()
-                                .gap_1()
-                                .py_0p5()
-                                .px_2()
-                                .rounded_full()
-                                .bg(rgb(tone.rgb(0x203b3a, 0xdff4ee)))
-                                .text_color(rgb(tone.rgb(0x8be0c6, 0x226958)))
-                                .text_xs()
-                                .child(Icon::new(IconName::CircleCheck).with_size(px(12.)))
-                                .child(self.text("已安装", "Installed")),
-                        )
+                    .when_some(installed_plugin, |header, plugin| {
+                        let id = plugin.manifest.id.clone();
+                        let ai_enabled = plugin.ai_enabled;
+                        header
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_shrink_0()
+                                    .items_center()
+                                    .gap_1()
+                                    .py_0p5()
+                                    .px_2()
+                                    .rounded_full()
+                                    .bg(rgb(tone.rgb(0x203b3a, 0xdff4ee)))
+                                    .text_color(rgb(tone.rgb(0x8be0c6, 0x226958)))
+                                    .text_xs()
+                                    .child(Icon::new(IconName::CircleCheck).with_size(px(12.)))
+                                    .child(self.text("已安装", "Installed")),
+                            )
+                            .child(
+                                Button::new(("plugin-ai-access", index))
+                                    .small()
+                                    .ghost()
+                                    .flex_shrink_0()
+                                    .disabled(busy)
+                                    .label(if ai_enabled {
+                                        self.text("AI 已开", "AI on")
+                                    } else {
+                                        self.text("AI 已关", "AI off")
+                                    })
+                                    .tooltip(if ai_enabled {
+                                        self.text(
+                                            "禁用此插件的 AI 接入",
+                                            "Disable AI use for this plugin",
+                                        )
+                                    } else {
+                                        self.text(
+                                            "启用此插件的 AI 接入",
+                                            "Enable AI use for this plugin",
+                                        )
+                                    })
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.package_action(
+                                            PackageAction::AiAccess {
+                                                id: id.clone(),
+                                                enabled: !ai_enabled,
+                                            },
+                                            cx,
+                                        );
+                                    })),
+                            )
                     }),
             )
             .child(
@@ -797,6 +833,7 @@ mod tests {
                 manifest,
                 directory: PathBuf::new(),
                 option_defaults: Default::default(),
+                ai_enabled: true,
             }],
             ..Market::default()
         };

@@ -34,7 +34,16 @@ In **Settings → AI integration**, install the Codex CLI MCP registration
 and Skill when you want them. Turn on **AI access** to make download tools
 available. AI access starts disabled. When enabled, tools from installed
 plugins become available automatically. Restart an existing Codex CLI
-session after first installing the integration.
+session after first installing the integration. From NDM Next 0.6.0, the
+installed Skill refreshes after a desktop upgrade, a plugin install, update
+or removal, and an AI access change. The plugin market's **AI on** control
+lets you disable AI use for one engine. The engine stays available for regular
+desktop and browser downloads.
+
+Use `ndm_list_engines` with a source to see compatible engines, the automatic
+selection and current option schemas. The main Skill links to plugin guides
+under `references/plugins/` for source-specific usage. For task history,
+`ndm_list_tasks` supports a state filter and a cursor for older results.
 
 Codex can queue downloads in the default folder or an explicit absolute
 directory, check status, pause, and resume. A batch can specify its own
@@ -75,6 +84,13 @@ YouTube、Bilibili、TikTok、Vimeo 等常见媒体网页会匹配 **流媒体�
 在 **设置 → AI 集成** 按需为 Codex CLI 安装 MCP 和 Skill，再开启
 **AI 接入**。AI 接入默认关闭。开启后，已安装插件会自动向 Codex
 公开各自的下载工具。首次安装后请重启已打开的 Codex CLI 会话。
+从 NDM Next 0.6.0 起，桌面升级、安装、更新或卸载插件以及更改 AI 接入后，
+应用会刷新已安装的 Skill。点击插件市场卡片的 **AI 已开** 可关闭单个引擎的
+AI 接入。桌面和浏览器仍可使用该引擎下载。
+
+将来源传给 `ndm_list_engines` 可查看兼容引擎、自动选择和当前参数。
+主 Skill 会链接到 `references/plugins/` 中各个引擎的使用指南。
+`ndm_list_tasks` 可按状态筛选，并通过分页游标继续查询更早的任务。
 
 Codex 可发起下载、查询状态、暂停与恢复。省略保存位置时使用 NDM
 默认下载目录，也可传入绝对路径。单批任务可以设置并发任务数和每项
