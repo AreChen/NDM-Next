@@ -524,7 +524,7 @@ impl Desktop {
             OptionForm::Download => "plugin-download-segments",
             OptionForm::Defaults => "plugin-default-segments",
         };
-        let mut panel = div().flex().flex_col().gap_1();
+        let mut panel = div().flex().flex_col().gap(px(3.));
         for (index, field) in fields.iter().enumerate() {
             let label = field.definition.label.for_language(chinese).to_owned();
             let control = match (&field.definition.control, &field.definition.editor) {

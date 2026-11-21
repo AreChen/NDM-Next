@@ -1,5 +1,5 @@
 use super::*;
-use gpui_kit::component::{checkbox::Checkbox, popover::Popover, tooltip::Tooltip};
+use gpui_kit::component::{checkbox::Checkbox, popover::Popover};
 use ndm_core::plugins::selected_text_values;
 
 impl Desktop {
@@ -13,11 +13,13 @@ impl Desktop {
             .child(div().min_w_0().truncate().child(label))
             .when_some(help, |row, help| {
                 row.child(
-                    div()
-                        .id(("plugin-option-help", index))
+                    Button::new(("plugin-option-help", index))
+                        .ghost()
+                        .size(px(16.))
                         .flex_shrink_0()
-                        .child(Icon::new(IconName::Info).with_size(px(13.)))
-                        .tooltip(move |_, cx| cx.new(|_| Tooltip::new(help.clone())).into()),
+                        .icon(Icon::new(IconName::Info).with_size(px(13.)))
+                        .tooltip(help)
+                        .accessibility_label(self.text("填写说明", "Option help")),
                 )
             })
     }
@@ -53,6 +55,7 @@ impl Desktop {
             .label(selected.to_ascii_uppercase())
             .dropdown_caret(true)
             .accessibility_label(self.text("代理协议", "Proxy protocol"))
+            .when_some(self.option_help(field), Button::tooltip)
             .dropdown_menu(move |menu, _, _| {
                 choices.iter().fold(menu, |menu, scheme| {
                     let view = view.clone();
@@ -81,18 +84,11 @@ impl Desktop {
             .gap_2()
             .child(protocol)
             .child(
-                div()
-                    .id(("plugin-proxy-host", index))
-                    .when_some(self.option_help(field), |host, help| {
-                        host.tooltip(move |_, cx| cx.new(|_| Tooltip::new(help.clone())).into())
-                    })
-                    .child(
-                        Input::new(input)
-                            .small()
-                            .disabled(disabled)
-                            .w(px(248.))
-                            .aria_label(self.text("代理地址", "Proxy address")),
-                    ),
+                Input::new(input)
+                    .small()
+                    .disabled(disabled)
+                    .w(px(248.))
+                    .aria_label(self.text("代理地址", "Proxy address")),
             )
             .into_any_element()
     }

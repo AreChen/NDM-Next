@@ -185,8 +185,9 @@ impl Desktop {
                         crate::view::settings::card_surface(0, tone)
                             .flex()
                             .flex_col()
-                            .gap_2()
-                            .p_3()
+                            .gap_1p5()
+                            .px_3()
+                            .py_2()
                             .child(
                                 div().font_weight(FontWeight::SEMIBOLD)
                                     .child(self.text("默认下载选项", "Download defaults")),
