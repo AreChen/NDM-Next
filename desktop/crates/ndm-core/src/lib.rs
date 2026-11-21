@@ -55,7 +55,8 @@ pub use model::{
     BatchLimit, DownloadLimits, NewTask, PluginOptions, Task, TaskId, TaskOptions, TaskPolicy,
     TaskState,
 };
-pub use scheduler::{Scheduler, SchedulerEvent, SchedulerOptions};
+pub use ndm_plugin_sdk::PeerStats;
+pub use scheduler::{Scheduler, SchedulerEvent, SchedulerOptions, SharingStatus};
 pub use sftp::{SftpAuth, SftpOptions, download_sftp, execute_sftp};
 pub use store::{PendingSftpHost, Store, TaskCommand};
 pub use task_progress::recover_task_progress;

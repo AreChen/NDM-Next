@@ -32,18 +32,17 @@ pub(crate) async fn delete_many(
             report.failed.push(id);
             continue;
         }
-        if delete_files
-            && task.state == TaskState::Completed
-            && !matches!(
-                tokio::task::spawn_blocking(move || crate::files::delete_output(&task)).await,
-                Ok(Ok(()))
-            )
-        {
-            report.failed.push(id);
-            continue;
-        }
+        scheduler.stop_sharing(id).await;
         let scheduler = scheduler.clone();
-        let removed = tokio::task::spawn_blocking(move || scheduler.delete(id, delete_files)).await;
+        let removed = tokio::task::spawn_blocking(move || {
+            scheduler.delete_with(id, delete_files, |task| {
+                if delete_files && task.state == TaskState::Completed {
+                    crate::files::delete_output(task)?;
+                }
+                Ok(())
+            })
+        })
+        .await;
         if matches!(removed, Ok(Ok(()))) {
             report.removed.push(id);
         } else {

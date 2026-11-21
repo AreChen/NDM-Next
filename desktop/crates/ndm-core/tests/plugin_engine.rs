@@ -6,14 +6,15 @@ use std::{
 };
 
 use ndm_core::{
-    BatchLimit, NewTask, PluginOptions, Scheduler, SchedulerOptions, Store, TaskId, TaskOptions,
-    TaskPolicy, TaskState,
+    BatchLimit, NewTask, PeerStats, PluginOptions, Scheduler, SchedulerOptions, SharingStatus,
+    Store, TaskId, TaskOptions, TaskPolicy, TaskState,
     plugin_engine::{EngineError, EngineOutcome, PluginEngine},
     plugins::PluginRegistry,
 };
 use ndm_plugin_sdk::{
     DownloadRequest, DownloadSource, ENGINE_ARGUMENT, ENGINE_PROTOCOL_VERSION, EngineMessage,
-    HostMessage, TaskUpdate, TransferProgress, read_message, write_message,
+    HostMessage, SourceFile, SourceFiles, SourceSelection, TaskUpdate, TransferProgress,
+    read_message, write_message,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -44,7 +45,7 @@ fn fixture_engine() {
     let mut output = io::stdout().lock();
     assert!(matches!(
         read_message::<HostMessage>(&mut input).unwrap(),
-        Some(HostMessage::Hello { version, task_updates: true }) if version == ENGINE_PROTOCOL_VERSION
+        Some(HostMessage::Hello { version, task_updates: true, .. }) if version == ENGINE_PROTOCOL_VERSION
     ));
     write_message(
         &mut output,
@@ -53,8 +54,51 @@ fn fixture_engine() {
         },
     )
     .unwrap();
-    let HostMessage::Download { request } = read_message(&mut input).unwrap().unwrap() else {
-        panic!("expected a download request");
+    let request = match read_message(&mut input).unwrap().unwrap() {
+        HostMessage::Download { request } => request,
+        HostMessage::Inspect { .. } => {
+            write_message(
+                &mut output,
+                &EngineMessage::Inspected {
+                    source: SourceFiles {
+                        revision: "fixture-v1".into(),
+                        files: vec![SourceFile {
+                            id: 0,
+                            path: "selected.bin".into(),
+                            size: 8,
+                        }],
+                    },
+                },
+            )
+            .unwrap();
+            return;
+        }
+        HostMessage::Share {
+            request,
+            output: published,
+        } => {
+            assert_eq!(fs::read(published).unwrap(), b"selected");
+            assert!(request.workspace.join("state/metadata").is_file());
+            write_message(
+                &mut output,
+                &EngineMessage::TaskUpdate {
+                    update: TaskUpdate::PeerStats(PeerStats {
+                        connected: 2,
+                        seeders: 1,
+                        uploaded: 16,
+                        ..Default::default()
+                    }),
+                },
+            )
+            .unwrap();
+            assert!(matches!(
+                read_message::<HostMessage>(&mut input).unwrap(),
+                Some(HostMessage::Stop)
+            ));
+            write_message(&mut output, &EngineMessage::Stopped).unwrap();
+            return;
+        }
+        _ => panic!("unexpected fixture request"),
     };
     match request
         .options
@@ -89,6 +133,19 @@ fn fixture_engine() {
                 &mut output,
                 &EngineMessage::Completed {
                     files: vec!["../outside.bin".into()],
+                },
+            )
+            .unwrap();
+        }
+        Some("selected") => {
+            assert_eq!(request.selection.as_ref().unwrap().file_ids, vec![0]);
+            fs::create_dir(request.workspace.join("state")).unwrap();
+            fs::write(request.workspace.join("state/metadata"), b"fixture").unwrap();
+            fs::write(request.workspace.join("selected.bin"), b"selected").unwrap();
+            write_message(
+                &mut output,
+                &EngineMessage::Completed {
+                    files: vec!["selected.bin".into()],
                 },
             )
             .unwrap();
@@ -156,6 +213,7 @@ fn request(workspace: &Path, mode: &str) -> DownloadRequest {
         expected_size: None,
         download_threads: None,
         options: [("mode".into(), mode.into())].into_iter().collect(),
+        selection: None,
     }
 }
 
@@ -166,7 +224,8 @@ async fn run_tests() {
     rejects_outputs_outside_workspace(&engine).await;
     stops_and_reaps_descendant(&engine).await;
     schedules_installed_engines_with_global_batch_and_plugin_limits().await;
-    println!("4 download engine process and scheduler tests passed");
+    inspects_selected_outputs_and_restarts_sharing_without_touching_files().await;
+    println!("5 download engine process and scheduler tests passed");
 }
 
 fn fixture_package(profile: &Path, id: &str, active: u32) -> std::path::PathBuf {
@@ -180,6 +239,7 @@ fn fixture_package(profile: &Path, id: &str, active: u32) -> std::path::PathBuf 
         "schema":1,"id":id,"version":"0.1.0","engine":executable,"engine_protocol":1,
         "name":{"en":id},"description":{"en":"Local download fixture"},
         "inputs":[{"schemes":["fixture"]}],"limits":{"active_tasks":active,"download_threads":4},
+        "capabilities":{"inspect_files":true,"share_completed":true},
         "options":[
           {"key":"mode","kind":"text","max_length":32,"label":{"en":"Mode"}},
           {"key":"address","kind":"text","max_length":64,"label":{"en":"Local fixture address"}}
@@ -194,6 +254,102 @@ fn fixture_package(profile: &Path, id: &str, active: u32) -> std::path::PathBuf 
     .unwrap();
     zip.finish().unwrap();
     archive
+}
+
+async fn inspects_selected_outputs_and_restarts_sharing_without_touching_files() {
+    let profile = tempfile::tempdir().unwrap();
+    let store = std::sync::Arc::new(Store::open(&profile.path().join("tasks.db")).unwrap());
+    let plugin = PluginRegistry::new(profile.path())
+        .import(&fixture_package(profile.path(), "share-fixture", 1))
+        .unwrap();
+    let source = reqwest::Url::parse("fixture://fixture.invalid/download").unwrap();
+    let listing = plugin
+        .inspect_source(
+            source.clone(),
+            Default::default(),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(listing.files[0].path, "selected.bin");
+    let id = TaskId::new_v4();
+    store
+        .enqueue(&[(
+            id,
+            NewTask {
+                url: source.into(),
+                destination: profile.path().join("downloads"),
+                suggested_filename: None,
+                source_url: None,
+                expected_size: None,
+                headers: Default::default(),
+            },
+            TaskOptions::Plugin(PluginOptions {
+                id: plugin.manifest.id,
+                values: [("mode".into(), "selected".into())].into_iter().collect(),
+                selection: Some(SourceSelection {
+                    revision: listing.revision,
+                    file_ids: vec![0],
+                }),
+            }),
+            TaskPolicy::default(),
+        )])
+        .unwrap();
+    let scheduler = Scheduler::start(store.clone(), SchedulerOptions::default()).unwrap();
+    timeout(TEST_TIMEOUT, async {
+        loop {
+            if store.get(id).unwrap().unwrap().state == TaskState::Completed
+                && scheduler.progress(id).is_none()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let task = store.get(id).unwrap().unwrap();
+    assert!(scheduler.can_share(&task));
+    assert!(
+        task.work_directory()
+            .join("engine/state/metadata")
+            .is_file()
+    );
+    assert!(!task.work_directory().join("engine/selected.bin").exists());
+    for uploaded in [16, 32] {
+        scheduler.start_sharing(id).unwrap();
+        timeout(TEST_TIMEOUT, async {
+            while scheduler.sharing_status(id) != Some(SharingStatus::Sharing) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let peers = scheduler.progress(id).unwrap().peers.unwrap();
+        assert_eq!(
+            (peers.connected, peers.seeders, peers.uploaded),
+            (2, 1, uploaded)
+        );
+        assert!(scheduler.delete(id, true).is_err());
+        assert!(scheduler.uninstall_plugin("share-fixture").is_err());
+        scheduler.stop_sharing(id).await;
+        assert!(scheduler.sharing_status(id).is_none());
+        let saved = store.get(id).unwrap().unwrap();
+        assert_eq!(saved.state, TaskState::Completed);
+        assert_eq!(
+            saved.progress.unwrap().peers.unwrap(),
+            PeerStats {
+                uploaded,
+                ..Default::default()
+            }
+        );
+        assert_eq!(fs::read(saved.output_path.unwrap()).unwrap(), b"selected");
+    }
+    scheduler.start_sharing(id).unwrap();
+    scheduler.shutdown().await;
+    assert!(scheduler.sharing_status(id).is_none());
+    scheduler.uninstall_plugin("share-fixture").unwrap();
 }
 
 async fn schedules_installed_engines_with_global_batch_and_plugin_limits() {
@@ -240,6 +396,7 @@ async fn schedules_installed_engines_with_global_batch_and_plugin_limits() {
             TaskOptions::Plugin(PluginOptions {
                 id: id.to_owned(),
                 values: options.as_object().unwrap().clone(),
+                selection: None,
             }),
             TaskPolicy {
                 batch,

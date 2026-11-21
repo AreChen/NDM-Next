@@ -11,10 +11,10 @@ use tokio::fs;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    DownloadProgress, Error, PluginOptions, Result, Store, TaskId, cache,
+    DownloadProgress, Error, PluginOptions, Result, Store, Task, TaskId, cache,
     http::{publish_download, safe_filename},
     plugin_engine::{EngineError, EngineOutcome, EngineUpdate, PluginEngine},
-    plugins::PluginRegistry,
+    plugins::{InstalledPlugin, PluginRegistry},
 };
 
 pub(crate) async fn execute(
@@ -72,36 +72,9 @@ async fn transfer(
     let plugin = PluginRegistry::new(store.profile_directory())
         .get(&options.id)?
         .ok_or(Error::PluginUnavailable)?;
-    let source = reqwest::Url::parse(&task.request.url).map_err(|_| Error::PluginSource)?;
-    let source = if source.scheme() == "file" {
-        DownloadSource::File {
-            path: source.to_file_path().map_err(|()| Error::PluginSource)?,
-        }
-    } else {
-        DownloadSource::Url {
-            url: source.to_string(),
-            headers: task.request.headers.clone(),
-        }
-    };
     let workspace = cache::engine_workspace(&task)?;
     let engine = PluginEngine::new(plugin.executable())?;
-    let download_threads = plugin.manifest.limits.download_threads.and_then(|limit| {
-        NonZeroU32::new(
-            task.policy
-                .download_threads
-                .unwrap_or(default_threads)
-                .min(limit),
-        )
-    });
-    let request = DownloadRequest {
-        task_id: task.id,
-        source,
-        workspace: workspace.clone(),
-        suggested_filename: task.request.suggested_filename.clone(),
-        expected_size: task.request.expected_size,
-        download_threads,
-        options: options.values,
-    };
+    let request = build_request(&task, &plugin, options, default_threads, workspace.clone())?;
     let mut resolved = false;
     let outcome = engine
         .download_with_updates(request, cancel, |update| match update {
@@ -110,6 +83,7 @@ async fn transfer(
                 progress.engine_progress(update);
             }
             EngineUpdate::Task(TaskUpdate::Finalizing) => progress.finalize(),
+            EngineUpdate::Task(TaskUpdate::PeerStats(stats)) => progress.engine_peers(stats),
             EngineUpdate::Task(TaskUpdate::Title { title }) if !resolved => {
                 let title: String = title
                     .trim()
@@ -189,9 +163,69 @@ async fn transfer(
         transferred: progress.snapshot().transferred,
     });
     store.complete(id, &output, task.request.expected_size.is_some())?;
-    let root = task.cache_directory.as_deref().unwrap_or(destination);
-    let _ = cache::remove_partial(root, id);
+    if plugin.manifest.capabilities.share_completed
+        && workspace
+            .join(ndm_plugin_sdk::ENGINE_STATE_DIRECTORY)
+            .is_dir()
+    {
+        let _ = cache::retain_engine_state(&workspace);
+    } else {
+        let root = task.cache_directory.as_deref().unwrap_or(destination);
+        let _ = cache::remove_partial(root, id);
+    }
     Ok(())
+}
+
+pub(crate) fn download_source(
+    source: reqwest::Url,
+    headers: std::collections::BTreeMap<String, String>,
+) -> Result<DownloadSource> {
+    if source.scheme() == "file" {
+        Ok(DownloadSource::File {
+            path: source.to_file_path().map_err(|()| Error::PluginSource)?,
+        })
+    } else {
+        Ok(DownloadSource::Url {
+            url: source.into(),
+            headers,
+        })
+    }
+}
+
+pub(crate) fn build_request(
+    task: &Task,
+    plugin: &InstalledPlugin,
+    options: PluginOptions,
+    default_threads: u32,
+    workspace: PathBuf,
+) -> Result<DownloadRequest> {
+    if options
+        .selection
+        .as_ref()
+        .is_some_and(|selection| !plugin.manifest.capabilities.inspect_files || !selection.valid())
+    {
+        return Err(Error::PluginOptions);
+    }
+    let source = reqwest::Url::parse(&task.request.url).map_err(|_| Error::PluginSource)?;
+    let source = download_source(source, task.request.headers.clone())?;
+    let download_threads = plugin.manifest.limits.download_threads.and_then(|limit| {
+        NonZeroU32::new(
+            task.policy
+                .download_threads
+                .unwrap_or(default_threads)
+                .min(limit),
+        )
+    });
+    Ok(DownloadRequest {
+        task_id: task.id,
+        source,
+        workspace,
+        suggested_filename: task.request.suggested_filename.clone(),
+        expected_size: task.request.expected_size,
+        download_threads,
+        options: options.values,
+        selection: options.selection,
+    })
 }
 
 async fn publish_group(

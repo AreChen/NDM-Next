@@ -1,7 +1,7 @@
 # NDM Next download engine SDK
 
 NDM launches the installed engine executable with `--ndm-engine` for one
-download, with the engine's installation directory as its current directory.
+operation, with the engine's installation directory as its current directory.
 The engine communicates with NDM over stdin and stdout. Each message is one
 UTF-8 JSON object followed by a newline. The message limit is 4 MiB, excluding
 the newline. Reserve stdout for protocol messages.
@@ -13,8 +13,11 @@ interface.
 | Direction | Message | Meaning |
 | --- | --- | --- |
 | NDM to engine | `{"type":"hello","version":1}` | Negotiate the protocol version. |
-| Engine to NDM | `{"type":"ready","version":1}` | Accept that version. Wait for a download before starting work or launching subprocesses. |
+| Engine to NDM | `{"type":"ready","version":1}` | Accept that version. Wait for a request before starting work or launching subprocesses. |
 | NDM to engine | `{"type":"download","request":{…}}` | Start work for the given task ID. |
+| NDM to engine | `{"type":"inspect","request":{…}}` | Resolve a file list in a disposable workspace. Only resolve metadata. |
+| Engine to NDM | `{"type":"inspected","source":{"revision":"…","files":[{"id":0,"path":"video.mp4","size":42}]}}` | Return file IDs, display paths, and sizes in bytes for an immutable source revision. |
+| NDM to engine | `{"type":"share","request":{…},"output":"/saved/output"}` | Verify and share available pieces from the published file or directory. Open output with read-only access. |
 | Engine to NDM | `{"type":"progress","progress":{"downloaded":42,"total":null,"transferred":42}}` | Report byte counts. Use `null` for the total if it is unknown. |
 | Engine to NDM | `{"type":"task_update","update":{"kind":"title","title":"Example video"}}` | Report the resolved title once it is available. |
 | Engine to NDM | `{"type":"task_update","update":{"kind":"finalizing"}}` | Report local media processing. The next byte progress message returns the task to downloading. |
@@ -146,3 +149,28 @@ reaping, output validation, installation, routing, and scheduler limits.
 The Rust `serve` helper handles the handshake, receives stop commands,
 and sends a terminal result. The `NDM_MEDIA_TOOLS` environment variable
 can point to the app's FFmpeg directory when available.
+
+## Optional file selection and sharing
+
+- Declare `capabilities.inspect_files` to expose a native checkbox list in the
+  new download form. `revision` is an opaque, nonempty ASCII identifier up to
+  128 bytes. IDs must be unique. If the task includes `selection`, validate
+  its `revision` and sorted `file_ids` against the actual metadata before
+  starting the transfer. Publish only the selected files.
+- Declare `capabilities.share_completed` to expose start and stop sharing on
+  a completed task. NDM can retain the engine-owned `state/` directory after
+  publishing, and cache cleanup may reclaim it while the task is idle. Use it
+  for metadata required to verify the source again. The `output` argument is the
+  published file or folder and may have been renamed to avoid a collision.
+  Share only verified data and do not modify the output. Respond to `stop` with
+  `stopped` and close all file and network handles. An engine which ends sharing
+  by itself returns `completed` with an empty `files` array.
+  Sharing has its own per-engine count, using `limits.active_tasks` as the limit.
+- When `hello` includes both `task_updates` and `peer_stats`, the engine may
+  send `kind: "peer_stats"` task updates with `connected`, `seeders`, `connecting`,
+  `queued`, `known`, `uploaded`, and `upload_bytes_per_second`. Upload totals are
+  bytes since the worker started. NDM accumulates them across stops and restarts.
+  Send the first sharing statistics after the verified data is ready to serve.
+
+In Rust, use `Engine` and `serve_engine` for optional operations.
+`Worker::update_task` suppresses peer statistics for older hosts.

@@ -13,6 +13,11 @@ impl Render for ProgressWindow {
         let fg = tone.rgb(0xf1f4ff, 0x19263c);
         let muted = tone.rgb(0x9baac4, 0x71809a);
         let task = self.task.clone();
+        let sharing = self.scheduler.sharing_status(self.id);
+        let can_share = task
+            .as_ref()
+            .is_some_and(|task| self.scheduler.can_share(task));
+        let chinese = self.language == Language::Chinese;
         let state = task
             .as_ref()
             .map(|task| task.state)
@@ -57,7 +62,10 @@ impl Render for ProgressWindow {
             (TaskState::Running, ProgressPhase::Finalizing) => self.text("正在封装", "Finalizing"),
             (TaskState::Running, _) => self.text("下载中", "Downloading"),
             (TaskState::Paused, _) => self.text("已暂停", "Paused"),
-            (TaskState::Completed, _) => self.text("下载完成", "Completed"),
+            (TaskState::Completed, _) => sharing
+                .map_or(self.text("下载完成", "Completed"), |status| {
+                    crate::peer_metrics::status(status, chinese)
+                }),
             (TaskState::Failed, _) => self.text("下载失败", "Failed"),
         };
         let (downloaded, mut total) =
@@ -120,11 +128,19 @@ impl Render for ProgressWindow {
             .map(|snapshot| snapshot.segments.as_slice())
             .unwrap_or(&[]);
         let connections = segments.iter().filter(|segment| segment.active).count();
+        let peers = self.snapshot.as_ref().and_then(|snapshot| snapshot.peers);
         let mut details = div().flex().flex_col().gap_2();
         if let Some(task) = &task {
             let host = reqwest::Url::parse(&task.request.url)
                 .ok()
-                .and_then(|url| url.host_str().map(str::to_owned))
+                .and_then(|url| match url.scheme() {
+                    "magnet" => Some(self.text("磁力链接", "Magnet link").into()),
+                    "file" => url.to_file_path().ok().and_then(|path| {
+                        path.file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                    }),
+                    _ => url.host_str().map(str::to_owned),
+                })
                 .unwrap_or_default();
             for (label, value) in [
                 (
@@ -171,7 +187,35 @@ impl Render for ProgressWindow {
                 .text_color(rgb(muted))
                 .child(self.text("连接详情", "CONNECTIONS")),
         );
-        if segments.is_empty() {
+        if let Some(peers) = peers {
+            if self.expanded {
+                let metrics = crate::peer_metrics::details(peers, downloaded, chinese);
+                details = details.child(div().flex().flex_col().gap_2().children(
+                    metrics.chunks(2).map(|pair| {
+                        div()
+                            .flex()
+                            .gap_4()
+                            .children(pair.iter().map(|(label, value)| {
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .justify_between()
+                                    .gap_2()
+                                    .text_xs()
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_color(rgb(muted))
+                                            .child(*label),
+                                    )
+                                    .child(div().flex_shrink_0().child(value.clone()))
+                            }))
+                    }),
+                ));
+            }
+        } else if segments.is_empty() {
             details = details.child(
                 div()
                     .text_xs()
@@ -351,7 +395,9 @@ impl Render for ProgressWindow {
                 .child(metric_chip(
                     IconName::Globe,
                     self.text("活动连接", "Active connections"),
-                    if segments.is_empty() {
+                    if let Some(peers) = peers {
+                        peers.connected.to_string()
+                    } else if segments.is_empty() {
                         "—".into()
                     } else {
                         format!("{connections}/{}", segments.len())
@@ -359,6 +405,32 @@ impl Render for ProgressWindow {
                     edge,
                     muted,
                 ));
+        }
+        if let Some(peers) = peers {
+            if sharing.is_some() {
+                chips = chips
+                    .child(metric_chip(
+                        IconName::Globe,
+                        self.text("已连接节点", "Connected peers"),
+                        peers.connected.to_string(),
+                        edge,
+                        muted,
+                    ))
+                    .child(metric_chip(
+                        IconName::ArrowUp,
+                        self.text("上传速度", "Upload speed"),
+                        format!("{}/s", format_bytes(peers.upload_bytes_per_second)),
+                        edge,
+                        muted,
+                    ));
+            }
+            chips = chips.child(metric_chip(
+                IconName::ChartPie,
+                self.text("分享率", "Share ratio"),
+                crate::peer_metrics::ratio(peers, downloaded),
+                edge,
+                muted,
+            ));
         }
         chips = chips.child(metric_chip(
             gpui_kit::assets::IconName::Clock,
@@ -396,6 +468,20 @@ impl Render for ProgressWindow {
                     chrome::icon_button("progress-action", icon, label)
                         .disabled(self.proxy_switching)
                         .on_click(cx.listener(move |this, _, _, cx| this.change_state(state, cx))),
+                )
+            })
+            .when(can_share, |row| {
+                let (icon, label) = if sharing.is_some() {
+                    (IconName::Square, self.text("停止做种", "Stop seeding"))
+                } else {
+                    (IconName::Play, self.text("开始做种", "Start seeding"))
+                };
+                row.child(
+                    chrome::icon_button("progress-seeding", icon, label)
+                        .disabled(sharing == Some(ndm_core::SharingStatus::Stopping))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.change_sharing(sharing.is_none(), cx)
+                        })),
                 )
             })
             .child(

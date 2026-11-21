@@ -288,7 +288,7 @@ impl gpui_kit::RenderOnce for SegmentedControl {
         use gpui_kit::{
             component::{
                 Disableable, Sizable,
-                button::{Button, ButtonVariants},
+                button::{Button, ButtonCustomVariant, ButtonVariants},
             },
             prelude::*,
             *,
@@ -299,6 +299,9 @@ impl gpui_kit::RenderOnce for SegmentedControl {
         };
 
         let tone = ThemeTone::current(cx);
+        // The sliding indicator supplies the only background for each segment.
+        let button =
+            ButtonCustomVariant::new(cx).foreground(rgb(tone.rgb(0xede8ff, 0x44366b)).into());
         let count = self.segments.len() as f32;
         let mut track = div().relative().h(px(24.)).w_full().flex();
         if let Some(index) = self.selected {
@@ -338,7 +341,7 @@ impl gpui_kit::RenderOnce for SegmentedControl {
                 .map_or_else(|| label.clone(), |group| format!("{group} {label}").into());
             track = track.child(
                 Button::new(id.clone())
-                    .ghost()
+                    .custom(button)
                     .small()
                     .disabled(self.disabled)
                     .toggled(self.selected == Some(index))
@@ -346,12 +349,9 @@ impl gpui_kit::RenderOnce for SegmentedControl {
                     .min_w_0()
                     .h(px(24.))
                     .px_0()
-                    .label(label.clone())
-                    .tooltip(label)
+                    .label(label)
                     .accessibility_label(accessible_name)
                     .text_size(px(11.))
-                    .bg(rgba(0))
-                    .text_color(rgb(tone.rgb(0xede8ff, 0x44366b)))
                     .debug_selector(move || id.to_string())
                     .on_click(move |_, window, cx| on_change(&index, window, cx)),
             );
@@ -469,7 +469,7 @@ impl gpui_kit::RenderOnce for Switch {
             .cursor_pointer()
             .border_1()
             .border_color(rgba(0))
-            .focus(|style| style.border_color(rgb(0x9b85ed)))
+            .focus_visible(|style| style.border_color(rgb(0x9b85ed)))
             .on_change(move |next, _, window, cx| {
                 if let Some(callback) = &self.on_change {
                     callback(&next, window, cx);

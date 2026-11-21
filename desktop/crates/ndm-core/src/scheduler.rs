@@ -1,5 +1,7 @@
+mod sharing;
+
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{
         Arc, Mutex, RwLock,
@@ -49,6 +51,10 @@ impl Default for SchedulerOptions {
 pub enum SchedulerEvent {
     Started(TaskId),
     TaskTitleChanged(TaskId),
+    SharingChanged {
+        id: TaskId,
+        failed: bool,
+    },
     Finished {
         id: TaskId,
         progress: ProgressSnapshot,
@@ -76,6 +82,7 @@ struct Active {
     started: Instant,
     previous_elapsed_ms: u64,
     previous_transferred: u64,
+    previous_peers: Option<crate::PeerStats>,
 }
 
 impl Active {
@@ -87,6 +94,13 @@ impl Active {
         progress.transferred_total = self
             .previous_transferred
             .saturating_add(progress.transferred);
+        if let Some(peers) = &mut progress.peers {
+            peers.uploaded = peers
+                .uploaded
+                .saturating_add(self.previous_peers.map_or(0, |saved| saved.uploaded));
+        } else {
+            progress.peers = self.previous_peers;
+        }
         progress
     }
 }
@@ -94,6 +108,8 @@ struct Inner {
     store: Arc<Store>,
     options: RwLock<SchedulerOptions>,
     active: Mutex<HashMap<TaskId, Active>>,
+    sharing: Mutex<HashMap<TaskId, sharing::ActiveShare>>,
+    shareable: RwLock<HashSet<String>>,
     maintenance: RwLock<()>,
     wake: Notify,
     shutdown: CancellationToken,
@@ -103,6 +119,7 @@ struct Inner {
 
 #[derive(Clone)]
 pub struct Scheduler(Arc<Inner>);
+pub use sharing::SharingStatus;
 
 impl Scheduler {
     pub fn start(store: Arc<Store>, mut options: SchedulerOptions) -> Result<Self> {
@@ -117,10 +134,15 @@ impl Scheduler {
             store.recover_without_autostart()?;
         }
         let (events, _) = broadcast::channel(128);
+        let installed = crate::plugins::PluginRegistry::new(store.profile_directory())
+            .list()
+            .unwrap_or_default();
         let inner = Arc::new(Inner {
             store,
             options: RwLock::new(options),
             active: Mutex::new(HashMap::new()),
+            sharing: Mutex::new(HashMap::new()),
+            shareable: RwLock::new(sharing::shareable_engines(&installed)),
             maintenance: RwLock::new(()),
             wake: Notify::new(),
             shutdown: CancellationToken::new(),
@@ -163,6 +185,7 @@ impl Scheduler {
                 .as_ref()
                 .is_some_and(|task| task.state != TaskState::Completed)
                 || self.0.active.lock().unwrap().contains_key(&id);
+            let protected = protected || self.0.sharing.lock().unwrap().contains_key(&id);
             let files = match crate::cache::inspect(&root, id) {
                 Ok(Some(files)) => files,
                 Ok(None) => {
@@ -229,6 +252,13 @@ impl Scheduler {
             .any(|worker| worker.plugin.as_deref() == Some(id))
             || self
                 .0
+                .sharing
+                .lock()
+                .unwrap()
+                .values()
+                .any(|job| job.plugin == id)
+            || self
+                .0
                 .store
                 .list_queued()?
                 .iter()
@@ -237,6 +267,7 @@ impl Scheduler {
             return Err(Error::InvalidState);
         }
         crate::plugins::PluginRegistry::new(self.0.store.profile_directory()).remove(id)?;
+        self.0.shareable.write().unwrap().remove(id);
         Ok(())
     }
 
@@ -245,15 +276,33 @@ impl Scheduler {
     }
 
     pub fn progress(&self, id: TaskId) -> Option<ProgressSnapshot> {
-        self.0.active.lock().unwrap().get(&id).map(Active::snapshot)
+        let active = self.0.active.lock().unwrap().get(&id).map(Active::snapshot);
+        active.or_else(|| {
+            self.0
+                .sharing
+                .lock()
+                .unwrap()
+                .get(&id)
+                .map(sharing::ActiveShare::snapshot)
+        })
     }
 
     /// Remove a task only after its worker has stopped. Completed files are kept.
     pub fn delete(&self, id: TaskId, remove_partial: bool) -> Result<()> {
+        self.delete_with(id, remove_partial, |_| Ok(()))
+    }
+
+    /// Keep dispatch and upload starts blocked while removing any completed output.
+    pub fn delete_with(
+        &self,
+        id: TaskId,
+        remove_partial: bool,
+        remove_output: impl FnOnce(&Task) -> std::io::Result<()>,
+    ) -> Result<()> {
         // Block dispatch while deleting files without holding the progress-map lock.
         let _maintenance = self.0.maintenance.write().unwrap();
         let active = self.0.active.lock().unwrap();
-        if active.contains_key(&id) {
+        if active.contains_key(&id) || self.0.sharing.lock().unwrap().contains_key(&id) {
             return Err(Error::InvalidState);
         }
         drop(active);
@@ -267,6 +316,7 @@ impl Scheduler {
         ) {
             return Err(Error::InvalidState);
         }
+        remove_output(&task)?;
         if remove_partial {
             crate::cache::remove_partial(
                 task.cache_directory
@@ -366,6 +416,13 @@ impl Scheduler {
                     break;
                 }
             }
+        }
+        let shares: Vec<_> = {
+            let _maintenance = self.0.maintenance.write().unwrap();
+            self.0.sharing.lock().unwrap().values().cloned().collect()
+        };
+        for share in shares {
+            share.stop().await;
         }
     }
 
@@ -493,6 +550,7 @@ async fn dispatch(inner: Arc<Inner>) {
                         .progress
                         .as_ref()
                         .map_or(0, |progress| progress.transferred_total),
+                    previous_peers: task.progress.as_ref().and_then(|progress| progress.peers),
                 };
                 active.insert(task.id, job.clone());
                 drop(active);
@@ -559,6 +617,9 @@ async fn run_one(inner: Arc<Inner>, task: Task, active: Active, done: watch::Sen
         let _ = inner.store.resume(task.id);
     }
     let mut progress = active.snapshot();
+    if let Some(peers) = &mut progress.peers {
+        peers.inactive();
+    }
     for segment in &mut progress.segments {
         segment.active = false;
     }

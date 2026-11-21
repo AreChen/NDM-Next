@@ -88,6 +88,35 @@ fn verify_engine_marker(directory: &Path) -> io::Result<()> {
     Ok(())
 }
 
+pub(crate) fn retain_engine_state(workspace: &Path) -> io::Result<()> {
+    validate_directory(workspace)?;
+    validate_directory(&workspace.join(ndm_plugin_sdk::ENGINE_STATE_DIRECTORY))?;
+    let mut disposable = OwnedFiles {
+        bytes: 0,
+        modified: SystemTime::UNIX_EPOCH,
+        files: Vec::new(),
+        directories: Vec::new(),
+    };
+    for entry in fs::read_dir(workspace)? {
+        let entry = entry?;
+        if entry.file_name() == ndm_plugin_sdk::ENGINE_STATE_DIRECTORY {
+            continue;
+        }
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)?;
+        if is_reparse(&metadata) {
+            return Err(io::Error::other("linked engine workspace entry"));
+        }
+        if metadata.is_dir() {
+            collect_engine(&path, &mut disposable, 0)?;
+        } else if metadata.is_file() {
+            disposable.files.push(path);
+        }
+    }
+    disposable.remove()?;
+    Ok(())
+}
+
 fn collect_engine(directory: &Path, result: &mut OwnedFiles, depth: usize) -> io::Result<()> {
     if depth > 32 {
         return Err(io::Error::other("plugin workspace is too deeply nested"));

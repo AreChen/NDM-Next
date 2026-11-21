@@ -81,6 +81,7 @@ struct ProgressState {
     total: AtomicU64,
     total_known: AtomicBool,
     segments: RwLock<Vec<Arc<SegmentState>>>,
+    peers: RwLock<Option<ndm_plugin_sdk::PeerStats>>,
 }
 
 struct SegmentState {
@@ -134,6 +135,8 @@ pub struct ProgressSnapshot {
     pub finalization_total_ms: Option<u64>,
     pub phase: ProgressPhase,
     pub segments: Vec<SegmentSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peers: Option<ndm_plugin_sdk::PeerStats>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -155,6 +158,10 @@ impl ProgressSnapshot {
 }
 
 impl DownloadProgress {
+    pub(crate) fn engine_peers(&self, stats: ndm_plugin_sdk::PeerStats) {
+        *self.0.peers.write().unwrap() = Some(stats);
+    }
+
     pub(crate) fn engine_progress(&self, progress: ndm_plugin_sdk::TransferProgress) {
         self.set_total(progress.total);
         self.0
@@ -205,6 +212,7 @@ impl DownloadProgress {
                     active: segment.active.load(Ordering::Relaxed),
                 })
                 .collect(),
+            peers: *self.0.peers.read().unwrap(),
         }
     }
 

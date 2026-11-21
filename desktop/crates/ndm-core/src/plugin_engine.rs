@@ -12,7 +12,8 @@ use std::{
 
 use ndm_plugin_sdk::{
     DownloadRequest, ENGINE_ARGUMENT, ENGINE_PROTOCOL_VERSION, EngineMessage, FailureReason,
-    HostMessage, MAX_MESSAGE_BYTES, TaskUpdate, TransferProgress, encode_message,
+    HostMessage, MAX_MESSAGE_BYTES, PeerStats, SourceFiles, TaskUpdate, TransferProgress,
+    encode_message,
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
@@ -94,16 +95,77 @@ impl PluginEngine {
         &self,
         request: DownloadRequest,
         cancel: &CancellationToken,
-        mut update: impl FnMut(EngineUpdate),
+        update: impl FnMut(EngineUpdate),
     ) -> Result<EngineOutcome, EngineError> {
-        if cancel.is_cancelled() {
-            return Ok(EngineOutcome::Stopped);
-        }
         let workspace = request.workspace.clone();
+        let command = HostMessage::Download {
+            request: Box::new(request),
+        };
+        match self.run(&workspace, command, cancel, update).await? {
+            Terminal::Completed(files) => {
+                Ok(EngineOutcome::Completed(output_paths(&workspace, files)?))
+            }
+            Terminal::Stopped => Ok(EngineOutcome::Stopped),
+            Terminal::Inspected(_) => Err(EngineError::Protocol),
+        }
+    }
+
+    pub(crate) async fn inspect(
+        &self,
+        request: DownloadRequest,
+        cancel: &CancellationToken,
+    ) -> Result<Option<SourceFiles>, EngineError> {
+        let workspace = request.workspace.clone();
+        let command = HostMessage::Inspect {
+            request: Box::new(request),
+        };
+        match self.run(&workspace, command, cancel, |_| {}).await? {
+            Terminal::Inspected(source) if source.valid() => Ok(Some(source)),
+            Terminal::Stopped => Ok(None),
+            _ => Err(EngineError::Protocol),
+        }
+    }
+
+    pub(crate) async fn share(
+        &self,
+        request: DownloadRequest,
+        output: PathBuf,
+        cancel: &CancellationToken,
+        mut report: impl FnMut(PeerStats),
+    ) -> Result<(), EngineError> {
+        let workspace = request.workspace.clone();
+        let command = HostMessage::Share {
+            request: Box::new(request),
+            output,
+        };
+        match self
+            .run(&workspace, command, cancel, |update| {
+                if let EngineUpdate::Task(TaskUpdate::PeerStats(stats)) = update {
+                    report(stats);
+                }
+            })
+            .await?
+        {
+            Terminal::Stopped => Ok(()),
+            Terminal::Completed(files) if files.is_empty() => Ok(()),
+            _ => Err(EngineError::Protocol),
+        }
+    }
+
+    async fn run(
+        &self,
+        workspace: &Path,
+        request: HostMessage,
+        cancel: &CancellationToken,
+        mut update: impl FnMut(EngineUpdate),
+    ) -> Result<Terminal, EngineError> {
+        if cancel.is_cancelled() {
+            return Ok(Terminal::Stopped);
+        }
         if !workspace.is_absolute() {
             return Err(EngineError::InvalidOutput);
         }
-        crate::cache::validate_directory(&workspace)?;
+        crate::cache::validate_directory(workspace)?;
 
         let installed_directory = self.executable.parent().ok_or_else(|| {
             io::Error::new(
@@ -134,12 +196,7 @@ impl PluginEngine {
         let outcome = outcome?;
         reaped?;
 
-        match outcome {
-            Terminal::Completed(files) => {
-                Ok(EngineOutcome::Completed(output_paths(&workspace, files)?))
-            }
-            Terminal::Stopped => Ok(EngineOutcome::Stopped),
-        }
+        Ok(outcome)
     }
 }
 
@@ -151,6 +208,7 @@ struct Channel {
 
 enum Terminal {
     Completed(Vec<String>),
+    Inspected(SourceFiles),
     Stopped,
 }
 
@@ -176,18 +234,16 @@ impl Channel {
         result
     }
 
-    async fn start(&mut self, request: DownloadRequest) -> Result<(), EngineError> {
+    async fn start(&mut self, request: HostMessage) -> Result<(), EngineError> {
         self.send(&HostMessage::Hello {
             version: ENGINE_PROTOCOL_VERSION,
             task_updates: true,
+            peer_stats: true,
         })
         .await?;
         match self.receive().await? {
             EngineMessage::Ready { version } if version == ENGINE_PROTOCOL_VERSION => {
-                self.send(&HostMessage::Download {
-                    request: Box::new(request),
-                })
-                .await
+                self.send(&request).await
             }
             _ => Err(EngineError::Protocol),
         }
@@ -202,6 +258,7 @@ impl Channel {
                 EngineMessage::Progress { progress } => update(EngineUpdate::Progress(progress)),
                 EngineMessage::TaskUpdate { update: task } => update(EngineUpdate::Task(task)),
                 EngineMessage::Completed { files } => return Ok(Terminal::Completed(files)),
+                EngineMessage::Inspected { source } => return Ok(Terminal::Inspected(source)),
                 EngineMessage::Stopped => return Ok(Terminal::Stopped),
                 EngineMessage::Failed { reason } => return Err(EngineError::Failed(reason)),
                 EngineMessage::Ready { .. } => return Err(EngineError::Protocol),
@@ -211,7 +268,7 @@ impl Channel {
 
     async fn transfer(
         &mut self,
-        request: DownloadRequest,
+        request: HostMessage,
         cancel: &CancellationToken,
         update: &mut impl FnMut(EngineUpdate),
     ) -> Result<Terminal, EngineError> {

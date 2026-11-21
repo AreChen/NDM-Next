@@ -25,6 +25,8 @@ pub struct PluginOptions {
     pub id: String,
     #[serde(default)]
     pub values: serde_json::Map<String, serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<ndm_plugin_sdk::SourceSelection>,
 }
 
 impl fmt::Debug for PluginOptions {

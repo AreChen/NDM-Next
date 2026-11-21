@@ -6,6 +6,7 @@ category or **Installed only**. The display language follows **Settings → Lang
 The market validates the downloaded package against its published SHA-256
 checksum. **Import plugin** also accepts a compatible local ZIP from a
 developer you trust. An engine package contains a native executable.
+The market shows downloaded bytes and the verification and installation stages.
 
 Open **Settings** on an installed plugin card to save default download options.
 They apply to new tasks, including downloads requested through Codex CLI.
@@ -21,6 +22,11 @@ selects an installed engine that supports the source. When several match,
 choose one in the **Download engine** menu. Choosing a plugin for a site
 saves it as that site's default. YouTube and BitTorrent have their own
 format and peer settings in the native form.
+
+For a torrent or magnet link, use **Choose files** to check the files you want.
+The task list shows connected peers and the share ratio. Open download details
+for the connected seeders, discovered peers, and upload statistics. Use
+**Start seeding** and **Stop seeding** in either window after download completes.
 
 In **Settings → AI integration**, install the Codex CLI MCP registration
 and Skill when you want them. Turn on **AI access** to make download tools
@@ -46,6 +52,7 @@ A plugin defines how it uses its thread setting.
 可按分类筛选，也可以选择 **仅已安装**。卡片与分类跟随应用语言。市场会校验安装包的
 SHA-256。也可以通过 **导入插件** 安装你信任的开发者提供的本地 ZIP。
 插件包包含可执行的下载引擎。
+从市场安装或更新时会显示已下载大小，以及校验与安装阶段。
 
 在已安装的插件卡片上打开 **设置**，可保存该插件的默认下载选项。默认值用于
 新任务，也适用于 Codex CLI 发起的下载。单次任务可单独修改选项。
@@ -57,6 +64,10 @@ YouTube 插件可优先保留原生封装，也可指定 MP4、WebM 或 MKV。�
 新建下载时粘贴链接或选择本地文件，NDM Next 会匹配已安装的引擎。
 有多个匹配项时，可在 **下载引擎** 中手动选择。为某个网站选择插件后，
 应用会记住这个选择。YouTube 和 BitTorrent 都在原生面板中提供自己的选项。
+
+添加 `.torrent` 或磁力链接时，点击 **选择下载文件** 勾选要保存的文件。
+任务列表显示连接数和分享率，独立下载窗口可展开查看做种节点、已发现节点
+及上传速度。下载完成后，两处均可 **开始做种** 或 **停止做种**。
 
 在 **设置 → AI 集成** 按需为 Codex CLI 安装 MCP 和 Skill，再开启
 **AI 接入**。AI 接入默认关闭。开启后，已安装插件会自动向 Codex

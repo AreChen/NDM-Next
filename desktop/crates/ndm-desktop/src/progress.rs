@@ -154,6 +154,22 @@ impl ProgressWindow {
                                     this.task = this.store.get(this.id).ok().flatten();
                                     cx.notify();
                                 }
+                                SchedulerEvent::SharingChanged { id, failed } if id == this.id => {
+                                    this.task = this.store.get(this.id).ok().flatten();
+                                    this.snapshot = this.scheduler.progress(id).or_else(|| {
+                                        this.task.as_ref().and_then(ndm_core::recover_task_progress)
+                                    });
+                                    if this.scheduler.sharing_status(id).is_some() {
+                                        this.begin_tracking(cx);
+                                    }
+                                    if failed {
+                                        this.notice = Some(this.text(
+                                            "做种未能继续。请检查文件和种子来源。",
+                                            "Seeding ended. Check the files and torrent source.",
+                                        ).into());
+                                    }
+                                    cx.notify();
+                                }
                                 SchedulerEvent::Finished {
                                     id: task_id,
                                     progress,
@@ -279,6 +295,16 @@ impl ProgressWindow {
                             cx.notify();
                             return this.tracking;
                         };
+                        if this
+                            .task
+                            .as_ref()
+                            .is_some_and(|task| task.state == TaskState::Completed)
+                            || this.scheduler.sharing_status(this.id).is_some()
+                        {
+                            this.snapshot = Some(snapshot);
+                            cx.notify();
+                            return true;
+                        }
                         if let Some(task) = &mut this.task {
                             task.state = TaskState::Running;
                         }
@@ -363,6 +389,31 @@ impl ProgressWindow {
                 }
                 cx.notify();
             });
+        })
+        .detach();
+    }
+
+    fn change_sharing(&mut self, start: bool, cx: &mut Context<Self>) {
+        let scheduler = self.scheduler.clone();
+        let runtime = self.runtime.clone();
+        let id = self.id;
+        self.notice = None;
+        cx.notify();
+        cx.spawn(async move |view, cx| {
+            if !matches!(
+                runtime
+                    .spawn(async move { scheduler.set_sharing(id, start).await })
+                    .await,
+                Ok(Ok(()))
+            ) {
+                let _ = view.update(cx, |this, cx| {
+                    this.notice = Some(this.text(
+                        "无法开始做种。请检查文件或停止其他做种任务。",
+                        "Could not start seeding. Check the files or stop another seeding task.",
+                    ).into());
+                    cx.notify();
+                });
+            }
         })
         .detach();
     }

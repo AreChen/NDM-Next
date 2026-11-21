@@ -9,12 +9,19 @@ pub(super) struct Market {
     pub(super) catalog: Option<Catalog>,
     pub(super) catalog_error: bool,
     pub(super) busy: bool,
+    pub(super) package: Option<PackageOperation>,
     entries: Vec<Entry>,
     visible: Arc<[usize]>,
     query: String,
     category: Option<String>,
     installed_only: bool,
     scroll: UniformListScrollHandle,
+}
+
+pub(super) struct PackageOperation {
+    pub(super) name: Option<Localized>,
+    pub(super) updating: bool,
+    pub(super) progress: tokio::sync::watch::Receiver<PackageProgress>,
 }
 
 struct Entry {
@@ -208,7 +215,9 @@ impl Desktop {
             )
             .child(self.market_filters(tone, cx));
 
-        if market.busy || market.catalog_error {
+        if let Some(package) = &market.package {
+            panel = panel.child(self.package_progress(package, tone));
+        } else if market.busy || market.catalog_error {
             let (icon, message) = if market.busy {
                 (
                     IconName::RefreshCw,
@@ -320,6 +329,94 @@ impl Desktop {
             );
         }
         panel.into_any_element()
+    }
+
+    fn package_progress(&self, package: &PackageOperation, tone: ThemeTone) -> Div {
+        use gpui_kit::component::spinner::Spinner;
+
+        let (phase, bytes) = match *package.progress.borrow() {
+            PackageProgress::Downloading { received, total } => (
+                self.text("正在下载", "Downloading"),
+                Some((received, total)),
+            ),
+            PackageProgress::Verifying => (self.text("正在校验安装包", "Verifying package"), None),
+            PackageProgress::Installing { extracted, total } => (
+                self.text("正在解包", "Extracting"),
+                Some((extracted, total)),
+            ),
+        };
+        let ratio = bytes.and_then(|(done, total)| {
+            total
+                .filter(|total| *total > 0)
+                .map(|total| (done as f32 / total as f32).clamp(0., 1.))
+        });
+        let description = match bytes {
+            Some((done, Some(total))) => {
+                format!("{phase} · {} / {}", format_bytes(done), format_bytes(total))
+            }
+            Some((done, None)) => format!("{phase} · {}", format_bytes(done)),
+            None => phase.into(),
+        };
+        let chinese = self.preferences.language == Language::Chinese;
+        let action = if package.updating {
+            self.text("更新", "Updating")
+        } else {
+            self.text("安装", "Installing")
+        };
+        let label = package.name.as_ref().map_or_else(
+            || self.text("导入插件", "Importing plugin").into(),
+            |name| format!("{action} {}", name.for_language(chinese)),
+        );
+        div()
+            .flex()
+            .flex_col()
+            .flex_shrink_0()
+            .gap_2()
+            .rounded_md()
+            .bg(rgb(tone.rgb(0x1c263b, 0xeaf0fa)))
+            .px_3()
+            .py_2()
+            .text_xs()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .when(ratio.is_none(), |row| row.child(Spinner::new().small()))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_color(rgb(tone.rgb(0xb4c2dc, 0x4f607b)))
+                            .child(description),
+                    )
+                    .when_some(ratio, |row, ratio| {
+                        row.child(format!("{:.0}%", (ratio * 100.).floor()))
+                    }),
+            )
+            .when_some(ratio, |panel, ratio| {
+                panel.child(
+                    div()
+                        .w_full()
+                        .h(px(4.))
+                        .rounded_full()
+                        .bg(rgb(tone.rgb(0x33415d, 0xdce1f0)))
+                        .child(
+                            div()
+                                .h_full()
+                                .w(relative(ratio))
+                                .rounded_full()
+                                .bg(rgb(0x8864ed)),
+                        ),
+                )
+            })
     }
 
     fn market_filters(&self, tone: ThemeTone, cx: &mut Context<Self>) -> Div {

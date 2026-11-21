@@ -83,6 +83,7 @@ mod tests {
         item.options = TaskOptions::Plugin(ndm_core::PluginOptions {
             id: "yt-dlp".into(),
             values: Default::default(),
+            selection: None,
         });
         assert_eq!(display_name(&item).as_deref(), Some("www.youtube.com"));
         item.engine_title = Some("测试视频".into());

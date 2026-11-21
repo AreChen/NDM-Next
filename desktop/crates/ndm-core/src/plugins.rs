@@ -9,7 +9,8 @@ use std::{
 use futures_util::StreamExt;
 pub use ndm_plugin_sdk::{
     Choice, DownloadTool, Localized, OptionControl, OptionField, OptionValueError, Panel,
-    PluginManifest, TextEditor, normalize_proxy_address, selected_text_values,
+    PluginManifest, SourceFiles, SourceSelection, TextEditor, normalize_proxy_address,
+    selected_text_values,
 };
 use ndm_plugin_sdk::{MANIFEST_FILE, valid_identifier, valid_package_path};
 use reqwest::Url;
@@ -23,6 +24,13 @@ pub const CATALOG_URL: &str =
 const JSON_LIMIT: u64 = 2 * 1024 * 1024;
 const PACKAGE_LIMIT: u64 = 384 * 1024 * 1024;
 const EXTRACT_LIMIT: u64 = 1024 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PackageProgress {
+    Downloading { received: u64, total: Option<u64> },
+    Verifying,
+    Installing { extracted: u64, total: Option<u64> },
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Catalog {
@@ -153,6 +161,32 @@ impl InstalledPlugin {
                 String::from_utf8(bytes).map_err(io::Error::other)
             })
             .transpose()
+    }
+
+    pub async fn inspect_source(
+        &self,
+        source: Url,
+        options: Map<String, Value>,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> crate::Result<Option<SourceFiles>> {
+        if !self.manifest.capabilities.inspect_files {
+            return Err(crate::Error::PluginOptions);
+        }
+        let temporary = tempfile::tempdir()?;
+        let request = ndm_plugin_sdk::DownloadRequest {
+            task_id: crate::TaskId::new_v4(),
+            source: crate::plugin_transfer::download_source(source, BTreeMap::new())?,
+            workspace: std::path::absolute(temporary.path())?,
+            suggested_filename: None,
+            expected_size: None,
+            download_threads: None,
+            options,
+            selection: None,
+        };
+        crate::plugin_engine::PluginEngine::new(self.executable())?
+            .inspect(request, cancel)
+            .await
+            .map_err(|_| crate::Error::PluginSource)
     }
 
     fn complete_options(&self, values: Map<String, Value>) -> io::Result<Map<String, Value>> {
@@ -424,6 +458,7 @@ impl PluginRegistry {
                 Ok(Some(crate::TaskOptions::Plugin(crate::PluginOptions {
                     id: plugin.manifest.id,
                     values,
+                    selection: None,
                 })))
             }
             None if values.is_empty() => Ok(None),
@@ -434,6 +469,15 @@ impl PluginRegistry {
     pub async fn download_and_install(
         &self,
         plugin: &CatalogPlugin,
+    ) -> io::Result<InstalledPlugin> {
+        self.download_and_install_with_progress(plugin, |_| {})
+            .await
+    }
+
+    pub async fn download_and_install_with_progress(
+        &self,
+        plugin: &CatalogPlugin,
+        mut report: impl FnMut(PackageProgress) + Send + 'static,
     ) -> io::Result<InstalledPlugin> {
         let artifact = plugin
             .artifact()
@@ -446,12 +490,11 @@ impl PluginRegistry {
             .map_err(network)?
             .error_for_status()
             .map_err(network)?;
-        if response
-            .content_length()
-            .is_some_and(|length| length > PACKAGE_LIMIT)
-        {
+        let total = response.content_length();
+        if total.is_some_and(|length| length > PACKAGE_LIMIT) {
             return Err(invalid("plugin package is too large"));
         }
+        report(PackageProgress::Downloading { received: 0, total });
         tokio::fs::create_dir_all(&self.root).await?;
         let pending = tempfile::NamedTempFile::new_in(&self.root)?;
         let mut file = tokio::fs::File::from_std(pending.reopen()?);
@@ -467,7 +510,12 @@ impl PluginRegistry {
             use tokio::io::AsyncWriteExt;
             file.write_all(&chunk).await?;
             digest.update(&chunk);
+            report(PackageProgress::Downloading {
+                received: length,
+                total,
+            });
         }
+        report(PackageProgress::Verifying);
         file.sync_all().await?;
         drop(file);
         if !format!("{:x}", digest.finalize()).eq_ignore_ascii_case(&artifact.sha256) {
@@ -476,19 +524,30 @@ impl PluginRegistry {
         let registry = self.clone();
         let id = plugin.id.clone();
         let version = plugin.version.clone();
-        tokio::task::spawn_blocking(move || registry.install(pending.path(), Some((&id, &version))))
-            .await
-            .map_err(io::Error::other)?
+        tokio::task::spawn_blocking(move || {
+            registry.install(pending.path(), Some((&id, &version)), report)
+        })
+        .await
+        .map_err(io::Error::other)?
     }
 
     pub fn import(&self, package: &Path) -> io::Result<InstalledPlugin> {
-        self.install(package, None)
+        self.import_with_progress(package, |_| {})
+    }
+
+    pub fn import_with_progress(
+        &self,
+        package: &Path,
+        report: impl FnMut(PackageProgress),
+    ) -> io::Result<InstalledPlugin> {
+        self.install(package, None, report)
     }
 
     fn install(
         &self,
         package: &Path,
         expected: Option<(&str, &Version)>,
+        report: impl FnMut(PackageProgress),
     ) -> io::Result<InstalledPlugin> {
         let file = fs::File::open(package)?;
         if file.metadata()?.len() > PACKAGE_LIMIT {
@@ -496,7 +555,7 @@ impl PluginRegistry {
         }
         fs::create_dir_all(&self.root)?;
         let staging = tempfile::tempdir_in(&self.root)?;
-        unpack(file, staging.path())?;
+        unpack(file, staging.path(), report)?;
         let manifest: PluginManifest = read_json(&staging.path().join(MANIFEST_FILE))?;
         manifest.validate()?;
         if expected.is_some_and(|(id, version)| manifest.id != id || &manifest.version != version) {
@@ -611,12 +670,29 @@ fn bounded_file(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn unpack(file: fs::File, directory: &Path) -> io::Result<()> {
+fn unpack(
+    file: fs::File,
+    directory: &Path,
+    mut report: impl FnMut(PackageProgress),
+) -> io::Result<()> {
     let mut archive = zip::ZipArchive::new(file).map_err(io::Error::other)?;
     if archive.is_empty() || archive.len() > 2048 {
         return Err(invalid("invalid plugin archive file count"));
     }
+    let total = archive
+        .decompressed_size()
+        .map(|bytes| {
+            if bytes > u128::from(EXTRACT_LIMIT) {
+                Err(invalid("expanded plugin package is too large"))
+            } else {
+                Ok(bytes as u64)
+            }
+        })
+        .transpose()?;
+    let mut extracted = 0u64;
+    report(PackageProgress::Installing { extracted, total });
     let mut size = 0u64;
+    let mut buffer = [0; 64 * 1024];
     let mut paths = HashSet::new();
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).map_err(io::Error::other)?;
@@ -645,11 +721,22 @@ fn unpack(file: fs::File, directory: &Path) -> io::Result<()> {
         fs::create_dir_all(parent)?;
         let mut output = fs::File::create_new(&path)?;
         let expected = entry.size();
-        if io::copy(
-            &mut Read::by_ref(&mut entry).take(expected + 1),
-            &mut output,
-        )? != expected
-        {
+        let mut limited = Read::by_ref(&mut entry).take(expected + 1);
+        let mut written = 0;
+        loop {
+            let count = limited.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            written += count as u64;
+            if written > expected {
+                return Err(invalid("invalid expanded plugin file size"));
+            }
+            output.write_all(&buffer[..count])?;
+            extracted += count as u64;
+            report(PackageProgress::Installing { extracted, total });
+        }
+        if written != expected {
             return Err(invalid("invalid expanded plugin file size"));
         }
         output.flush()?;
@@ -677,7 +764,7 @@ fn invalid(reason: &'static str) -> io::Error {
 
 #[cfg(test)]
 mod tests {
-    use super::{Catalog, Map, Path, PluginRegistry, Url, Value};
+    use super::{Catalog, Map, PackageProgress, Path, PluginRegistry, Url, Value};
     use crate::TaskOptions;
     use serde_json::json;
     use std::{fs::File, io::Write};
@@ -740,7 +827,17 @@ mod tests {
             {"key": "token", "kind": "text", "max_length": 128, "label": {"en": "Token"}}
         ]);
         write_package(&archive, &manifest);
-        let original = registry.import(&archive).unwrap();
+        let mut reports = Vec::new();
+        let original = registry
+            .import_with_progress(&archive, |progress| reports.push(progress))
+            .unwrap();
+        assert!(matches!(
+            reports.first(),
+            Some(PackageProgress::Installing { extracted: 0, .. })
+        ));
+        assert!(
+            matches!(reports.last(), Some(PackageProgress::Installing { extracted, total: Some(total) }) if extracted == total && *total > 0)
+        );
         let source = Url::parse("https://example.test/example").unwrap();
         let defaults = |pieces| Map::from_iter([("pieces".into(), json!(pieces))]);
         let resolved = |values| {

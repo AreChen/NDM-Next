@@ -4,10 +4,10 @@ mod manifest;
 mod worker;
 
 pub use manifest::*;
-pub use worker::{Worker, serve};
+pub use worker::{Engine, Worker, serve, serve_engine};
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     io::{self, BufRead, Read, Write},
     num::NonZeroU32,
     path::PathBuf,
@@ -19,6 +19,8 @@ pub const ENGINE_PROTOCOL_VERSION: u32 = 1;
 pub const ENGINE_ARGUMENT: &str = "--ndm-engine";
 pub const MEDIA_TOOLS_ENV: &str = "NDM_MEDIA_TOOLS";
 pub const MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
+/// Optional engine-owned state that can be retained after publishing a completed transfer.
+pub const ENGINE_STATE_DIRECTORY: &str = "state";
 
 // Sources and options can contain credentials. Keep them out of Debug output.
 #[derive(Clone, Serialize, Deserialize)]
@@ -44,6 +46,57 @@ pub struct DownloadRequest {
     pub download_threads: Option<NonZeroU32>,
     #[serde(default)]
     pub options: serde_json::Map<String, serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<SourceSelection>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceSelection {
+    /// The immutable source revision returned by Inspect.
+    pub revision: String,
+    pub file_ids: Vec<u32>,
+}
+
+impl SourceSelection {
+    pub fn valid(&self) -> bool {
+        valid_revision(&self.revision)
+            && !self.file_ids.is_empty()
+            && self.file_ids.windows(2).all(|pair| pair[0] < pair[1])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SourceFiles {
+    pub revision: String,
+    pub files: Vec<SourceFile>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SourceFile {
+    pub id: u32,
+    /// A display path, never opened by the host.
+    pub path: String,
+    pub size: u64,
+}
+
+impl SourceFiles {
+    pub fn valid(&self) -> bool {
+        let mut ids = HashSet::new();
+        valid_revision(&self.revision)
+            && !self.files.is_empty()
+            && self.files.iter().all(|file| {
+                ids.insert(file.id)
+                    && !file.path.trim().is_empty()
+                    && file.path.len() <= 4096
+                    && !file.path.chars().any(char::is_control)
+            })
+    }
+}
+
+fn valid_revision(revision: &str) -> bool {
+    !revision.is_empty()
+        && revision.len() <= 128
+        && revision.bytes().all(|ch| ch.is_ascii_graphic())
 }
 
 #[derive(Serialize, Deserialize)]
@@ -53,9 +106,18 @@ pub enum HostMessage {
         version: u32,
         #[serde(default)]
         task_updates: bool,
+        #[serde(default)]
+        peer_stats: bool,
     },
     Download {
         request: Box<DownloadRequest>,
+    },
+    Inspect {
+        request: Box<DownloadRequest>,
+    },
+    Share {
+        request: Box<DownloadRequest>,
+        output: PathBuf,
     },
     Stop,
 }
@@ -67,6 +129,27 @@ pub struct TransferProgress {
     pub total: Option<u64>,
     /// Network bytes transferred since this worker started.
     pub transferred: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeerStats {
+    pub connected: u32,
+    pub seeders: u32,
+    pub connecting: u32,
+    pub queued: u32,
+    pub known: u32,
+    /// Upload bytes since this worker started. The host accumulates attempts.
+    pub uploaded: u64,
+    pub upload_bytes_per_second: u64,
+}
+
+impl PeerStats {
+    pub fn inactive(&mut self) {
+        *self = Self {
+            uploaded: self.uploaded,
+            ..Self::default()
+        };
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,6 +170,7 @@ pub enum FailureReason {
 pub enum TaskUpdate {
     Title { title: String },
     Finalizing,
+    PeerStats(PeerStats),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -104,6 +188,9 @@ pub enum EngineMessage {
     Completed {
         /// Regular files in the workspace, using relative slash-separated paths.
         files: Vec<String>,
+    },
+    Inspected {
+        source: SourceFiles,
     },
     Stopped,
     Failed {

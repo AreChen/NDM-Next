@@ -41,11 +41,21 @@ pub struct PluginManifest {
     pub inputs: Vec<InputMatcher>,
     pub limits: EngineLimits,
     #[serde(default)]
+    pub capabilities: EngineCapabilities,
+    #[serde(default)]
     pub options: Vec<OptionField>,
     #[serde(default)]
     pub panel: Option<String>,
     #[serde(default)]
     pub tools: Vec<DownloadTool>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+pub struct EngineCapabilities {
+    #[serde(default)]
+    pub inspect_files: bool,
+    #[serde(default)]
+    pub share_completed: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

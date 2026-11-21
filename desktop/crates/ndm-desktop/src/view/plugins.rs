@@ -2,8 +2,9 @@ use super::*;
 use crate::motion::SegmentedControl;
 use gpui_kit::component::Disableable;
 use ndm_core::plugins::{
-    Catalog, CatalogPlugin, InstalledPlugin, OptionControl, OptionField, OptionValueError, Panel,
-    PluginRegistry, TextEditor, built_in_source, normalize_proxy_address, parse_source,
+    Catalog, CatalogPlugin, InstalledPlugin, OptionControl, OptionField, OptionValueError,
+    PackageProgress, Panel, PluginRegistry, TextEditor, built_in_source, normalize_proxy_address,
+    parse_source,
 };
 use ndm_host::harness::{CodexCli, Harness, Status, Target};
 use serde_json::{Map, Value, json};
@@ -11,6 +12,7 @@ use serde_json::{Map, Value, json};
 mod defaults;
 mod market;
 mod option_editors;
+mod source_picker;
 pub(super) use market::market_search_placeholder;
 
 #[derive(Default)]
@@ -33,6 +35,7 @@ struct Draft {
     ready: bool,
     panel_error: bool,
     fields: Vec<Field>,
+    files: source_picker::Preview,
 }
 
 struct Field {
@@ -103,6 +106,7 @@ impl Desktop {
                 match results {
                     Ok((installed, catalog)) => {
                         if let Ok(installed) = installed {
+                            this.scheduler.update_plugin_capabilities(&installed);
                             market.installed = installed;
                         }
                         match catalog {
@@ -124,23 +128,90 @@ impl Desktop {
         if self.integration.market.busy || matches!(self.update_state, UpdateState::Installing) {
             return;
         }
-        self.integration.market.busy = true;
+        let market = &mut self.integration.market;
+        market.busy = true;
+        let initial = if matches!(&action, PackageAction::Import(_)) {
+            PackageProgress::Installing {
+                extracted: 0,
+                total: None,
+            }
+        } else {
+            PackageProgress::Downloading {
+                received: 0,
+                total: None,
+            }
+        };
+        let (reports, progress) = tokio::sync::watch::channel(initial);
+        let channel = progress.clone();
+        market.package = match &action {
+            PackageAction::Install(plugin) => Some(market::PackageOperation {
+                name: Some(plugin.name.clone()),
+                updating: market
+                    .installed
+                    .iter()
+                    .any(|item| item.manifest.id == plugin.id),
+                progress,
+            }),
+            PackageAction::Import(_) => Some(market::PackageOperation {
+                name: None,
+                updating: false,
+                progress,
+            }),
+            PackageAction::Remove(_) => None,
+        };
+        if market.package.is_some() {
+            cx.spawn(async move |view, cx| {
+                loop {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(125))
+                        .await;
+                    let keep_polling = view.update(cx, |this, cx| {
+                        let Some(package) = this
+                            .integration
+                            .market
+                            .package
+                            .as_mut()
+                            .filter(|package| package.progress.same_channel(&channel))
+                        else {
+                            return false;
+                        };
+                        if matches!(package.progress.has_changed(), Ok(true)) {
+                            let _ = *package.progress.borrow_and_update();
+                            cx.notify();
+                        }
+                        true
+                    });
+                    if !keep_polling.unwrap_or(false) {
+                        break;
+                    }
+                }
+            })
+            .detach();
+        }
         let registry = self.registry();
         let scheduler = self.scheduler.clone();
         let runtime = self.runtime.clone();
         cx.spawn(async move |view, cx| {
             let result = runtime.spawn(async move {
+                let report = move |progress| { reports.send_replace(progress); };
                 match action {
-                    PackageAction::Install(plugin) => registry.download_and_install(&plugin).await.map(|_| ())?,
-                    PackageAction::Import(path) => { registry.import(&path)?; }
+                    PackageAction::Install(plugin) => {
+                        registry.download_and_install_with_progress(&plugin, report).await?;
+                    }
+                    PackageAction::Import(path) => {
+                        let registry = registry.clone();
+                        tokio::task::spawn_blocking(move || registry.import_with_progress(&path, report)).await.map_err(std::io::Error::other)??;
+                    }
                     PackageAction::Remove(id) => scheduler.uninstall_plugin(&id).map_err(std::io::Error::other)?,
                 }
                 registry.list()
             }).await;
             let _ = view.update(cx, |this, cx| {
                 this.integration.market.busy = false;
+                this.integration.market.package = None;
                 match result {
                     Ok(Ok(installed)) => {
+                        this.scheduler.update_plugin_capabilities(&installed);
                         this.integration.market.installed = installed;
                         this.integration.market.rebuild();
                         this.integration.draft = None;
@@ -148,8 +219,8 @@ impl Desktop {
                         this.set_notice(this.text("插件已更新。", "Plugin changes saved.").into(), cx);
                     }
                     _ => this.set_notice(this.text(
-                        "无法完成插件操作。请检查安装包，或先暂停并移除该插件的排队任务。",
-                        "Could not change the plugin. Check the package or clear its active and queued tasks.",
+                        "无法完成插件操作。请检查安装包，或暂停下载、清除排队任务并停止做种后重试。",
+                        "Could not change the plugin. Check the package or pause its downloads, clear queued tasks, and stop seeding.",
                     ).into(), cx),
                 }
                 cx.notify();
@@ -245,6 +316,7 @@ impl Desktop {
             ready: false,
             panel_error: false,
             fields: Vec::new(),
+            files: Default::default(),
         });
         self.integration.draft_work = Some(cx.spawn_in(window, async move |view, cx| {
             if !manual {
@@ -297,6 +369,7 @@ impl Desktop {
                     ready: true,
                     panel_error,
                     fields,
+                    files: Default::default(),
                 });
                 cx.notify();
             });
@@ -334,9 +407,11 @@ impl Desktop {
             .manifest
             .complete_options(values)
             .map_err(|_| self.text("请检查插件选项。", "Check the plugin options."))?;
+        let selection = self.file_selection(draft)?;
         Ok(Some(TaskOptions::Plugin(ndm_core::PluginOptions {
             id: id.clone(),
             values,
+            selection,
         })))
     }
 
@@ -498,7 +573,11 @@ impl Desktop {
                     .gap_2()
                     .text_sm()
                     .child(self.text("下载引擎", "Download engine"))
-                    .child(engine),
+                    .child(engine)
+                    .when(
+                        current.is_some_and(|plugin| plugin.manifest.capabilities.inspect_files),
+                        |row| row.child(self.source_picker(draft, cx)),
+                    ),
             );
         if draft.panel_error {
             panel = panel.child(div().text_xs().child(self.text(

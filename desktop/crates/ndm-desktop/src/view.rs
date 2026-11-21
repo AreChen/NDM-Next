@@ -387,6 +387,18 @@ impl Desktop {
                                     if this.seen_tasks.insert(id) { this.show_progress(id, cx); }
                                 }
                                 SchedulerEvent::TaskTitleChanged(_) => {}
+                                SchedulerEvent::SharingChanged { id, failed } => {
+                                    this.retained_progress.remove(&id);
+                                    if failed {
+                                        this.set_notice(this.text(
+                                            "做种未能继续。请检查已下载文件和种子来源。",
+                                            "Seeding ended. Check the downloaded files and torrent source.",
+                                        ).into(), cx);
+                                    }
+                                    if this.scheduler.sharing_status(id).is_some() {
+                                        this.track_progress(cx);
+                                    }
+                                }
                                 SchedulerEvent::SftpHostKeyRequired { .. } => {
                                     this.set_notice(this.text("SFTP 服务器密钥需要核对。", "Check the SFTP server key before trusting it.").into(), cx);
                                 },
@@ -1569,6 +1581,7 @@ impl Desktop {
                     this.selection_anchor = None;
                     this.content_motion = Default::default();
                     this.new_download_open = false;
+                    this.cancel_file_inspection();
                     this.clear_notice();
                 }
                 this.section = section;
@@ -1749,6 +1762,8 @@ impl Render for Desktop {
                             if this.new_download_open {
                                 let source = this.url_input.read(cx).value().trim().to_owned();
                                 this.update_draft(source, window, cx);
+                            } else {
+                                this.cancel_file_inspection();
                             }
                             cx.notify();
                         })),

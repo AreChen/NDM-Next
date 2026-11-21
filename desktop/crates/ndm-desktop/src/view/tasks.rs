@@ -1,7 +1,31 @@
 use super::*;
-use gpui_kit::component::menu::PopupMenuItem;
+use gpui_kit::component::{Disableable, menu::PopupMenuItem};
 
 impl Desktop {
+    fn change_sharing(&mut self, id: TaskId, start: bool, cx: &mut Context<Self>) {
+        if matches!(self.update_state, UpdateState::Installing) {
+            return;
+        }
+        let scheduler = self.scheduler.clone();
+        let runtime = self.runtime.clone();
+        cx.spawn(async move |view, cx| {
+            if !matches!(
+                runtime
+                    .spawn(async move { scheduler.set_sharing(id, start).await })
+                    .await,
+                Ok(Ok(()))
+            ) {
+                let _ = view.update(cx, |this, cx| {
+                    this.set_notice(this.text(
+                    "无法开始做种。请检查文件或停止其他做种任务。",
+                    "Could not start seeding. Check the files or stop another seeding task.",
+                ).into(), cx)
+                });
+            }
+        })
+        .detach();
+    }
+
     fn download_again(&mut self, id: TaskId, cx: &mut Context<Self>) {
         if matches!(self.update_state, UpdateState::Installing) {
             return;
@@ -43,6 +67,8 @@ impl Desktop {
     ) -> impl IntoElement {
         let id = task.id;
         let state = task.state;
+        let sharing = self.scheduler.sharing_status(id);
+        let can_share = self.scheduler.can_share(task);
         let name = crate::filenames::display_name(task)
             .unwrap_or_else(|| self.text("未命名下载", "Untitled download").into());
         let host = reqwest::Url::parse(&task.request.url)
@@ -101,6 +127,7 @@ impl Desktop {
         } else {
             None
         };
+        let zh = self.preferences.language == Language::Chinese;
         let status = match state {
             TaskState::Prepared => self.text("待确认", "Pending"),
             TaskState::Queued => self.text("等待中", "Queued"),
@@ -111,7 +138,9 @@ impl Desktop {
                 _ => self.text("下载中", "Downloading"),
             },
             TaskState::Paused => self.text("已暂停", "Paused"),
-            TaskState::Completed => self.text("已完成", "Completed"),
+            TaskState::Completed => sharing.map_or(self.text("已完成", "Completed"), |status| {
+                crate::peer_metrics::status(status, zh)
+            }),
             TaskState::Failed => self.text("失败", "Failed"),
         };
         let palette = |dark| match (state, dark) {
@@ -152,7 +181,6 @@ impl Desktop {
         let can_edit = matches!(state, TaskState::Paused | TaskState::Failed)
             && reqwest::Url::parse(&task.request.url)
                 .is_ok_and(|url| matches!(url.scheme(), "http" | "https"));
-        let zh = self.preferences.language == Language::Chinese;
         let download_url = task.request.url.clone();
         let view = cx.entity().downgrade();
         let more = crate::chrome::icon_button(
@@ -274,6 +302,11 @@ impl Desktop {
             }
             TaskState::Paused => Some((IconName::Play, self.text("继续", "Resume"))),
             TaskState::Failed => Some((IconName::RotateCw, self.text("重试", "Retry"))),
+            TaskState::Completed if can_share => Some(if sharing.is_some() {
+                (IconName::Square, self.text("停止做种", "Stop seeding"))
+            } else {
+                (IconName::Play, self.text("开始做种", "Start seeding"))
+            }),
             _ => None,
         };
         let mut metrics = div()
@@ -325,10 +358,43 @@ impl Desktop {
             metrics = metrics.child(div().text_xs().text_color(rgb(accent)).child(
                 if state == TaskState::Failed {
                     self.text("可重试或更换链接", "Retry or change link").into()
+                } else if sharing == Some(ndm_core::SharingStatus::Sharing) {
+                    let speed = progress
+                        .as_ref()
+                        .and_then(|progress| progress.peers)
+                        .map_or(0, |peers| peers.upload_bytes_per_second);
+                    format!("{} {}/s", self.text("上传", "Up"), format_bytes(speed))
                 } else {
                     size.clone()
                 },
             ));
+        }
+        if let Some(snapshot) = &progress
+            && let Some(peers) = snapshot.peers
+        {
+            let details = crate::peer_metrics::details(peers, snapshot.downloaded, zh)
+                .into_iter()
+                .map(|(label, value)| format!("{label} {value}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let ratio = crate::peer_metrics::ratio(peers, snapshot.downloaded);
+            metrics = metrics.child(
+                Button::new(SharedString::from(format!("peer-metrics-{id}")))
+                    .ghost()
+                    .small()
+                    .h(px(17.))
+                    .px_0()
+                    .label(format!(
+                        "{} {} · {} {ratio}",
+                        self.text("节点", "Peers"),
+                        peers.connected,
+                        self.text("分享率", "Ratio")
+                    ))
+                    .text_size(px(11.))
+                    .text_color(rgb(muted))
+                    .tooltip(details)
+                    .on_click(cx.listener(move |this, _, _, cx| this.show_progress(id, cx))),
+            );
         }
         div().h(px(58.)).pb(px(6.)).child(
             div()
@@ -430,9 +496,14 @@ impl Desktop {
                                     icon,
                                     label,
                                 )
+                                .disabled(sharing == Some(ndm_core::SharingStatus::Stopping))
                                 .on_click(cx.listener(
                                     move |this, _, _, cx| {
-                                        this.task_action(id, state);
+                                        if can_share {
+                                            this.change_sharing(id, sharing.is_none(), cx);
+                                        } else {
+                                            this.task_action(id, state);
+                                        }
                                         cx.notify();
                                     },
                                 )),
