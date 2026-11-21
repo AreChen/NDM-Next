@@ -1275,36 +1275,37 @@ impl Desktop {
     }
 
     fn open_task_path(&mut self, id: TaskId, file: bool, cx: &mut Context<Self>) {
-        let result = self
-            .tasks
-            .iter()
-            .find(|task| task.id == id)
-            .ok_or_else(|| std::io::Error::other("task not found"))
-            .and_then(|task| {
+        let task = self.tasks.iter().find(|task| task.id == id).cloned();
+        crate::files::open_after_click(
+            cx,
+            move || {
+                let task = task
+                    .as_ref()
+                    .ok_or_else(|| std::io::Error::other("task not found"))?;
                 if file {
                     crate::files::open_file(task)
                 } else {
                     crate::files::open_folder(task)
                 }
-            });
-        if result.is_err() {
-            self.set_notice(
-                if file {
-                    self.text(
-                        "无法打开文件，请检查文件是否存在。",
-                        "Could not open the file. Check that it still exists.",
-                    )
-                } else {
-                    self.text(
-                        "无法打开下载文件夹。",
-                        "Could not open the download folder.",
-                    )
+            },
+            move |this, result, cx| {
+                if result.is_err() {
+                    let message = if file {
+                        this.text(
+                            "无法打开文件，请检查文件是否存在。",
+                            "Could not open the file. Check that it still exists.",
+                        )
+                    } else {
+                        this.text(
+                            "无法打开下载文件夹。",
+                            "Could not open the download folder.",
+                        )
+                    };
+                    this.set_notice(message.into(), cx);
+                    cx.notify();
                 }
-                .into(),
-                cx,
-            );
-            cx.notify();
-        }
+            },
+        );
     }
     fn save_replacement_url(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(id) = self.editing_url else { return };

@@ -1,3 +1,4 @@
+use gpui_kit::Context;
 use ndm_core::{Task, TaskOptions, TaskState};
 use std::{
     io,
@@ -57,6 +58,20 @@ fn delete_output_with(task: &Task, remove: impl FnOnce(&Path) -> io::Result<()>)
 
 pub(crate) fn delete_output(task: &Task) -> io::Result<()> {
     delete_output_with(task, recycle)
+}
+
+pub(crate) fn open_after_click<T: 'static>(
+    cx: &Context<T>,
+    open: impl FnOnce() -> io::Result<()> + 'static,
+    on_result: impl FnOnce(&mut T, io::Result<()>, &mut Context<T>) + 'static,
+) {
+    cx.spawn(async move |view, cx| {
+        // The Windows Shell can dispatch messages while opening a path.
+        // Run it on the UI thread after the click's GPUI update has returned.
+        let result = open();
+        let _ = view.update(cx, |this, cx| on_result(this, result, cx));
+    })
+    .detach();
 }
 
 pub(crate) fn open_file(task: &Task) -> io::Result<()> {
@@ -198,6 +213,7 @@ fn recycle(path: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui_kit::{TestAppContext, prelude::*};
     use ndm_core::{NewTask, TaskOptions};
     use std::collections::BTreeMap;
 
@@ -222,6 +238,26 @@ mod tests {
             size_verified: Some(true),
             progress: None,
         }
+    }
+
+    #[gpui_kit::test]
+    fn opening_a_path_releases_the_app_borrow_before_dispatching(cx: &mut TestAppContext) {
+        let view = cx.new(|_| None);
+        let app = cx.to_async();
+        view.update(cx, |result, cx| {
+            open_after_click(
+                cx,
+                move || app.update(|_| Err(io::ErrorKind::NotFound.into())),
+                |result, opened, _| *result = opened.err().map(|error| error.kind()),
+            );
+            assert_eq!(*result, None);
+        });
+
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(cx, |result, _| *result),
+            Some(io::ErrorKind::NotFound)
+        );
     }
 
     #[test]

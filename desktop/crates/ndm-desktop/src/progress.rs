@@ -469,37 +469,49 @@ impl ProgressWindow {
     }
 
     fn open_folder(&mut self, cx: &mut Context<Self>) {
-        if self
-            .task
-            .as_ref()
-            .is_none_or(|task| files::open_folder(task).is_err())
-        {
-            self.notice = Some(
-                self.text(
-                    "无法打开下载文件夹。",
-                    "Could not open the download folder.",
-                )
-                .into(),
-            );
-            cx.notify();
-        }
+        self.open_path(
+            files::open_folder,
+            (
+                "无法打开下载文件夹。",
+                "Could not open the download folder.",
+            ),
+            cx,
+        );
     }
 
     fn open_file(&mut self, cx: &mut Context<Self>) {
-        if self
-            .task
-            .as_ref()
-            .is_none_or(|task| files::open_file(task).is_err())
-        {
-            self.notice = Some(
-                self.text(
-                    "无法打开文件，请检查文件是否存在。",
-                    "Could not open the file. Check that it still exists.",
-                )
-                .into(),
-            );
-            cx.notify();
-        }
+        self.open_path(
+            files::open_file,
+            (
+                "无法打开文件，请检查文件是否存在。",
+                "Could not open the file. Check that it still exists.",
+            ),
+            cx,
+        );
+    }
+
+    fn open_path(
+        &self,
+        open: fn(&Task) -> std::io::Result<()>,
+        (chinese, english): (&'static str, &'static str),
+        cx: &Context<Self>,
+    ) {
+        let task = self.task.clone();
+        files::open_after_click(
+            cx,
+            move || {
+                let task = task
+                    .as_ref()
+                    .ok_or_else(|| std::io::Error::other("task not found"))?;
+                open(task)
+            },
+            move |this, result, cx| {
+                if result.is_err() {
+                    this.notice = Some(this.text(chinese, english).into());
+                    cx.notify();
+                }
+            },
+        );
     }
 }
 

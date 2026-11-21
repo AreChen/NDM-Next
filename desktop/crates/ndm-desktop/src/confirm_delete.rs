@@ -124,9 +124,15 @@ impl Render for ConfirmDelete {
                         self.folder_error,
                         cx.listener(|this, _, _, cx| {
                             if let Some(preview) = &this.preview {
-                                this.folder_error =
-                                    crate::files::open_directory(&preview.directory).is_err();
-                                cx.notify();
+                                let directory = preview.directory.clone();
+                                crate::files::open_after_click(
+                                    cx,
+                                    move || crate::files::open_directory(&directory),
+                                    |this, result, cx| {
+                                        this.folder_error = result.is_err();
+                                        cx.notify();
+                                    },
+                                );
                             }
                         }),
                     )
