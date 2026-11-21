@@ -326,12 +326,9 @@ impl Desktop {
             }
             let result = runtime
                 .spawn_blocking(move || {
-                    let candidates = registry.candidates(&parsed).unwrap_or_default();
-                    let selected = selection.unwrap_or_else(|| {
-                        candidates
-                            .first()
-                            .map(|candidate| candidate.manifest.id.clone())
-                    });
+                    let (candidates, automatic) =
+                        registry.draft_candidates(&parsed).unwrap_or_default();
+                    let selected = selection.unwrap_or(automatic);
                     let (fields, failed) = match selected
                         .as_ref()
                         .and_then(|id| candidates.iter().find(|plugin| &plugin.manifest.id == id))
@@ -519,7 +516,14 @@ impl Desktop {
             .find(|plugin| selected.as_ref() == Some(&plugin.manifest.id));
         let caption = current
             .map(|plugin| plugin.manifest.name.for_language(chinese).to_owned())
-            .unwrap_or_else(|| self.text("内置引擎", "Built-in engine").to_owned());
+            .unwrap_or_else(|| {
+                if draft.native {
+                    self.text("内置引擎", "Built-in engine")
+                } else {
+                    self.text("选择引擎", "Choose engine")
+                }
+                .to_owned()
+            });
         let mut choices: Vec<_> = draft
             .candidates
             .iter()

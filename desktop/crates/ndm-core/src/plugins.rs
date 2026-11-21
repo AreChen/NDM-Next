@@ -12,7 +12,7 @@ pub use ndm_plugin_sdk::{
     PluginManifest, SourceFiles, SourceSelection, TextEditor, normalize_proxy_address,
     selected_text_values,
 };
-use ndm_plugin_sdk::{MANIFEST_FILE, valid_identifier, valid_package_path};
+use ndm_plugin_sdk::{InputMatcher, MANIFEST_FILE, valid_identifier, valid_package_path};
 use reqwest::Url;
 use semver::Version;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -360,31 +360,64 @@ impl PluginRegistry {
 
     /// The most specific matcher wins. A saved site choice has precedence.
     pub fn candidates(&self, source: &Url) -> io::Result<Vec<InstalledPlugin>> {
+        Ok(self
+            .matching_plugins(source, false)?
+            .into_iter()
+            .map(|(_, plugin)| plugin)
+            .collect())
+    }
+
+    /// Offer explicitly selectable engines along with the automatic choice.
+    pub fn draft_candidates(
+        &self,
+        source: &Url,
+    ) -> io::Result<(Vec<InstalledPlugin>, Option<String>)> {
+        let candidates = self.matching_plugins(source, true)?;
+        let selected = candidates
+            .first()
+            .filter(|(automatic, _)| *automatic)
+            .map(|(_, plugin)| plugin.manifest.id.clone());
+        Ok((
+            candidates.into_iter().map(|(_, plugin)| plugin).collect(),
+            selected,
+        ))
+    }
+
+    fn matching_plugins(
+        &self,
+        source: &Url,
+        include_manual: bool,
+    ) -> io::Result<Vec<(bool, InstalledPlugin)>> {
         let snapshot = self.load()?;
         let host = source.host_str().map(|value| value.trim_end_matches('.'));
         let path = source.path().to_ascii_lowercase();
+        let scheme = source.scheme();
         let preferred = host.and_then(|host| snapshot.preferred.get(host));
         let mut matches = Vec::new();
         for (id, revision) in &snapshot.active {
             let Ok(plugin) = self.installed(id, revision, &snapshot) else {
                 continue;
             };
-            if let Some(score) = plugin
-                .manifest
-                .inputs
-                .iter()
-                .filter_map(|input| input.score(source.scheme(), host, &path))
-                .max()
-            {
-                matches.push((preferred == Some(id), score, plugin));
+            let automatic = input_score(&plugin.manifest.inputs, scheme, host, &path);
+            let score = automatic.or_else(|| {
+                include_manual
+                    .then(|| input_score(&plugin.manifest.manual_inputs, scheme, host, &path))
+                    .flatten()
+            });
+            if let Some(score) = score {
+                matches.push((automatic.is_some(), preferred == Some(id), score, plugin));
             }
         }
         matches.sort_by(|a, b| {
             b.0.cmp(&a.0)
                 .then(b.1.cmp(&a.1))
-                .then(a.2.manifest.id.cmp(&b.2.manifest.id))
+                .then(b.2.cmp(&a.2))
+                .then(a.3.manifest.id.cmp(&b.3.manifest.id))
         });
-        Ok(matches.into_iter().map(|(_, _, plugin)| plugin).collect())
+        Ok(matches
+            .into_iter()
+            .map(|(automatic, _, _, plugin)| (automatic, plugin))
+            .collect())
     }
 
     pub fn remember(&self, source: &Url, id: &str) -> io::Result<()> {
@@ -393,12 +426,23 @@ impl PluginRegistry {
         };
         let _lock = self.mutation_lock()?;
         let mut snapshot = self.load()?;
-        if !snapshot.active.contains_key(id) {
-            return Err(invalid("plugin is no longer installed"));
+        let revision = snapshot
+            .active
+            .get(id)
+            .ok_or_else(|| invalid("plugin is no longer installed"))?;
+        let plugin = self.installed(id, revision, &snapshot)?;
+        let host = host.trim_end_matches('.');
+        if input_score(
+            &plugin.manifest.inputs,
+            source.scheme(),
+            Some(host),
+            &source.path().to_ascii_lowercase(),
+        )
+        .is_none()
+        {
+            return Ok(());
         }
-        snapshot
-            .preferred
-            .insert(host.trim_end_matches('.').to_owned(), id.to_owned());
+        snapshot.preferred.insert(host.to_owned(), id.to_owned());
         self.save(&mut snapshot)
     }
 
@@ -442,15 +486,17 @@ impl PluginRegistry {
         engine: Option<&str>,
         values: Map<String, Value>,
     ) -> io::Result<Option<crate::TaskOptions>> {
-        let candidates = self.candidates(source)?;
+        let mut candidates = self
+            .matching_plugins(source, engine.is_some())?
+            .into_iter()
+            .map(|(_, plugin)| plugin);
         let selected = match engine {
             Some(engine) => Some(
                 candidates
-                    .into_iter()
                     .find(|plugin| plugin.manifest.id == engine)
                     .ok_or_else(|| invalid("plugin cannot handle source"))?,
             ),
-            None => candidates.into_iter().next(),
+            None => candidates.next(),
         };
         match selected {
             Some(plugin) => {
@@ -609,6 +655,18 @@ impl PluginRegistry {
         self.save(&mut snapshot)?;
         fs::remove_dir_all(self.root.join(id))
     }
+}
+
+fn input_score(
+    inputs: &[InputMatcher],
+    scheme: &str,
+    host: Option<&str>,
+    path: &str,
+) -> Option<u8> {
+    inputs
+        .iter()
+        .filter_map(|input| input.score(scheme, host, path))
+        .max()
 }
 
 fn validated_defaults(
@@ -805,6 +863,63 @@ mod tests {
             .unwrap();
         zip.write_all(b"fixture").unwrap();
         zip.finish().unwrap();
+    }
+
+    #[test]
+    fn manual_engine_routes_leave_automatic_file_downloads_available() {
+        let profile = tempfile::tempdir().unwrap();
+        let registry = PluginRegistry::new(profile.path());
+        let archive = profile.path().join("plugin.zip");
+        let mut manifest: Value =
+            serde_json::from_str(include_str!("../../ndm-plugin-sdk/examples/file-copy.json"))
+                .unwrap();
+        if cfg!(windows) {
+            manifest["engine"] = json!("file-copy.exe");
+        }
+        manifest["inputs"] = json!([{
+            "schemes": ["https"], "hosts": ["media.example.test"],
+            "exclude_suffixes": [".mp4", ".m3u8", ".mpd"]
+        }]);
+        manifest["manual_inputs"] = json!([{"schemes": ["https"]}]);
+        write_package(&archive, &manifest);
+        let id = registry.import(&archive).unwrap().manifest.id;
+
+        let site = Url::parse("https://video.media.example.test./watch").unwrap();
+        let (available, selected) = registry.draft_candidates(&site).unwrap();
+        assert_eq!(available.len(), 1);
+        assert_eq!(selected.as_ref(), Some(&id));
+        assert!(matches!(
+            registry.task_options(&site, None, Map::new()).unwrap(),
+            Some(TaskOptions::Plugin(plugin)) if plugin.id == id
+        ));
+
+        for url in [
+            "https://another.example.test/watch",
+            "https://media.example.test/clip.MP4",
+            "https://media.example.test/live.m3u8",
+            "https://media.example.test/video.mpd?token=fixture",
+        ] {
+            let source = Url::parse(url).unwrap();
+            let (available, selected) = registry.draft_candidates(&source).unwrap();
+            assert_eq!(available.len(), 1);
+            assert_eq!(available[0].manifest.id, id);
+            assert!(selected.is_none());
+            assert!(matches!(
+                registry.task_options(&source, Some(&id), Map::new()).unwrap(),
+                Some(TaskOptions::Plugin(plugin)) if plugin.id == id
+            ));
+            registry.remember(&source, &id).unwrap();
+            assert!(registry.candidates(&source).unwrap().is_empty());
+            assert!(
+                registry
+                    .task_options(&source, None, Map::new())
+                    .unwrap()
+                    .is_none()
+            );
+        }
+
+        let ftp = Url::parse("ftp://media.example.test/clip").unwrap();
+        assert!(registry.task_options(&ftp, Some(&id), Map::new()).is_err());
     }
 
     #[test]

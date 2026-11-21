@@ -39,6 +39,9 @@ pub struct PluginManifest {
     pub engine: String,
     pub engine_protocol: u32,
     pub inputs: Vec<InputMatcher>,
+    /// Inputs offered only when a caller explicitly selects this engine.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub manual_inputs: Vec<InputMatcher>,
     pub limits: EngineLimits,
     #[serde(default)]
     pub capabilities: EngineCapabilities,
@@ -65,6 +68,8 @@ pub struct InputMatcher {
     pub hosts: Vec<String>,
     #[serde(default)]
     pub suffixes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude_suffixes: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -172,9 +177,11 @@ impl PluginManifest {
                 .panel
                 .as_ref()
                 .is_some_and(|p| !valid_package_path(p) || !p.ends_with(".js"))
-            || self.inputs.is_empty()
+            || (self.inputs.is_empty() && self.manual_inputs.is_empty())
             || self.inputs.len() > 32
             || self.inputs.iter().any(|input| !input.valid())
+            || self.manual_inputs.len() > 32
+            || self.manual_inputs.iter().any(|input| !input.valid())
             || !(1..=32).contains(&self.limits.active_tasks)
             || self
                 .limits
@@ -467,13 +474,8 @@ impl InputMatcher {
                 .hosts
                 .iter()
                 .all(|s| !s.is_empty() && s.len() <= 253 && s.split('.').all(valid_identifier))
-            && self.suffixes.len() <= 16
-            && self.suffixes.iter().all(|s| {
-                s.starts_with('.')
-                    && (2..=24).contains(&s.len())
-                    && s.bytes()
-                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.')
-            })
+            && valid_suffixes(&self.suffixes)
+            && valid_suffixes(&self.exclude_suffixes)
     }
 
     pub fn score(&self, scheme: &str, host: Option<&str>, path: &str) -> Option<u8> {
@@ -486,11 +488,26 @@ impl InputMatcher {
                 }))
             || (!self.suffixes.is_empty()
                 && !self.suffixes.iter().any(|suffix| path.ends_with(suffix)))
+            || self
+                .exclude_suffixes
+                .iter()
+                .any(|suffix| path.ends_with(suffix))
         {
             return None;
         }
         Some(1 + u8::from(!self.hosts.is_empty()) * 2 + u8::from(!self.suffixes.is_empty()))
     }
+}
+
+fn valid_suffixes(suffixes: &[String]) -> bool {
+    suffixes.len() <= 16
+        && suffixes.iter().all(|suffix| {
+            suffix.starts_with('.')
+                && (2..=24).contains(&suffix.len())
+                && suffix
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'.')
+        })
 }
 
 impl OptionControl {

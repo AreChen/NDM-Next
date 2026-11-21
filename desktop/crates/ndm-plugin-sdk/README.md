@@ -54,10 +54,15 @@ manifest are both checked before installation.
 - `schema` and `engine_protocol` are both `1`. Set a stable lowercase
   `id`, a semantic `version`, a relative `engine` path, and localized
   `name` and `description` objects. Use `en` and optionally `zh`.
-- `inputs` is a list of matchers. Each matcher has `schemes` and can
-  narrow matching with `hosts` and `suffixes`. A domain matches itself
-  and its subdomains. A local file uses the `file` scheme. A saved site
-  choice takes precedence over automatic matching.
+- `inputs` is a list of automatic matchers. Each matcher has `schemes`
+  and can narrow matching with `hosts`, `suffixes` and `exclude_suffixes`.
+  A domain matches itself and its subdomains. A local file uses the `file`
+  scheme. A saved site choice takes precedence among automatic matches.
+- `manual_inputs` uses the same matchers. These sources can use the engine
+  when selected in the download form or specified by an MCP caller. For
+  example, an engine can offer general HTTP(S) media pages here and limit
+  `inputs` to known sites. Hosts that support these matchers require at
+  least one matcher across the two lists.
 - `limits.active_tasks` sets the engine's maximum simultaneous tasks.
   `limits.download_threads` is an optional per-task cap. The passed hint
   already includes the user's chosen setting and the declared cap. The

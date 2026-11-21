@@ -12,16 +12,18 @@ Open **Settings** on an installed plugin card to save default download options.
 They apply to new tasks, including downloads requested through Codex CLI.
 An option chosen for an individual task takes precedence.
 Saved defaults use the same local protection as download task options.
-The YouTube plugin can preserve the native video container or copy tracks to
+Media Downloader can preserve the native container or copy video tracks to
 MP4, WebM, or MKV. Choose uploaded or automatic subtitles and check the
 languages you want. For a separate HTTP(S) or SOCKS proxy, enable **Use a
 separate proxy**, choose a protocol, and enter the host and port.
 
 Paste a URL or select a local source file in **New download**. NDM Next
-selects an installed engine that supports the source. When several match,
-choose one in the **Download engine** menu. Choosing a plugin for a site
-saves it as that site's default. YouTube and BitTorrent have their own
-format and peer settings in the native form.
+selects an installed engine that matches the source. Media Downloader
+matches pages on common media sites such as YouTube, Bilibili, TikTok and
+Vimeo. For another site, choose **Media Downloader** in **Download engine**.
+You can also select it for direct HLS and DASH streams. The built-in engine
+is the default for those streams and other direct media files. A choice
+between automatic matches can be saved for that site.
 
 For a torrent or magnet link, use **Choose files** to check the files you want.
 The task list shows connected peers and the share ratio. Open download details
@@ -57,13 +59,14 @@ SHA-256。也可以通过 **导入插件** 安装你信任的开发者提供的�
 在已安装的插件卡片上打开 **设置**，可保存该插件的默认下载选项。默认值用于
 新任务，也适用于 Codex CLI 发起的下载。单次任务可单独修改选项。
 已保存的默认值与下载任务选项使用同样的本地加密方式。
-YouTube 插件可优先保留原生封装，也可指定 MP4、WebM 或 MKV。字幕支持作者上传
+流媒体下载插件可优先保留原生封装，也可指定 MP4、WebM 或 MKV。字幕支持作者上传
 和自动字幕，可以勾选多种语言。需要单独使用 HTTP(S) 或 SOCKS 代理时，在插件
 设置中开启 **使用独立代理**，选择协议并填写主机和端口。
 
 新建下载时粘贴链接或选择本地文件，NDM Next 会匹配已安装的引擎。
-有多个匹配项时，可在 **下载引擎** 中手动选择。为某个网站选择插件后，
-应用会记住这个选择。YouTube 和 BitTorrent 都在原生面板中提供自己的选项。
+YouTube、Bilibili、TikTok、Vimeo 等常见媒体网页会匹配 **流媒体下载**。
+其他站点的媒体网页可在 **下载引擎** 中手动选用该插件。HLS、DASH 和媒体直链
+默认走内置引擎，也可选用流媒体下载。在多个自动匹配的插件之间选择时，应用会记住站点偏好。
 
 添加 `.torrent` 或磁力链接时，点击 **选择下载文件** 勾选要保存的文件。
 任务列表显示连接数和分享率，独立下载窗口可展开查看做种节点、已发现节点
