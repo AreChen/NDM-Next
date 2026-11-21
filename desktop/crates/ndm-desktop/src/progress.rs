@@ -150,6 +150,10 @@ impl ProgressWindow {
                                     this.begin_tracking(cx);
                                     cx.notify();
                                 }
+                                SchedulerEvent::TaskTitleChanged(task_id) if task_id == this.id => {
+                                    this.task = this.store.get(this.id).ok().flatten();
+                                    cx.notify();
+                                }
                                 SchedulerEvent::Finished {
                                     id: task_id,
                                     progress,
@@ -504,6 +508,7 @@ mod tests {
             },
             options: TaskOptions::Auto,
             state: TaskState::Completed,
+            engine_title: None,
             output_path: Some(output),
             error: None,
             size_verified: Some(false),

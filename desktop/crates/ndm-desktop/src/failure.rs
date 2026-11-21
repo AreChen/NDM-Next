@@ -22,6 +22,21 @@ pub(crate) fn description(code: &str, chinese: bool) -> &str {
         }
         ("dash_failed", true) => "DASH 下载或封装失败，请检查链接与媒体格式。",
         ("dash_failed", false) => "DASH download or remux failed; check the URL and media format.",
+        ("plugin_postprocessing_failed", true) => "下载插件未能完成媒体合并或封装。",
+        ("plugin_postprocessing_failed", false) => {
+            "The download plugin could not merge or finalize the media."
+        }
+        ("plugin_options_invalid", true) => "插件选项无效，请检查插件设置。",
+        ("plugin_options_invalid", false) => {
+            "The plugin options are invalid. Check the plugin settings."
+        }
+        ("download plugin network error", true) => "下载插件网络连接失败，请检查网络或代理设置。",
+        ("download plugin storage error", true) => {
+            "下载插件无法保存文件，请检查磁盘空间和目录权限。"
+        }
+        ("download plugin authentication failed", true) => "下载插件身份验证失败。",
+        ("download plugin does not support this source", true) => "下载插件不支持此链接或文件。",
+        ("download plugin failed", true) => "下载插件执行失败。",
         _ => code,
     }
 }

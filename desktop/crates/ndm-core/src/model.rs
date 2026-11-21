@@ -138,6 +138,8 @@ pub struct Task {
     pub options: TaskOptions,
     pub policy: TaskPolicy,
     pub state: TaskState,
+    /// Title reported by an engine after resolving the source.
+    pub engine_title: Option<String>,
     pub output_path: Option<PathBuf>,
     pub error: Option<String>,
     pub size_verified: Option<bool>,

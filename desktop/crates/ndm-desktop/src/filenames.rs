@@ -24,11 +24,17 @@ pub(crate) fn display_name(task: &Task) -> Option<String> {
         .and_then(|path| path.file_name())
         .and_then(|name| name.to_str())
         .map(str::to_owned)
+        .or_else(|| task.engine_title.clone())
         .or_else(|| task.request.suggested_filename.clone())
         .or_else(|| {
-            Url::parse(&task.request.url)
-                .ok()
-                .and_then(|url| url_filename(&url))
+            let url = Url::parse(&task.request.url).ok()?;
+            if matches!(task.options, TaskOptions::Plugin(_))
+                && matches!(url.scheme(), "http" | "https")
+            {
+                url.host_str().map(str::to_owned)
+            } else {
+                url_filename(&url)
+            }
         })
 }
 
@@ -53,6 +59,7 @@ mod tests {
             },
             options: TaskOptions::Auto,
             state: TaskState::Queued,
+            engine_title: None,
             output_path: None,
             error: None,
             size_verified: None,
@@ -68,6 +75,23 @@ mod tests {
         assert_eq!(display_name(&item).as_deref(), Some("download"));
         item.output_path = Some(PathBuf::from("setup.exe"));
         assert_eq!(display_name(&item).as_deref(), Some("setup.exe"));
+    }
+
+    #[test]
+    fn plugin_uses_the_resolved_title_and_preserves_the_published_filename() {
+        let mut item = task("https://www.youtube.com/watch?v=fixture");
+        item.options = TaskOptions::Plugin(ndm_core::PluginOptions {
+            id: "yt-dlp".into(),
+            values: Default::default(),
+        });
+        assert_eq!(display_name(&item).as_deref(), Some("www.youtube.com"));
+        item.engine_title = Some("测试视频".into());
+        assert_eq!(display_name(&item).as_deref(), Some("测试视频"));
+        item.output_path = Some(PathBuf::from("测试视频 [fixture].mkv"));
+        assert_eq!(
+            display_name(&item).as_deref(),
+            Some("测试视频 [fixture].mkv")
+        );
     }
 
     #[test]

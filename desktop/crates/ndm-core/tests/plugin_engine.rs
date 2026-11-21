@@ -13,7 +13,7 @@ use ndm_core::{
 };
 use ndm_plugin_sdk::{
     DownloadRequest, DownloadSource, ENGINE_ARGUMENT, ENGINE_PROTOCOL_VERSION, EngineMessage,
-    HostMessage, TransferProgress, read_message, write_message,
+    HostMessage, TaskUpdate, TransferProgress, read_message, write_message,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -44,7 +44,7 @@ fn fixture_engine() {
     let mut output = io::stdout().lock();
     assert!(matches!(
         read_message::<HostMessage>(&mut input).unwrap(),
-        Some(HostMessage::Hello { version }) if version == ENGINE_PROTOCOL_VERSION
+        Some(HostMessage::Hello { version, task_updates: true }) if version == ENGINE_PROTOCOL_VERSION
     ));
     write_message(
         &mut output,
@@ -112,6 +112,15 @@ fn fixture_engine() {
         }
         Some("scheduled") => {
             use std::io::{Read, Write};
+            write_message(
+                &mut output,
+                &EngineMessage::TaskUpdate {
+                    update: TaskUpdate::Title {
+                        title: "测试视频".into(),
+                    },
+                },
+            )
+            .unwrap();
             let mut gate =
                 std::net::TcpStream::connect(request.options["address"].as_str().unwrap()).unwrap();
             gate.write_all(request.task_id.as_bytes()).unwrap();
@@ -303,6 +312,11 @@ async fn schedules_installed_engines_with_global_batch_and_plugin_limits() {
     scheduler.uninstall_plugin("engine-a").unwrap();
     for task in store.list().unwrap() {
         assert!(!task.work_directory().exists());
+        assert_eq!(task.engine_title.as_deref(), Some("测试视频"));
+        assert_eq!(
+            store.get(task.id).unwrap().unwrap().engine_title,
+            task.engine_title
+        );
         assert_eq!(
             fs::read(task.output_path.unwrap()).unwrap(),
             b"scheduled fixture"

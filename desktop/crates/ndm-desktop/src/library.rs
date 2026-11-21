@@ -109,6 +109,7 @@ struct SearchMetadata {
     url: String,
     source_url: Option<String>,
     suggested_filename: Option<String>,
+    engine_title: Option<String>,
     output_path: Option<PathBuf>,
     size: Option<u64>,
 }
@@ -120,6 +121,7 @@ impl SearchMetadata {
             url: task.request.url.clone(),
             source_url: task.request.source_url.clone(),
             suggested_filename: task.request.suggested_filename.clone(),
+            engine_title: task.engine_title.clone(),
             output_path: task.output_path.clone(),
             size: task.request.expected_size,
         }
@@ -130,6 +132,7 @@ impl SearchMetadata {
             && self.url == task.request.url
             && self.source_url == task.request.source_url
             && self.suggested_filename == task.request.suggested_filename
+            && self.engine_title == task.engine_title
             && self.output_path == task.output_path
             && self.size == task.request.expected_size
     }
@@ -440,6 +443,7 @@ mod tests {
             },
             options: TaskOptions::Auto,
             state: TaskState::Queued,
+            engine_title: None,
             output_path: None,
             error: None,
             size_verified: None,

@@ -12,7 +12,7 @@ use std::{
 
 use ndm_plugin_sdk::{
     DownloadRequest, ENGINE_ARGUMENT, ENGINE_PROTOCOL_VERSION, EngineMessage, FailureReason,
-    HostMessage, MAX_MESSAGE_BYTES, TransferProgress, encode_message,
+    HostMessage, MAX_MESSAGE_BYTES, TaskUpdate, TransferProgress, encode_message,
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
@@ -46,6 +46,11 @@ pub enum EngineOutcome {
     Stopped,
 }
 
+pub(crate) enum EngineUpdate {
+    Progress(TransferProgress),
+    Task(TaskUpdate),
+}
+
 #[derive(Clone)]
 pub struct PluginEngine {
     executable: PathBuf,
@@ -76,6 +81,20 @@ impl PluginEngine {
         request: DownloadRequest,
         cancel: &CancellationToken,
         mut progress: impl FnMut(TransferProgress),
+    ) -> Result<EngineOutcome, EngineError> {
+        self.download_with_updates(request, cancel, |update| {
+            if let EngineUpdate::Progress(update) = update {
+                progress(update);
+            }
+        })
+        .await
+    }
+
+    pub(crate) async fn download_with_updates(
+        &self,
+        request: DownloadRequest,
+        cancel: &CancellationToken,
+        mut update: impl FnMut(EngineUpdate),
     ) -> Result<EngineOutcome, EngineError> {
         if cancel.is_cancelled() {
             return Ok(EngineOutcome::Stopped);
@@ -109,7 +128,7 @@ impl PluginEngine {
             output: BufReader::new(worker.child.stdout.take().ok_or(EngineError::Protocol)?),
             line: Vec::new(),
         };
-        let outcome = channel.transfer(request, cancel, &mut progress).await;
+        let outcome = channel.transfer(request, cancel, &mut update).await;
         drop(channel);
         let reaped = worker.reap().await;
         let outcome = outcome?;
@@ -160,6 +179,7 @@ impl Channel {
     async fn start(&mut self, request: DownloadRequest) -> Result<(), EngineError> {
         self.send(&HostMessage::Hello {
             version: ENGINE_PROTOCOL_VERSION,
+            task_updates: true,
         })
         .await?;
         match self.receive().await? {
@@ -175,11 +195,12 @@ impl Channel {
 
     async fn terminal(
         &mut self,
-        progress: &mut impl FnMut(TransferProgress),
+        update: &mut impl FnMut(EngineUpdate),
     ) -> Result<Terminal, EngineError> {
         loop {
             match self.receive().await? {
-                EngineMessage::Progress { progress: update } => progress(update),
+                EngineMessage::Progress { progress } => update(EngineUpdate::Progress(progress)),
+                EngineMessage::TaskUpdate { update: task } => update(EngineUpdate::Task(task)),
                 EngineMessage::Completed { files } => return Ok(Terminal::Completed(files)),
                 EngineMessage::Stopped => return Ok(Terminal::Stopped),
                 EngineMessage::Failed { reason } => return Err(EngineError::Failed(reason)),
@@ -192,7 +213,7 @@ impl Channel {
         &mut self,
         request: DownloadRequest,
         cancel: &CancellationToken,
-        progress: &mut impl FnMut(TransferProgress),
+        update: &mut impl FnMut(EngineUpdate),
     ) -> Result<Terminal, EngineError> {
         tokio::select! {
             // Once Download is sent, stop via the normal checkpoint path.
@@ -203,13 +224,13 @@ impl Channel {
             _ = cancel.cancelled() => return Ok(Terminal::Stopped),
         }
         tokio::select! {
-            result = self.terminal(progress) => return result,
+            result = self.terminal(update) => return result,
             _ = cancel.cancelled() => {}
         }
         timeout(STOP_TIMEOUT, async {
             // Completion may already be in stdout when the worker closes stdin.
             let _ = self.send(&HostMessage::Stop).await;
-            self.terminal(progress).await
+            self.terminal(update).await
         })
         .await
         .map_err(|_| EngineError::StopTimeout)?

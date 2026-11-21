@@ -142,9 +142,10 @@ impl Desktop {
             .child(
                 div()
                     .flex()
+                    .flex_col()
                     .flex_shrink_0()
-                    .items_center()
-                    .gap_3()
+                    .items_start()
+                    .gap_2()
                     .child(
                         Button::new("back-to-market")
                             .small()
@@ -156,7 +157,7 @@ impl Desktop {
                                 this.page_focus.focus(window, cx);
                             })),
                     )
-                    .child(div().min_w_0().truncate().text_lg().font_weight(FontWeight::BOLD).child(name)),
+                    .child(div().w_full().truncate().text_xl().font_weight(FontWeight::BOLD).child(name)),
             )
             .child(
                 div()

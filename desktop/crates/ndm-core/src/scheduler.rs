@@ -48,6 +48,7 @@ impl Default for SchedulerOptions {
 #[derive(Clone, Debug)]
 pub enum SchedulerEvent {
     Started(TaskId),
+    TaskTitleChanged(TaskId),
     Finished {
         id: TaskId,
         progress: ProgressSnapshot,
@@ -720,6 +721,9 @@ async fn execute_one(inner: &Arc<Inner>, task: &Task, active: &Active) -> Result
                 default_threads,
                 active.cancel.clone(),
                 active.progress.clone(),
+                || {
+                    let _ = inner.events.send(SchedulerEvent::TaskTitleChanged(task.id));
+                },
             )
             .await
         }

@@ -49,8 +49,14 @@ pub struct DownloadRequest {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HostMessage {
-    Hello { version: u32 },
-    Download { request: Box<DownloadRequest> },
+    Hello {
+        version: u32,
+        #[serde(default)]
+        task_updates: bool,
+    },
+    Download {
+        request: Box<DownloadRequest>,
+    },
     Stop,
 }
 
@@ -71,7 +77,16 @@ pub enum FailureReason {
     Network,
     Storage,
     Unsupported,
+    InvalidOptions,
+    PostProcessing,
     Other,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TaskUpdate {
+    Title { title: String },
+    Finalizing,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -82,6 +97,9 @@ pub enum EngineMessage {
     },
     Progress {
         progress: TransferProgress,
+    },
+    TaskUpdate {
+        update: TaskUpdate,
     },
     Completed {
         /// Regular files in the workspace, using relative slash-separated paths.

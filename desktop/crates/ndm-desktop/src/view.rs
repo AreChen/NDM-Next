@@ -386,6 +386,7 @@ impl Desktop {
                                     this.track_progress(cx);
                                     if this.seen_tasks.insert(id) { this.show_progress(id, cx); }
                                 }
+                                SchedulerEvent::TaskTitleChanged(_) => {}
                                 SchedulerEvent::SftpHostKeyRequired { .. } => {
                                     this.set_notice(this.text("SFTP 服务器密钥需要核对。", "Check the SFTP server key before trusting it.").into(), cx);
                                 },

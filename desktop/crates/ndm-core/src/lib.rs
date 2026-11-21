@@ -138,6 +138,12 @@ pub enum Error {
     PluginNetwork,
     #[error("download engine plugin does not support this source")]
     PluginSource,
+    #[error("download engine plugin could not save files")]
+    PluginStorage,
+    #[error("download engine plugin settings are invalid")]
+    PluginOptions,
+    #[error("download engine plugin could not finish processing the files")]
+    PluginPostProcessing,
     #[error("download engine plugin failed")]
     PluginTransfer,
     #[error("download was paused or cancelled")]

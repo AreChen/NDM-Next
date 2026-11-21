@@ -216,6 +216,7 @@ mod tests {
             },
             options: TaskOptions::Auto,
             state,
+            engine_title: None,
             output_path: Some(output),
             error: None,
             size_verified: Some(true),

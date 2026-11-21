@@ -101,6 +101,7 @@ mod tests {
             },
             options: TaskOptions::Auto,
             state: TaskState::Paused,
+            engine_title: None,
             output_path: None,
             error: None,
             size_verified: None,

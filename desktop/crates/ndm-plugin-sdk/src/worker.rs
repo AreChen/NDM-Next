@@ -8,11 +8,12 @@ use std::{
 
 use crate::{
     DownloadRequest, ENGINE_PROTOCOL_VERSION, EngineMessage, FailureReason, HostMessage,
-    TransferProgress, read_message, write_message,
+    TaskUpdate, TransferProgress, read_message, write_message,
 };
 
 pub struct Worker {
     stopped: Arc<AtomicBool>,
+    task_updates: bool,
 }
 
 impl Worker {
@@ -26,6 +27,16 @@ impl Worker {
             &EngineMessage::Progress { progress },
         )
     }
+
+    pub fn update_task(&self, update: TaskUpdate) -> io::Result<()> {
+        if self.task_updates {
+            write_message(
+                &mut io::stdout().lock(),
+                &EngineMessage::TaskUpdate { update },
+            )?;
+        }
+        Ok(())
+    }
 }
 
 /// Serve one download. Returning after a stop request confirms its checkpoint is ready.
@@ -33,12 +44,16 @@ pub fn serve(
     download: impl FnOnce(DownloadRequest, &Worker) -> Result<Vec<String>, FailureReason>,
 ) -> io::Result<()> {
     let mut input = BufReader::new(io::stdin());
-    match read_message(&mut input)? {
-        Some(HostMessage::Hello { version }) if version == ENGINE_PROTOCOL_VERSION => {
+    let task_updates = match read_message(&mut input)? {
+        Some(HostMessage::Hello {
+            version,
+            task_updates,
+        }) if version == ENGINE_PROTOCOL_VERSION => {
             write_message(&mut io::stdout().lock(), &EngineMessage::Ready { version })?;
+            task_updates
         }
         _ => return Err(io::Error::other("unsupported engine handshake")),
-    }
+    };
     let request = match read_message(&mut input)? {
         Some(HostMessage::Download { request }) => *request,
         Some(HostMessage::Stop) => {
@@ -52,13 +67,21 @@ pub fn serve(
         let _: io::Result<Option<HostMessage>> = read_message(&mut input);
         control.store(true, Ordering::Release);
     });
-    let worker = Worker { stopped };
+    let worker = Worker {
+        stopped,
+        task_updates,
+    };
     let result = download(request, &worker);
     let outcome = if worker.stopped() {
         EngineMessage::Stopped
     } else {
         match result {
             Ok(files) => EngineMessage::Completed { files },
+            Err(FailureReason::InvalidOptions | FailureReason::PostProcessing) if !task_updates => {
+                EngineMessage::Failed {
+                    reason: FailureReason::Other,
+                }
+            }
             Err(reason) => EngineMessage::Failed { reason },
         }
     };

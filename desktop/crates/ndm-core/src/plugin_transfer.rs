@@ -4,14 +4,16 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use ndm_plugin_sdk::{DownloadRequest, DownloadSource, FailureReason, TransferProgress};
+use ndm_plugin_sdk::{
+    DownloadRequest, DownloadSource, FailureReason, TaskUpdate, TransferProgress,
+};
 use tokio::fs;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
     DownloadProgress, Error, PluginOptions, Result, Store, TaskId, cache,
     http::{publish_download, safe_filename},
-    plugin_engine::{EngineError, EngineOutcome, PluginEngine},
+    plugin_engine::{EngineError, EngineOutcome, EngineUpdate, PluginEngine},
     plugins::PluginRegistry,
 };
 
@@ -22,9 +24,19 @@ pub(crate) async fn execute(
     default_threads: u32,
     cancel: CancellationToken,
     progress: DownloadProgress,
+    title_changed: impl Fn(),
 ) -> Result<()> {
     store.start(id)?;
-    let result = transfer(store, id, options, default_threads, &cancel, &progress).await;
+    let result = transfer(
+        store,
+        id,
+        options,
+        default_threads,
+        &cancel,
+        &progress,
+        title_changed,
+    )
+    .await;
     match result {
         Ok(()) => Ok(()),
         Err(Error::Cancelled) => store.pause(id),
@@ -36,7 +48,9 @@ pub(crate) async fn execute(
                     Error::PluginAuthentication => "download plugin authentication failed",
                     Error::PluginNetwork => "download plugin network error",
                     Error::PluginSource => "download plugin does not support this source",
-                    Error::Io(_) => "download plugin storage error",
+                    Error::PluginStorage | Error::Io(_) => "download plugin storage error",
+                    Error::PluginOptions => "plugin_options_invalid",
+                    Error::PluginPostProcessing => "plugin_postprocessing_failed",
                     _ => "download plugin failed",
                 },
             )?;
@@ -52,6 +66,7 @@ async fn transfer(
     default_threads: u32,
     cancel: &CancellationToken,
     progress: &DownloadProgress,
+    title_changed: impl Fn(),
 ) -> Result<()> {
     let task = store.get(id)?.ok_or(Error::NotFound)?;
     let plugin = PluginRegistry::new(store.profile_directory())
@@ -87,8 +102,32 @@ async fn transfer(
         download_threads,
         options: options.values,
     };
+    let mut resolved = false;
     let outcome = engine
-        .download(request, cancel, |update| progress.engine_progress(update))
+        .download_with_updates(request, cancel, |update| match update {
+            EngineUpdate::Progress(update) => {
+                progress.resume_downloading();
+                progress.engine_progress(update);
+            }
+            EngineUpdate::Task(TaskUpdate::Finalizing) => progress.finalize(),
+            EngineUpdate::Task(TaskUpdate::Title { title }) if !resolved => {
+                let title: String = title
+                    .trim()
+                    .chars()
+                    .filter(|ch| !ch.is_control())
+                    .take(240)
+                    .collect();
+                if !title.is_empty() {
+                    resolved = true;
+                    if task.engine_title.as_deref() != Some(&title)
+                        && store.set_engine_title(id, &title).unwrap_or(false)
+                    {
+                        title_changed();
+                    }
+                }
+            }
+            EngineUpdate::Task(TaskUpdate::Title { .. }) => {}
+        })
         .await;
     let files = match outcome {
         Ok(EngineOutcome::Completed(files)) => files,
@@ -98,6 +137,13 @@ async fn transfer(
             return Err(Error::PluginAuthentication);
         }
         Err(EngineError::Failed(FailureReason::Network)) => return Err(Error::PluginNetwork),
+        Err(EngineError::Failed(FailureReason::Storage)) => return Err(Error::PluginStorage),
+        Err(EngineError::Failed(FailureReason::InvalidOptions)) => {
+            return Err(Error::PluginOptions);
+        }
+        Err(EngineError::Failed(FailureReason::PostProcessing)) => {
+            return Err(Error::PluginPostProcessing);
+        }
         Err(EngineError::Failed(FailureReason::InvalidSource | FailureReason::Unsupported)) => {
             return Err(Error::PluginSource);
         }

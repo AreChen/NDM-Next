@@ -165,6 +165,7 @@ impl Store {
                 state TEXT NOT NULL CHECK(state IN
                     ('prepared','queued','running','paused','completed','failed')),
                 output BLOB,
+                engine_title BLOB,
                 error TEXT,
                 size_verified INTEGER,
                 progress BLOB,
@@ -200,6 +201,7 @@ impl Store {
         };
         for (name, declaration) in [
             ("output", "BLOB"),
+            ("engine_title", "BLOB"),
             ("options", "BLOB"),
             ("error", "TEXT"),
             ("size_verified", "INTEGER"),
@@ -460,35 +462,14 @@ impl Store {
         let conn = self.connection()?;
         let mut statement = conn.prepare(
             "SELECT id, request, state, output, error, size_verified, options, progress,
-             (SELECT root FROM cache_workspaces w WHERE w.id = tasks.id), policy
+             (SELECT root FROM cache_workspaces w WHERE w.id = tasks.id) AS cache_directory,
+             policy, engine_title
              FROM tasks WHERE NOT ?1 OR state = 'queued' ORDER BY rowid",
         )?;
         let mut rows = statement.query([queued_only])?;
         let mut tasks = Vec::new();
         while let Some(row) = rows.next()? {
-            let id: String = row.get(0)?;
-            let id = TaskId::parse_str(&id).map_err(|_| Error::InvalidStoredState)?;
-            let encrypted: Vec<u8> = row.get(1)?;
-            let state: String = row.get(2)?;
-            let output: Option<Vec<u8>> = row.get(3)?;
-            let error: Option<String> = row.get(4)?;
-            let size_verified: Option<bool> = row.get(5)?;
-            let options: Option<Vec<u8>> = row.get(6)?;
-            let progress: Option<Vec<u8>> = row.get(7)?;
-            let cache_directory: Option<Vec<u8>> = row.get(8)?;
-            let policy: Option<Vec<u8>> = row.get(9)?;
-            tasks.push(decode_task(
-                id,
-                &encrypted,
-                &state,
-                output,
-                error,
-                size_verified,
-                options,
-                progress,
-                cache_directory,
-                policy,
-            )?);
+            tasks.push(decode_task(row)?);
         }
         Ok(tasks)
     }
@@ -777,6 +758,15 @@ impl Store {
         Ok(())
     }
 
+    pub(crate) fn set_engine_title(&self, id: TaskId, title: &str) -> Result<bool> {
+        let title = secrets::protect(&serde_json::to_vec(title)?)?;
+        let changed = self.connection()?.execute(
+            "UPDATE tasks SET engine_title = ?1 WHERE id = ?2 AND state = 'running'",
+            params![title, id.to_string()],
+        )?;
+        Ok(changed == 1)
+    }
+
     pub(crate) fn complete(&self, id: TaskId, path: &Path, size_verified: bool) -> Result<()> {
         let output = secrets::protect(&serde_json::to_vec(path)?)?;
         let changed = self.connection()?.execute(
@@ -836,99 +826,46 @@ fn read_limits(connection: &Connection) -> Result<Option<DownloadLimits>> {
 }
 
 fn read_task(conn: &Connection, id: TaskId) -> Result<Option<Task>> {
-    let row = conn
-        .query_row(
-            "SELECT request, state, output, error, size_verified, options, progress,
-             (SELECT root FROM cache_workspaces w WHERE w.id = tasks.id), policy FROM tasks WHERE id = ?1",
-            [id.to_string()],
-            |row| {
-                Ok((
-                    row.get::<_, Vec<u8>>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Option<Vec<u8>>>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                    row.get::<_, Option<bool>>(4)?,
-                    row.get::<_, Option<Vec<u8>>>(5)?,
-                    row.get::<_, Option<Vec<u8>>>(6)?,
-                    row.get::<_, Option<Vec<u8>>>(7)?,
-                    row.get::<_, Option<Vec<u8>>>(8)?,
-                ))
-            },
-        )
-        .optional()?;
-    row.map(
-        |(
-            encrypted,
-            state,
-            output,
-            error,
-            size_verified,
-            options,
-            progress,
-            cache_directory,
-            policy,
-        )| {
-            decode_task(
-                id,
-                &encrypted,
-                &state,
-                output,
-                error,
-                size_verified,
-                options,
-                progress,
-                cache_directory,
-                policy,
-            )
-        },
-    )
-    .transpose()
+    let mut statement = conn.prepare(
+        "SELECT id, request, state, output, error, size_verified, options, progress,
+         (SELECT root FROM cache_workspaces w WHERE w.id = tasks.id) AS cache_directory,
+         policy, engine_title FROM tasks WHERE id = ?1",
+    )?;
+    statement
+        .query([id.to_string()])?
+        .next()?
+        .map(decode_task)
+        .transpose()
 }
 
-#[allow(clippy::too_many_arguments)]
-fn decode_task(
-    id: TaskId,
-    encrypted: &[u8],
-    state: &str,
-    output: Option<Vec<u8>>,
-    error: Option<String>,
-    size_verified: Option<bool>,
-    options: Option<Vec<u8>>,
-    progress: Option<Vec<u8>>,
-    cache_directory: Option<Vec<u8>>,
-    policy: Option<Vec<u8>>,
-) -> Result<Task> {
-    let request = serde_json::from_slice(&secrets::unprotect(encrypted)?)?;
-    let output_path = output
-        .map(|value| {
-            let plaintext = secrets::unprotect(&value)?;
-            Ok::<_, Error>(serde_json::from_slice(&plaintext)?)
-        })
-        .transpose()?;
-    let options = options
-        .map(|encrypted| Ok::<_, Error>(serde_json::from_slice(&secrets::unprotect(&encrypted)?)?))
-        .transpose()?
-        .unwrap_or_default();
-    let progress = progress
-        .map(|encrypted| Ok::<_, Error>(serde_json::from_slice(&secrets::unprotect(&encrypted)?)?))
-        .transpose()?;
-    let cache_directory = cache_directory
-        .map(|bytes| Ok::<_, Error>(serde_json::from_slice(&secrets::unprotect(&bytes)?)?))
-        .transpose()?;
+fn decode_task(row: &rusqlite::Row<'_>) -> Result<Task> {
+    fn protected<T: serde::de::DeserializeOwned>(
+        row: &rusqlite::Row<'_>,
+        column: &str,
+    ) -> Result<Option<T>> {
+        row.get::<_, Option<Vec<u8>>>(column)?
+            .map(|encrypted| Ok(serde_json::from_slice(&secrets::unprotect(&encrypted)?)?))
+            .transpose()
+    }
+
+    let id = row.get::<_, String>("id")?;
+    let request: Vec<u8> = row.get("request")?;
     Ok(Task {
-        cache_directory,
-        policy: policy
+        cache_directory: protected(row, "cache_directory")?,
+        policy: row
+            .get::<_, Option<Vec<u8>>>("policy")?
             .as_deref()
             .map(serde_json::from_slice)
             .transpose()?
             .unwrap_or_default(),
-        id,
-        request,
-        options,
-        state: TaskState::from_database(state)?,
-        output_path,
-        error,
-        size_verified,
-        progress,
+        id: TaskId::parse_str(&id).map_err(|_| Error::InvalidStoredState)?,
+        request: serde_json::from_slice(&secrets::unprotect(&request)?)?,
+        options: protected(row, "options")?.unwrap_or_default(),
+        state: TaskState::from_database(&row.get::<_, String>("state")?)?,
+        engine_title: protected(row, "engine_title")?,
+        output_path: protected(row, "output")?,
+        error: row.get("error")?,
+        size_verified: row.get("size_verified")?,
+        progress: protected(row, "progress")?,
     })
 }

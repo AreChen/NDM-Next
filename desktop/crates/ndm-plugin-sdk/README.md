@@ -16,6 +16,8 @@ interface.
 | Engine to NDM | `{"type":"ready","version":1}` | Accept that version. Wait for a download before starting work or launching subprocesses. |
 | NDM to engine | `{"type":"download","request":{…}}` | Start work for the given task ID. |
 | Engine to NDM | `{"type":"progress","progress":{"downloaded":42,"total":null,"transferred":42}}` | Report byte counts. Use `null` for the total if it is unknown. |
+| Engine to NDM | `{"type":"task_update","update":{"kind":"title","title":"Example video"}}` | Report the resolved title once it is available. |
+| Engine to NDM | `{"type":"task_update","update":{"kind":"finalizing"}}` | Report local media processing. The next byte progress message returns the task to downloading. |
 | NDM to engine | `{"type":"stop"}` | Stop work and persist a checkpoint if the engine can resume. |
 | Engine to NDM | `{"type":"stopped"}` | Confirm that work has stopped and any checkpoint is ready to use. |
 | Engine to NDM | `{"type":"completed","files":["video.mp4"]}` | Report finished regular files under the task workspace, with each file closed and ready to deliver. Use slash-separated relative paths. |
@@ -27,6 +29,10 @@ A file source is `{"kind":"file","path":"…"}`. Optional hints include
 `suggested_filename`, `expected_size`, and `download_threads`. Keep credentials
 out of diagnostics. Reuse a checkpoint from the same workspace and task ID
 when the source and options match.
+
+Send `task_update` messages and use the `invalid_options` and `post_processing`
+failure categories only when `hello` includes `"task_updates":true`. The Rust
+`Worker::update_task` and `serve` helpers handle this for older hosts.
 
 An engine should respond to `stop` while a transfer is active. Once it sends
 a terminal message, NDM reclaims the worker and its child processes. Finish
