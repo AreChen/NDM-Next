@@ -18,6 +18,8 @@ bash desktop/packaging/macos/build.sh "$TMPDIR/ndm-media" desktop/dist
 
 The media build verifies the FFmpeg archive checksum and developer signature, disables network access, and includes the corresponding source and license files. The app build verifies media checksums, builds `ndm-desktop` and `ndm-host`, creates `NDM Next.app`, signs its nested binaries ad hoc, and creates a compressed DMG.
 
+The bundled tools can remux compatible streams to MP4, MKV, or WebM.
+
 ## Browser extension
 
 Use the matching extension ZIP from the same GitHub Release, the repository's `extension/` directory, or the store release. Release extension 1.1.4 and later has a fixed ID that the app already authorizes. Native messaging registration runs when NDM Next starts. For older unpacked extensions, copy the ID from `chrome://extensions` into **Settings → Browser extension → Repair connection**. Reload the extension after starting the app and select **NDM Next** as its backend. See the [installation guide](../../../docs/extension-install.md).

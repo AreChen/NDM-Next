@@ -8,7 +8,8 @@ use std::{
 
 use futures_util::StreamExt;
 pub use ndm_plugin_sdk::{
-    Choice, DownloadTool, Localized, OptionControl, OptionField, Panel, PluginManifest,
+    Choice, DownloadTool, Localized, OptionControl, OptionField, OptionValueError, Panel,
+    PluginManifest, TextEditor, normalize_proxy_address, selected_text_values,
 };
 use ndm_plugin_sdk::{MANIFEST_FILE, valid_identifier, valid_package_path};
 use reqwest::Url;
@@ -371,7 +372,7 @@ impl PluginRegistry {
     pub fn save_option_defaults(
         &self,
         plugin: &InstalledPlugin,
-        mut defaults: Map<String, Value>,
+        defaults: Map<String, Value>,
     ) -> io::Result<InstalledPlugin> {
         let _lock = self.mutation_lock()?;
         let mut snapshot = self.load()?;
@@ -384,12 +385,10 @@ impl PluginRegistry {
         if installed.directory != plugin.directory {
             return Err(invalid("installed plugin revision changed"));
         }
-        if defaults
-            .iter()
-            .any(|(key, value)| !installed.manifest.accepts_option(key, value))
-        {
-            return Err(invalid("invalid plugin option default"));
-        }
+        let mut defaults = installed
+            .manifest
+            .normalize_defaults(defaults)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         defaults.retain(|key, value| {
             !installed
                 .manifest

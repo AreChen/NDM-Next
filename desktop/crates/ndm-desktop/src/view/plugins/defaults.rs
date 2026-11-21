@@ -59,17 +59,13 @@ impl Desktop {
             }
         };
         let plugin = editor.plugin.clone();
-        if values
-            .iter()
-            .any(|(key, value)| !plugin.manifest.accepts_option(key, value))
-        {
-            self.set_notice(
-                self.text("请检查插件选项。", "Check the plugin options.")
-                    .into(),
-                cx,
-            );
-            return;
-        }
+        let values = match plugin.manifest.normalize_defaults(values) {
+            Ok(values) => values,
+            Err(error) => {
+                self.set_notice(self.plugin_option_error(error).into(), cx);
+                return;
+            }
+        };
         let registry = self.registry();
         let runtime = self.runtime.clone();
         self.integration.market.busy = true;
@@ -189,7 +185,7 @@ impl Desktop {
                         crate::view::settings::card_surface(0, tone)
                             .flex()
                             .flex_col()
-                            .gap_3()
+                            .gap_2()
                             .p_3()
                             .child(
                                 div().font_weight(FontWeight::SEMIBOLD)

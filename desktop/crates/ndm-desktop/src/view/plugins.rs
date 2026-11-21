@@ -2,14 +2,15 @@ use super::*;
 use crate::motion::SegmentedControl;
 use gpui_kit::component::Disableable;
 use ndm_core::plugins::{
-    Catalog, CatalogPlugin, InstalledPlugin, OptionControl, OptionField, Panel, PluginRegistry,
-    built_in_source, parse_source,
+    Catalog, CatalogPlugin, InstalledPlugin, OptionControl, OptionField, OptionValueError, Panel,
+    PluginRegistry, TextEditor, built_in_source, normalize_proxy_address, parse_source,
 };
 use ndm_host::harness::{CodexCli, Harness, Status, Target};
 use serde_json::{Map, Value, json};
 
 mod defaults;
 mod market;
+mod option_editors;
 pub(super) use market::market_search_placeholder;
 
 #[derive(Default)]
@@ -38,6 +39,7 @@ struct Field {
     definition: OptionField,
     value: Option<Value>,
     input: Option<Entity<InputState>>,
+    proxy_scheme: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -347,15 +349,30 @@ impl Desktop {
         for field in fields {
             let value = if let Some(input) = &field.input {
                 let input = input.read(cx).value();
-                match &field.definition.control {
-                    OptionControl::Integer { .. } if !input.is_empty() => {
-                        Some(json!(input.parse::<i64>().map_err(|_| self.text(
-                            "请输入有效的插件数值。",
-                            "Enter a valid plugin number."
-                        ))?))
+                if let Some(TextEditor::ProxyAddress { schemes, .. }) = &field.definition.editor {
+                    if input.trim().is_empty() {
+                        None
+                    } else {
+                        Some(json!(
+                            normalize_proxy_address(
+                                input.as_str(),
+                                field.proxy_scheme.as_deref().unwrap_or(&schemes[0]),
+                                schemes,
+                            )
+                            .map_err(|error| self.plugin_option_error(error))?
+                        ))
                     }
-                    OptionControl::Text { .. } if !input.is_empty() => Some(json!(input.as_str())),
-                    _ => None,
+                } else {
+                    match &field.definition.control {
+                        OptionControl::Integer { .. } if !input.is_empty() => Some(json!(
+                            input.parse::<i64>().map_err(|_| self
+                                .text("请输入有效的插件数值。", "Enter a valid plugin number."))?
+                        )),
+                        OptionControl::Text { .. } if !input.is_empty() => {
+                            Some(json!(input.as_str()))
+                        }
+                        _ => None,
+                    }
                 }
             } else {
                 field.value.clone()
@@ -365,6 +382,20 @@ impl Desktop {
             }
         }
         Ok(values)
+    }
+
+    fn plugin_option_error(&self, error: OptionValueError) -> &'static str {
+        match error {
+            OptionValueError::InvalidProxyAddress => self.text(
+                "代理地址格式错误。请填写主机和 1–65535 范围内的端口，例如 127.0.0.1:8080。",
+                "Enter a valid proxy host and port from 1 to 65535, such as 127.0.0.1:8080.",
+            ),
+            OptionValueError::MissingProxyAddress => self.text(
+                "已开启独立代理，请填写代理地址。",
+                "Enter a proxy address when the separate proxy is enabled.",
+            ),
+            OptionValueError::Invalid => self.text("请检查插件选项。", "Check the plugin options."),
+        }
     }
 
     pub(super) fn remember_engine_choice(&self, source: &reqwest::Url, options: &TaskOptions) {
@@ -493,11 +524,17 @@ impl Desktop {
             OptionForm::Download => "plugin-download-segments",
             OptionForm::Defaults => "plugin-default-segments",
         };
-        let mut panel = div().flex().flex_col().gap_2();
+        let mut panel = div().flex().flex_col().gap_1();
         for (index, field) in fields.iter().enumerate() {
             let label = field.definition.label.for_language(chinese).to_owned();
-            let control = match &field.definition.control {
-                OptionControl::Boolean => {
+            let control = match (&field.definition.control, &field.definition.editor) {
+                (_, Some(TextEditor::MultiSelect { .. })) => {
+                    self.multiselect_editor(form, index, field, disabled, cx)
+                }
+                (_, Some(TextEditor::ProxyAddress { .. })) => {
+                    self.proxy_address_editor(form, index, field, disabled, cx)
+                }
+                (OptionControl::Boolean, _) => {
                     let enabled = field
                         .value
                         .as_ref()
@@ -527,7 +564,7 @@ impl Desktop {
                     }
                     .into_any_element()
                 }
-                OptionControl::Choice { choices } => {
+                (OptionControl::Choice { choices }, _) => {
                     let value = field.value.as_ref().and_then(Value::as_str);
                     let selected = choices
                         .iter()
@@ -638,7 +675,7 @@ impl Desktop {
                     .items_center()
                     .gap_2()
                     .text_sm()
-                    .child(div().w(px(156.)).truncate().child(label))
+                    .child(self.plugin_option_label(index, field, label))
                     .child(control),
             );
         }
@@ -652,7 +689,14 @@ impl Desktop {
         value: Value,
         cx: &mut Context<Self>,
     ) {
-        let fields = match form {
+        if let Some(field) = self.plugin_field_mut(form, index) {
+            field.value = Some(value);
+            cx.notify();
+        }
+    }
+
+    fn plugin_field_mut(&mut self, form: OptionForm, index: usize) -> Option<&mut Field> {
+        match form {
             OptionForm::Download => self
                 .integration
                 .draft
@@ -663,11 +707,8 @@ impl Desktop {
                 .defaults
                 .as_mut()
                 .map(|editor| &mut editor.fields),
-        };
-        if let Some(field) = fields.and_then(|fields| fields.get_mut(index)) {
-            field.value = Some(value);
-            cx.notify();
         }
+        .and_then(|fields| fields.get_mut(index))
     }
 
     pub(super) fn refresh_codex_status(&mut self, cx: &mut Context<Self>) {
@@ -883,25 +924,48 @@ fn option_fields(
     definitions
         .into_iter()
         .map(|definition| {
-            let value = defaults
+            let mut value = defaults
                 .and_then(|defaults| defaults.get(&definition.key).cloned())
                 .or_else(|| definition.default.clone());
+            if matches!(definition.editor, Some(TextEditor::MultiSelect { .. })) && value.is_none()
+            {
+                value = Some(json!(""));
+            }
+            let mut initial = value.as_ref().map_or_else(String::new, |value| {
+                value
+                    .as_str()
+                    .map_or_else(|| value.to_string(), str::to_owned)
+            });
+            let mut proxy_scheme = None;
+            if let Some(TextEditor::ProxyAddress { schemes, .. }) = &definition.editor {
+                proxy_scheme = Some(schemes[0].clone());
+                if let Some((scheme, address)) = initial.split_once("://")
+                    && let Some(scheme) = schemes
+                        .iter()
+                        .find(|value| value.eq_ignore_ascii_case(scheme))
+                {
+                    proxy_scheme = Some(scheme.clone());
+                    initial = address.to_owned();
+                }
+            }
             let input = matches!(
                 definition.control,
                 OptionControl::Integer { .. } | OptionControl::Text { .. }
-            )
-            .then(|| {
-                let initial = value.as_ref().map_or_else(String::new, |value| {
-                    value
-                        .as_str()
-                        .map_or_else(|| value.to_string(), str::to_owned)
-                });
-                cx.new(|cx| InputState::new(window, cx).default_value(initial))
+            ) && !matches!(definition.editor, Some(TextEditor::MultiSelect { .. }));
+            let input = input.then(|| {
+                cx.new(|cx| {
+                    let mut state = InputState::new(window, cx).default_value(initial);
+                    if proxy_scheme.is_some() {
+                        state = state.placeholder("127.0.0.1:8080");
+                    }
+                    state
+                })
             });
             Field {
                 definition,
                 value,
                 input,
+                proxy_scheme,
             }
         })
         .collect()

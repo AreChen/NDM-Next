@@ -1,5 +1,5 @@
 //! Metadata shared by the installer, native controls, and MCP.
-use std::{collections::HashSet, io, path::Path};
+use std::{collections::HashSet, fmt, io, path::Path};
 
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -81,9 +81,47 @@ pub struct OptionField {
     pub default: Option<Value>,
     #[serde(default)]
     pub required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub help: Option<Localized>,
+    /// Native editors for text values. Hosts that do not support them show a text field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor: Option<TextEditor>,
     #[serde(flatten)]
     pub control: OptionControl,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TextEditor {
+    MultiSelect {
+        choices: Vec<Choice>,
+        max_selected: usize,
+    },
+    ProxyAddress {
+        schemes: Vec<String>,
+        #[serde(default)]
+        required_when: Option<String>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OptionValueError {
+    Invalid,
+    InvalidProxyAddress,
+    MissingProxyAddress,
+}
+
+impl fmt::Display for OptionValueError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Invalid => "invalid plugin option",
+            Self::InvalidProxyAddress => "invalid plugin proxy address",
+            Self::MissingProxyAddress => "required plugin proxy address is missing",
+        })
+    }
+}
+
+impl std::error::Error for OptionValueError {}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -142,6 +180,11 @@ impl PluginManifest {
             if !keys.insert(&field.key)
                 || !valid_identifier(&field.key)
                 || !field.label.valid(128)
+                || field.help.as_ref().is_some_and(|help| !help.valid(512))
+                || field.editor.as_ref().is_some_and(|editor| {
+                    !matches!(field.control, OptionControl::Text { .. })
+                        || !editor.valid(&self.options)
+                })
                 || !field.control.valid()
                 || field
                     .default
@@ -173,12 +216,6 @@ impl PluginManifest {
         &self,
         mut values: Map<String, Value>,
     ) -> io::Result<Map<String, Value>> {
-        if values
-            .iter()
-            .any(|(key, value)| !self.accepts_option(key, value))
-        {
-            return Err(invalid("invalid plugin option"));
-        }
         for field in &self.options {
             if values.contains_key(&field.key) {
                 continue;
@@ -189,6 +226,70 @@ impl PluginManifest {
                 return Err(invalid("required plugin option missing"));
             }
         }
+        self.normalize_defaults(values)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    }
+
+    /// Validate and normalize submitted values without adding required per-task fields.
+    pub fn normalize_defaults(
+        &self,
+        mut values: Map<String, Value>,
+    ) -> Result<Map<String, Value>, OptionValueError> {
+        if values
+            .iter()
+            .any(|(key, value)| !self.accepts_option(key, value))
+        {
+            return Err(OptionValueError::Invalid);
+        }
+        for field in &self.options {
+            let input = values
+                .get(&field.key)
+                .or(field.default.as_ref())
+                .and_then(Value::as_str);
+            let normalized = match &field.editor {
+                Some(TextEditor::MultiSelect { max_selected, .. }) => {
+                    if input.is_some_and(|input| selected_text_values(input).len() > *max_selected)
+                    {
+                        return Err(OptionValueError::Invalid);
+                    }
+                    input.map(|input| selected_text_values(input).join(","))
+                }
+                Some(TextEditor::ProxyAddress {
+                    schemes,
+                    required_when,
+                }) => {
+                    let default_scheme = schemes.first().ok_or(OptionValueError::Invalid)?;
+                    let required = field.required
+                        || required_when.as_ref().is_some_and(|key| {
+                            values
+                                .get(key)
+                                .or_else(|| {
+                                    self.options
+                                        .iter()
+                                        .find(|option| &option.key == key)
+                                        .and_then(|option| option.default.as_ref())
+                                })
+                                .and_then(Value::as_bool)
+                                == Some(true)
+                        });
+                    match input.filter(|input| !input.trim().is_empty()) {
+                        Some(input) => {
+                            Some(normalize_proxy_address(input, default_scheme, schemes)?)
+                        }
+                        None if required => return Err(OptionValueError::MissingProxyAddress),
+                        None => None,
+                    }
+                }
+                None => continue,
+            };
+            if let Some(value) = normalized.filter(|_| values.contains_key(&field.key)) {
+                let value = Value::from(value);
+                if !field.control.accepts(&value) {
+                    return Err(OptionValueError::Invalid);
+                }
+                values.insert(field.key.clone(), value);
+            }
+        }
         Ok(values)
     }
 
@@ -197,7 +298,10 @@ impl PluginManifest {
         let mut required = Vec::new();
         for field in &self.options {
             let mut schema = field.control.schema();
-            schema["description"] = json!(field.label.en);
+            schema["description"] = json!(match &field.help {
+                Some(help) => format!("{}. {}", field.label.en, help.en),
+                None => field.label.en.clone(),
+            });
             if let Some(default) = tool.defaults.get(&field.key).or(field.default.as_ref()) {
                 schema["default"] = default.clone();
             } else if field.required {
@@ -242,6 +346,99 @@ impl PluginManifest {
             .iter()
             .any(|field| field.key == key && field.control.accepts(value))
     }
+}
+
+impl TextEditor {
+    fn valid(&self, fields: &[OptionField]) -> bool {
+        match self {
+            Self::MultiSelect {
+                choices,
+                max_selected,
+            } => {
+                (1..=32).contains(max_selected)
+                    && valid_choices(choices)
+                    && choices.iter().all(|choice| {
+                        choice.value.trim() == choice.value
+                            && !choice.value.contains(',')
+                            && !choice.value.chars().any(char::is_control)
+                    })
+            }
+            Self::ProxyAddress {
+                schemes,
+                required_when,
+            } => {
+                !schemes.is_empty()
+                    && schemes
+                        .iter()
+                        .all(|scheme| PROXY_SCHEMES.contains(&scheme.as_str()))
+                    && schemes.iter().collect::<HashSet<_>>().len() == schemes.len()
+                    && required_when.as_ref().is_none_or(|key| {
+                        fields.iter().any(|field| {
+                            &field.key == key && matches!(field.control, OptionControl::Boolean)
+                        })
+                    })
+            }
+        }
+    }
+}
+
+pub fn selected_text_values(input: &str) -> Vec<&str> {
+    let mut seen = HashSet::new();
+    input
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && seen.insert(*value))
+        .collect()
+}
+
+const PROXY_SCHEMES: &[&str] = &["http", "https", "socks4", "socks4a", "socks5", "socks5h"];
+
+/// Accept a proxy authority or complete URL while retaining the explicit port.
+/// Never include the input in an error because it can contain authentication.
+pub fn normalize_proxy_address(
+    input: &str,
+    default_scheme: &str,
+    allowed: &[impl AsRef<str>],
+) -> Result<String, OptionValueError> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Err(OptionValueError::MissingProxyAddress);
+    }
+    let invalid = OptionValueError::InvalidProxyAddress;
+    let (scheme, authority) = input.split_once("://").unwrap_or((default_scheme, input));
+    let scheme = scheme.to_ascii_lowercase();
+    let authority = authority.strip_suffix('/').unwrap_or(authority);
+    if !allowed.iter().any(|allowed| allowed.as_ref() == scheme)
+        || authority.contains(['/', '\\', '?', '#'])
+        || authority
+            .chars()
+            .any(|char| char.is_control() || char.is_whitespace())
+        || authority.matches('@').count() > 1
+    {
+        return Err(invalid);
+    }
+    let (_, port) = authority.rsplit_once(':').ok_or(invalid)?;
+    if !port.bytes().all(|byte| byte.is_ascii_digit())
+        || !port.parse::<u16>().is_ok_and(|port| port > 0)
+    {
+        return Err(invalid);
+    }
+    let address = format!("{scheme}://{authority}");
+    let url = url::Url::parse(&address).map_err(|_| invalid)?;
+    let host = url::Host::parse(url.host_str().ok_or(invalid)?).map_err(|_| invalid)?;
+    if let url::Host::Domain(domain) = host
+        && !domain.trim_end_matches('.').split('.').all(|label| {
+            (1..=63).contains(&label.len())
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+    {
+        return Err(invalid);
+    }
+    Ok(address)
 }
 
 impl InputMatcher {
@@ -292,16 +489,7 @@ impl OptionControl {
             Self::Boolean => true,
             Self::Integer { min, max } => min <= max,
             Self::Text { max_length } => (1..=4096).contains(max_length),
-            Self::Choice { choices } => {
-                let mut values = HashSet::new();
-                (1..=32).contains(&choices.len())
-                    && choices.iter().all(|choice| {
-                        !choice.value.is_empty()
-                            && choice.value.len() <= 128
-                            && choice.label.valid(128)
-                            && values.insert(&choice.value)
-                    })
-            }
+            Self::Choice { choices } => valid_choices(choices),
         }
     }
 
@@ -330,6 +518,17 @@ impl OptionControl {
             }
         }
     }
+}
+
+fn valid_choices(choices: &[Choice]) -> bool {
+    let mut values = HashSet::new();
+    (1..=32).contains(&choices.len())
+        && choices.iter().all(|choice| {
+            !choice.value.is_empty()
+                && choice.value.len() <= 128
+                && choice.label.valid(128)
+                && values.insert(&choice.value)
+        })
 }
 
 pub fn valid_identifier(value: &str) -> bool {
@@ -386,4 +585,76 @@ pub fn valid_package_path(path: &str) -> bool {
 
 fn invalid(reason: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, reason)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proxy_address_accepts_port_and_protocol_without_changing_legacy_values() {
+        for (input, expected) in [
+            (" 127.0.0.1:8080 ", "http://127.0.0.1:8080"),
+            ("http://proxy.local:80/", "http://proxy.local:80"),
+            ("socks5h://[::1]:1080", "socks5h://[::1]:1080"),
+            (
+                "user%40domain:pass@proxy.local:8080",
+                "http://user%40domain:pass@proxy.local:8080",
+            ),
+        ] {
+            assert_eq!(
+                normalize_proxy_address(input, "http", PROXY_SCHEMES).unwrap(),
+                expected
+            );
+        }
+        for input in [
+            "http://proxy.local",
+            "proxy.local:0",
+            "proxy.local:65536",
+            "proxy.local:+80",
+            "proxy.local:80?query",
+            "proxy.local:80/path",
+            "proxy local:80",
+            "ftp://proxy.local:21",
+            "http:///proxy.local:80",
+            "socks5://256.1.1.1:80",
+            "[::1]:port",
+            "http://:8080",
+        ] {
+            assert_eq!(
+                normalize_proxy_address(input, "http", PROXY_SCHEMES),
+                Err(OptionValueError::InvalidProxyAddress),
+                "{input}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_proxy_is_required_only_when_enabled_and_legacy_checked_values_are_retained() {
+        let manifest: PluginManifest = serde_json::from_value(json!({
+            "schema":1, "id":"example", "version":"1.0.0", "engine":"worker", "engine_protocol":1,
+            "name":{"en":"Example"}, "description":{"en":"Example engine"},
+            "inputs":[{"schemes":["https"]}], "limits":{"active_tasks":1}, "options":[
+                {"key":"use-proxy", "label":{"en":"Use proxy"}, "kind":"boolean", "default":false},
+                {"key":"proxy", "label":{"en":"Proxy"}, "kind":"text", "max_length":128,
+                 "editor":{"kind":"proxy_address", "schemes":["http","socks5"], "required_when":"use-proxy"}},
+                {"key":"languages", "label":{"en":"Languages"}, "kind":"text", "max_length":128,
+                 "editor":{"kind":"multi_select", "choices":[{"value":"en","label":{"en":"English"}}], "max_selected":2}}
+            ]
+        })).unwrap();
+        manifest.validate().unwrap();
+        assert!(manifest.normalize_defaults(Map::new()).unwrap().is_empty());
+        let mut values = json!({"use-proxy":true, "languages":" en, en, zh-Hans "})
+            .as_object()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            manifest.normalize_defaults(values.clone()),
+            Err(OptionValueError::MissingProxyAddress)
+        );
+        values.insert("proxy".into(), "proxy.local:8080".into());
+        let normalized = manifest.complete_options(values).unwrap();
+        assert_eq!(normalized["proxy"], json!("http://proxy.local:8080"));
+        assert_eq!(normalized["languages"], json!("en,zh-Hans"));
+    }
 }

@@ -50,7 +50,7 @@ cd "$scratch/build"
     --disable-gpl --disable-version3 --disable-nonfree --disable-network --disable-everything \
     --enable-ffmpeg --enable-ffprobe --enable-protocol=file,pipe,crypto,data \
     --enable-demuxer=hls,mpegts,mov,aac,mp3,ac3,eac3,matroska,webvtt,concat \
-    --enable-muxer=mp4,matroska \
+    --enable-muxer=mp4,matroska,webm \
     --enable-parser=aac,aac_latm,h264,hevc,av1,mpegaudio,ac3,opus,vorbis,flac,vp9,mpeg4video,mpegvideo \
     --enable-bsf=aac_adtstoasc,h264_mp4toannexb,hevc_mp4toannexb,av1_frame_merge,extract_extradata \
     --enable-decoder=h264,hevc,av1,aac,aac_latm,mp2,mp3,ac3,eac3,opus,vorbis,flac,vp9,mpeg4,mpeg2video

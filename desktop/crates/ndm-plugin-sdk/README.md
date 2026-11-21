@@ -67,6 +67,13 @@ manifest are both checked before installation.
   The desktop uses a sliding two-segment control for `boolean`. Choices
   with two or three short labels can also use sliding segments. These
   controls are available in the download form and plugin settings.
+  An optional localized `help` appears on hover. A `text` field can declare
+  `editor.kind: "multi_select"` with localized `choices` and `max_selected`.
+  The engine still receives a comma-separated string. Use a `proxy_address`
+  editor with `schemes` for a protocol menu and host-and-port input. The first
+  listed scheme is the default for a bare address. `required_when` can name
+  a Boolean field that makes the address required when enabled. The engine
+  receives a complete proxy URL.
 - `tools` can expose named MCP download actions. Each has a stable `id`,
   localized `name` and `description`, and optional preset `defaults` for
   the options. NDM registers them while AI integration is enabled.
