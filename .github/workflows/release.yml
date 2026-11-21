@@ -13,13 +13,21 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Existing desktop-vX.Y.Z tag to publish, or leave blank to build desktop artifacts only'
+        description: 'Desktop-vX.Y.Z tag to publish, or leave blank to build desktop artifacts only'
         required: false
         type: string
       artifact_run_id:
-        description: 'Optional release run to reuse after a publishing failure'
+        description: 'Optional Actions run containing the release artifacts'
         required: false
         type: string
+      macos_arm64_run_id:
+        description: 'Optional Actions run containing a rebuilt macOS arm64 package'
+        required: false
+        type: string
+      desktop_only:
+        description: 'Publish the desktop packages without the companion extension'
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -46,7 +54,7 @@ jobs:
 
   extension:
     name: Package companion extension
-    if: ${{ !inputs.artifact_run_id && (inputs.release_tag || startsWith(github.ref, 'refs/tags/desktop-v')) }}
+    if: ${{ !inputs.artifact_run_id && !inputs.desktop_only && (inputs.release_tag || startsWith(github.ref, 'refs/tags/desktop-v')) }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -73,30 +81,36 @@ jobs:
     name: Publish GitHub release
     needs: [windows, macos, linux, extension]
     if: >-
-      ${{ !cancelled() && (inputs.artifact_run_id ||
-        ((inputs.release_tag || startsWith(github.ref, 'refs/tags/desktop-v')) &&
-        needs.windows.result == 'success' && needs.macos.result == 'success' &&
-        needs.linux.result == 'success' && needs.extension.result == 'success')) }}
+      ${{ !cancelled() && (inputs.release_tag || startsWith(github.ref, 'refs/tags/desktop-v')) &&
+        (inputs.artifact_run_id ||
+        (needs.windows.result == 'success' && needs.macos.result == 'success' &&
+        needs.linux.result == 'success' && (inputs.desktop_only || needs.extension.result == 'success'))) }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
       actions: read
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          ref: ${{ env.RELEASE_TAG }}
-          persist-credentials: false
       - name: Validate artifact provenance
+        id: provenance
         env:
           GH_TOKEN: ${{ github.token }}
           ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id || github.run_id }}
+          ARM64_RUN_ID: ${{ inputs.macos_arm64_run_id || inputs.artifact_run_id || github.run_id }}
         run: |
           set -euo pipefail
-          version="${RELEASE_TAG#desktop-v}"
-          [[ "$RELEASE_TAG" == desktop-v* && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          [[ "$ARTIFACT_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$RELEASE_TAG" =~ ^desktop-v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$ARTIFACT_RUN_ID" =~ ^[0-9]+$ && "$ARM64_RUN_ID" =~ ^[0-9]+$ ]]
           run_sha=$(gh api "repos/$GH_REPO/actions/runs/$ARTIFACT_RUN_ID" --jq '.head_sha')
-          [[ "$run_sha" == "$(git rev-parse HEAD)" ]]
+          [[ "$run_sha" =~ ^[0-9a-f]{40}$ ]]
+          if [[ "$ARM64_RUN_ID" != "$ARTIFACT_RUN_ID" ]]; then
+            arm64_sha=$(gh api "repos/$GH_REPO/actions/runs/$ARM64_RUN_ID" --jq '.head_sha')
+            [[ "$arm64_sha" == "$run_sha" ]]
+          fi
+          printf 'commit=%s\n' "$run_sha" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ steps.provenance.outputs.commit }}
+          persist-credentials: false
       - name: Download Windows artifact
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
@@ -104,15 +118,22 @@ jobs:
           path: release-assets
           github-token: ${{ github.token }}
           run-id: ${{ inputs.artifact_run_id || github.run_id }}
-      - name: Download macOS artifacts
+      - name: Download macOS Intel artifact
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          pattern: ndm-next-macos-*
-          path: release-assets
-          merge-multiple: true
+          name: ndm-next-macos-x64
+          path: macos-x64
           github-token: ${{ github.token }}
           run-id: ${{ inputs.artifact_run_id || github.run_id }}
+      - name: Download macOS Apple silicon artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: ndm-next-macos-arm64
+          path: macos-arm64
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.macos_arm64_run_id || inputs.artifact_run_id || github.run_id }}
       - name: Download companion extension
+        if: ${{ !inputs.desktop_only }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: ndm-next-extension
@@ -127,39 +148,49 @@ jobs:
           github-token: ${{ github.token }}
           run-id: ${{ inputs.artifact_run_id || github.run_id }}
       - name: Validate release version and checksums
+        env:
+          DESKTOP_ONLY: ${{ inputs.desktop_only || false }}
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#desktop-v}"
-          [[ "$RELEASE_TAG" == desktop-v* && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          [[ -f "release-assets/NDM-Next-Setup-$version-x64.exe" ]]
-          mapfile -t dmgs < <(find release-assets -type f -name 'NDM-Next-*-macos-*.dmg' -print)
-          [[ "${#dmgs[@]}" -eq 2 ]]
-          [[ -f "release-assets/NDM-Next-$version-macos-arm64.dmg" ]]
-          [[ -f "release-assets/NDM-Next-$version-macos-x64.dmg" ]]
+          workspace_version=$(python3 -c 'import tomllib; print(tomllib.load(open("desktop/Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+          [[ "$workspace_version" == "$version" ]]
+          windows="NDM-Next-Setup-$version-x64.exe"
+          intel="NDM-Next-$version-macos-x64.dmg"
+          arm64="NDM-Next-$version-macos-arm64.dmg"
           linux="NDM-Next-$version-linux-x64.tar.gz"
-          [[ -f "release-assets/$linux" && -f "release-assets/$linux.sha256" ]]
-          tar -tzf "release-assets/$linux" > /dev/null
-          extension_version=$(python3 -c 'import json; print(json.load(open("extension/manifest.json"))["version"])')
-          extension="release-assets/NDM-Next-Extension-Desktop-$version-v$extension_version.zip"
-          [[ -f "$extension" && -f "$extension.sha256" ]]
-          unzip -t "$extension"
-          unzip -p "$extension" manifest.json | cmp - extension/manifest.json
-          while IFS= read -r -d '' digest; do
-            (cd "$(dirname "$digest")" && shasum -a 256 --check "$(basename "$digest")")
-          done < <(find release-assets -type f -name '*.sha256' -print0)
-          for dmg in "${dmgs[@]}"; do
-            [[ -f "$dmg.sha256" ]]
-          done
-          (cd release-assets && sha256sum ./*.exe ./*.dmg ./*.tar.gz ./*.zip > SHA256SUMS)
+          cp "macos-x64/$intel"{,.sha256} "macos-arm64/$arm64"{,.sha256} release-assets/
+          packages=("$windows" "$intel" "$arm64" "$linux")
+          checksums=("$intel.sha256" "$arm64.sha256" "$linux.sha256")
+          if [[ "$DESKTOP_ONLY" != true ]]; then
+            extension_version=$(python3 -c 'import json; print(json.load(open("extension/manifest.json"))["version"])')
+            extension="NDM-Next-Extension-Desktop-$version-v$extension_version.zip"
+            unzip -t "release-assets/$extension"
+            unzip -p "release-assets/$extension" manifest.json | cmp - extension/manifest.json
+            packages+=("$extension")
+            checksums+=("$extension.sha256")
+          fi
+          cd release-assets
+          tar -tzf "$linux" > /dev/null
+          sha256sum --check "${checksums[@]}"
+          sha256sum "${packages[@]}" > SHA256SUMS
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mapfile -t assets < <(find release-assets -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' -o -name SHA256SUMS \) -print)
+          commit=$(git rev-parse HEAD)
+          existing=$(gh api "repos/$GH_REPO/git/matching-refs/tags/$RELEASE_TAG" --jq ".[] | select(.ref == \"refs/tags/$RELEASE_TAG\") | .ref")
+          tag_args=(--target "$commit")
+          if [[ -n "$existing" ]]; then
+            tag_commit=$(gh api "repos/$GH_REPO/commits/$RELEASE_TAG" --jq '.sha')
+            [[ "$tag_commit" == "$commit" ]]
+            tag_args=(--verify-tag)
+          fi
+          mapfile -t assets < <(find release-assets -maxdepth 1 -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' -o -name SHA256SUMS \) -print)
           gh release create "$RELEASE_TAG" "${assets[@]}" \
             --title "NDM Next ${RELEASE_TAG#desktop-v}" \
-            --verify-tag \
+            "${tag_args[@]}" \
             --draft \
             --notes-file "docs/releases/desktop-${RELEASE_TAG#desktop-v}.md" \
             --generate-notes
