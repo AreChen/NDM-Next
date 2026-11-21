@@ -29,6 +29,11 @@ pwsh -File .\enable-dev-extension.ps1 -ExtensionId <extension-id>
 
 The desktop updater updates the desktop app. Unpacked extensions must be updated manually from the matching release ZIP.
 
+GitHub Actions tests and packages changes to the extension on the main branch.
+Use **Run workflow** to build a ZIP on demand and download the
+`ndm-next-extension` artifact from the completed run. Desktop releases
+include the extension ZIP built from the release tag. [Browser extension build](https://github.com/AreChen/NDM-Next/actions/workflows/extension-build.yml)
+
 Use **Open page resources** to search and select the images, video, audio,
 HLS and DASH resources observed in a tab. The window shows available image
 and player previews. The takeover size setting applies to automatic browser
@@ -60,6 +65,9 @@ Linux 用户从解压目录启动桌面应用一次，即可注册原生宿主�
 macOS 或 Linux 若要继续使用旧扩展，可复制扩展 ID，粘贴到 **NDM Next → 设置 → 浏览器扩展 → 修复连接**。Windows 自定义开发者 ID 可使用 ZIP 内的 `enable-dev-extension.ps1`。
 
 桌面自动更新只更新桌面程序。解压加载的扩展需手动下载对应 Release ZIP 更新。
+
+主分支的扩展改动会触发 GitHub Actions 测试和打包，也可以点 **Run workflow** 手动构建。
+构建完成后，在对应运行中下载 `ndm-next-extension` 产物。桌面发布附有同一标签构建的扩展 ZIP。[扩展构建](https://github.com/AreChen/NDM-Next/actions/workflows/extension-build.yml)
 
 点 **打开网页资源** 可搜索和选择当前标签页已发现的图片、音视频、HLS 和 DASH。
 有可用的图片、播放器封面或视频帧时，资源条目会显示缩略图。文件大小门槛用于自动接管。
