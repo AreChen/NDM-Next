@@ -131,6 +131,10 @@ impl Desktop {
         let busy = self.integration.market.busy;
         let blocked = busy || matches!(self.update_state, UpdateState::Installing);
         let controls = self.plugin_option_controls(&editor.fields, OptionForm::Defaults, cx);
+        let back_label = self.text("返回市场", "Back to market");
+        let back_padding = px(8.);
+        let back_icon_size = px(14.);
+        let back_gap = px(4.);
         div()
             .id("plugin-defaults")
             .w_full()
@@ -150,14 +154,30 @@ impl Desktop {
                         Button::new("back-to-market")
                             .small()
                             .ghost()
-                            .icon(IconName::ArrowLeft)
-                            .label(self.text("返回市场", "Back to market"))
+                            .px(back_padding)
+                            .accessibility_label(back_label)
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(back_gap)
+                                    .child(Icon::new(IconName::ArrowLeft).with_size(back_icon_size))
+                                    .child(back_label),
+                            )
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.close_plugin_defaults(cx);
                                 this.page_focus.focus(window, cx);
                             })),
                     )
-                    .child(div().w_full().truncate().text_xl().font_weight(FontWeight::BOLD).child(name)),
+                    .child(
+                        div()
+                            .w_full()
+                            .pl(back_padding + back_icon_size + back_gap)
+                            .truncate()
+                            .text_xl()
+                            .font_weight(FontWeight::BOLD)
+                            .child(name),
+                    ),
             )
             .child(
                 div()
