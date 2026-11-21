@@ -1,20 +1,16 @@
 <div align="center">
-  <img src="extension/icons/icon-128.png" width="96" height="96" alt="NDM Next logo">
-  <h1>NDM Next</h1>
-  <p><strong>High performance · Memory safety · Modern design</strong></p>
-  <p>A download manager for Windows, macOS, and Linux, built with Rust and a polished native GPUI interface.</p>
+  <h1><img src="assets/readme/hero.webp" width="1200" alt="NDM Next"></h1>
+  <p><strong>Fast, multithreaded downloads in a modern native app.</strong></p>
+  <p>Built with Rust and GPUI for Windows, macOS, and Linux, with a memory-safe core, pluggable download engines, and optional AI integration.</p>
+  <p>Download torrents, magnet links, and streaming media with optional engines from the <a href="#plugins-and-ai">desktop plugin market</a>.</p>
   <p>
     <a href="https://github.com/AreChen/NDM-Next/releases/latest"><img src="https://img.shields.io/github/v/release/AreChen/NDM-Next?label=download&amp;color=7c61ff" alt="Latest release"></a>
     <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-168aad" alt="Windows, macOS, and Linux">
     <a href="https://github.com/AreChen/NDM-Next/actions/workflows/release.yml"><img src="https://github.com/AreChen/NDM-Next/actions/workflows/release.yml/badge.svg" alt="Desktop release build"></a>
     <a href="LICENSE"><img src="https://img.shields.io/github/license/AreChen/NDM-Next?color=34b8a3" alt="MIT license"></a>
   </p>
-  <p><a href="https://github.com/AreChen/NDM-Next/releases/latest"><strong>Download</strong></a> · <a href="#features">Features</a> · <a href="#browser-extension">Browser extension</a> · <a href="README.zh-CN.md">简体中文</a></p>
+  <p><a href="https://github.com/AreChen/NDM-Next/releases/latest"><strong>Download</strong></a> · <a href="#features">Features</a> · <a href="#screenshots">Screenshots</a> · <a href="#browser-extension">Browser extension</a> · <a href="README.zh-CN.md">简体中文</a></p>
 </div>
-
-<p align="center">
-  <img src="assets/ndm-next-screenshot.png" width="1000" alt="NDM Next desktop app with a compact sidebar and download tasks">
-</p>
 
 ## Features
 
@@ -39,15 +35,25 @@ The app checks GitHub for updates. Click **Upgrade** to download a verified pack
 
 New profiles use 16 download connections and startup at login. Existing saved choices are preserved.
 
+## Screenshots
+
+| Dark theme | Light theme |
+| :---: | :---: |
+| [![Download list in dark mode](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.webp) | [![Download list in light mode](assets/readme/downloads-light.webp)](assets/readme/downloads-light.webp) |
+
+## Plugins and AI
+
+<img src="assets/readme/plugins-ai.webp" width="1200" alt="NDM Next plugin market and AI integration settings">
+
+Install **BitTorrent** for `.torrent` files and magnet links, or **Media Downloader** for streaming video, audio, and playlists from supported sites. Both engines are available in the [desktop plugin market](assets/readme/plugin-market.webp).
+
+Enable [AI integration](assets/readme/ai-settings.webp) to queue and manage downloads from Codex CLI through MCP and the companion Skill. [Plugin and AI setup guide](docs/plugins-and-ai.md)
+
 ## Browser extension
 
 Connect **Chrome, Edge or Brave** to capture downloads and discover webpage media. Optional download buttons appear beside media; the separate media library lets you search, select and download resources in batches.
 
 Each release includes its matching versioned extension ZIP. Follow the [extension installation guide](docs/extension-install.md).
-
-The plugin market adds download engines for new sources. Codex CLI can
-optionally use NDM Next through MCP and the companion Skill. See the
-[plugin and AI integration guide](docs/plugins-and-ai.md).
 
 **Platform details:** [Windows](desktop/packaging/windows/README.md#browser-extension) · [macOS](desktop/packaging/macos/README.md#browser-extension) · [Linux](desktop/packaging/linux/README.md#browser-extension). Select **NDM Next** as the extension backend. The extension also supports Neat Download Manager.
 

@@ -1,20 +1,16 @@
 <div align="center">
-  <img src="extension/icons/icon-128.png" width="96" height="96" alt="NDM Next 标志">
-  <h1>NDM Next</h1>
-  <p><strong>高性能 · 内存安全 · 现代美观</strong></p>
-  <p>使用 Rust 与 GPUI 构建的 Windows、macOS 和 Linux 下载管理器，搭配精致的原生界面。</p>
+  <h1><img src="assets/readme/hero.webp" width="1200" alt="NDM Next"></h1>
+  <p><strong>高性能多线程下载，搭配现代原生界面。</strong></p>
+  <p>使用 Rust 和 GPUI 构建，支持 Windows、macOS 和 Linux，提供内存安全的下载核心、可扩展的下载引擎与可选的 AI 接入。</p>
+  <p>通过<a href="#插件与-ai">桌面插件市场</a>安装下载引擎，即可下载种子、磁力链接和流媒体。</p>
   <p>
     <a href="https://github.com/AreChen/NDM-Next/releases/latest"><img src="https://img.shields.io/github/v/release/AreChen/NDM-Next?label=download&amp;color=7c61ff" alt="最新版本"></a>
     <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-168aad" alt="支持 Windows、macOS 和 Linux">
     <a href="https://github.com/AreChen/NDM-Next/actions/workflows/release.yml"><img src="https://github.com/AreChen/NDM-Next/actions/workflows/release.yml/badge.svg" alt="桌面端发布构建"></a>
     <a href="LICENSE"><img src="https://img.shields.io/github/license/AreChen/NDM-Next?color=34b8a3" alt="MIT 许可证"></a>
   </p>
-  <p><a href="https://github.com/AreChen/NDM-Next/releases/latest"><strong>下载应用</strong></a> · <a href="#功能">功能</a> · <a href="#浏览器扩展">浏览器扩展</a> · <a href="README.md">English</a></p>
+  <p><a href="https://github.com/AreChen/NDM-Next/releases/latest"><strong>下载应用</strong></a> · <a href="#功能">功能</a> · <a href="#界面截图">界面截图</a> · <a href="#浏览器扩展">浏览器扩展</a> · <a href="README.md">English</a></p>
 </div>
-
-<p align="center">
-  <img src="assets/ndm-next-screenshot.png" width="1000" alt="NDM Next 桌面程序，展示紧凑侧边栏及下载任务">
-</p>
 
 ## 功能
 
@@ -39,13 +35,25 @@
 
 新安装默认使用 16 个下载连接并开启开机自启，已有设置会保留。
 
+## 界面截图
+
+| 暗色主题 | 亮色主题 |
+| :---: | :---: |
+| [![暗色下载列表](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.webp) | [![亮色下载列表](assets/readme/downloads-light.webp)](assets/readme/downloads-light.webp) |
+
+## 插件与 AI
+
+<img src="assets/readme/plugins-ai.webp" width="1200" alt="NDM Next 插件市场和 AI 接入设置">
+
+在[桌面插件市场](assets/readme/plugin-market.webp)安装 **BitTorrent**，即可下载 `.torrent` 文件和磁力链接。安装 **Media Downloader**，即可下载受支持网站的流媒体视频、音频和播放列表。
+
+开启 [AI 接入](assets/readme/ai-settings.webp)后，可通过 MCP 和配套 Skill 在 Codex CLI 中创建和管理下载任务。[插件与 AI 接入指南](docs/plugins-and-ai.md)
+
 ## 浏览器扩展
 
 连接 **Chrome、Edge 或 Brave**，接管下载并嗅探网页媒体。可选开启媒体旁的下载按钮，也可打开独立媒体资源窗口，搜索、选择并批量下载。
 
 每次 Release 均附带对应版本的扩展 ZIP。按照[扩展安装说明](docs/extension-install.md)连接浏览器。
-
-可在插件市场为 NDM Next 安装更多下载引擎。Codex CLI 可选通过 MCP 和配套 Skill 接入。参见[插件与 AI 接入说明](docs/plugins-and-ai.md)。
 
 **平台说明** [Windows](desktop/packaging/windows/README.md#browser-extension) · [macOS](desktop/packaging/macos/README.md#browser-extension) · [Linux](desktop/packaging/linux/README.md#browser-extension)。扩展后端请选择 **NDM Next**。扩展也支持连接 Neat Download Manager。
 
