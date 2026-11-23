@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 futures-util.workspace = true
+hyper-util = { version = "0.1", features = ["client-proxy-system"] }
 hls-engine.workspace = true
 isolang.workspace = true
 m3u8-rs.workspace = true

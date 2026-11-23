@@ -31,25 +31,33 @@ impl Desktop {
             return;
         }
         let store = self.store.clone();
+        let scheduler = self.scheduler.clone();
         let runtime = self.runtime.clone();
         cx.spawn(async move |view, cx| {
             let result = runtime
-                .spawn_blocking(move || crate::redownload::enqueue(&store, id))
+                .spawn(async move {
+                    let task = store.get(id)?.ok_or(ndm_core::Error::NotFound)?;
+                    if matches!(task.state, TaskState::Queued | TaskState::Running) {
+                        scheduler.restart_active(id).await
+                    } else {
+                        tokio::task::spawn_blocking(move || crate::redownload::enqueue(&store, id))
+                            .await
+                            .map_err(std::io::Error::other)?
+                    }
+                })
                 .await;
             let _ = view.update(cx, |this, cx| {
                 match result {
                     Ok(Ok(task)) => {
+                        this.retained_progress.remove(&task.id);
                         this.seen_tasks.insert(task.id);
                         this.scheduler.notify();
                         this.reload();
                         this.show_progress(task.id, cx);
                     }
                     _ => this.set_notice(
-                        this.text(
-                            "无法重新下载，请检查链接是否仍然有效。",
-                            "Could not download again. Check that the link is still valid.",
-                        )
-                        .into(),
+                        this.text("无法重新下载。", "Could not download again.")
+                            .into(),
                         cx,
                     ),
                 }

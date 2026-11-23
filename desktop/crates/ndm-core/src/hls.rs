@@ -70,6 +70,10 @@ pub struct HlsOptions {
     pub download_threads: Option<u32>,
     #[serde(default)]
     pub proxy: Option<ProxyOptions>,
+    #[serde(default)]
+    pub proxy_mode: crate::ProxyMode,
+    #[serde(default)]
+    pub user_agent: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -275,14 +279,18 @@ fn network_source(
     request: &NewTask,
     cancel: CancellationToken,
     max_bytes_per_second: Option<u64>,
-    proxy: Option<&ProxyOptions>,
+    options: &HlsOptions,
     progress: DownloadProgress,
 ) -> Result<(Arc<NetworkSource>, Url)> {
     let url = Url::parse(&request.url).map_err(|_| Error::Hls)?;
     if !matches!(url.scheme(), "http" | "https") {
         return Err(Error::Hls);
     }
-    let client = network_client(proxy)?;
+    let client = network_client(
+        options.proxy.as_ref(),
+        options.proxy_mode,
+        options.user_agent.as_deref(),
+    )?;
     let source = Arc::new(NetworkSource {
         client,
         origin: url.clone(),
@@ -308,7 +316,7 @@ pub async fn inspect_hls_with_options(
         request,
         cancel.clone(),
         None,
-        options.proxy.as_ref(),
+        options,
         DownloadProgress::default(),
     )?;
     let text = source
@@ -497,7 +505,7 @@ async fn download_hls_with_progress(
         request,
         cancel.clone(),
         options.max_bytes_per_second,
-        options.proxy.as_ref(),
+        options,
         progress.clone(),
     )?;
     let first = source
@@ -765,8 +773,14 @@ mod admission_tests {
             headers: Default::default(),
         };
         let cancel = CancellationToken::new();
-        let (source, url) =
-            network_source(&request, cancel, None, None, DownloadProgress::default()).unwrap();
+        let (source, url) = network_source(
+            &request,
+            cancel,
+            None,
+            &HlsOptions::default(),
+            DownloadProgress::default(),
+        )
+        .unwrap();
         let primary = InputId::new("primary").unwrap();
         let keys = KeySession::new(
             "test",

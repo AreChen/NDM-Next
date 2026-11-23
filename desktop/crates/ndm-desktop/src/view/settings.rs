@@ -11,6 +11,20 @@ const EDGE_EXTENSION_URL: &str =
     "https://microsoftedge.microsoft.com/addons/detail/ndm-next/hiblommiheggidolemmnnlocmocebckp";
 const EXTENSION_GUIDE_URL: &str =
     "https://github.com/AreChen/NDM-Next/blob/main/docs/extension-install.md";
+const USER_AGENT_PRESETS: [(&str, &str); 3] = [
+    (
+        "Chrome · Windows",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+    ),
+    (
+        "Firefox · Windows",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:145.0) Gecko/20100101 Firefox/145.0",
+    ),
+    (
+        "Safari · macOS",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15",
+    ),
+];
 
 impl Desktop {
     fn toggle_settings_group(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -55,6 +69,39 @@ impl Desktop {
         }
         self.save_preferences(cx);
         cx.notify();
+    }
+
+    fn save_user_agent(&mut self, cx: &mut Context<Self>) {
+        let value = self.user_agent_input.read(cx).value();
+        let value = value.trim();
+        if !value.is_empty() && ndm_core::validate_user_agent(value).is_err() {
+            self.set_notice(
+                self.text(
+                    "User-Agent 须为 1–1024 个可见 ASCII 字符或空格。留空可恢复默认。",
+                    "Use 1–1024 printable ASCII characters, or leave the User-Agent blank for the default.",
+                )
+                .into(),
+                cx,
+            );
+            return;
+        }
+        let mut preferences = self.preferences.clone();
+        preferences.user_agent = (!value.is_empty()).then(|| value.to_owned());
+        if preferences.save(&self.preferences_path).is_err() {
+            self.set_notice(
+                self.text("无法保存设置。", "Could not save settings.")
+                    .into(),
+                cx,
+            );
+            return;
+        }
+        self.preferences = preferences;
+        self.scheduler
+            .update_options(self.preferences.scheduler_options());
+        self.set_notice(
+            self.text("User-Agent 已保存。", "User-Agent saved.").into(),
+            cx,
+        );
     }
 
     fn settings_group(
@@ -235,6 +282,52 @@ impl Desktop {
                 this.save_preferences(cx);
                 cx.notify();
             }));
+        let ua_input = self.user_agent_input.downgrade();
+        let default_label = self.text("默认", "Default");
+        let ua_detail = div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(recovery)
+            .child(self.settings_field(
+                "User-Agent",
+                "download-user-agent",
+                &self.user_agent_input,
+                muted,
+            ))
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(
+                        Button::new("user-agent-presets")
+                            .small()
+                            .label(self.display_text(self.text("预设", "Presets")))
+                            .dropdown_caret(true)
+                            .dropdown_menu(move |menu, _, _| {
+                                use gpui_kit::component::menu::PopupMenuItem;
+                                std::iter::once((default_label, ""))
+                                    .chain(USER_AGENT_PRESETS)
+                                    .fold(menu, |menu, (label, value)| {
+                                        let input = ua_input.clone();
+                                        menu.item(PopupMenuItem::new(label).on_click(
+                                            move |_, window, cx| {
+                                                let _ = input.update(cx, |state, cx| {
+                                                    state.set_value(value, window, cx)
+                                                });
+                                            },
+                                        ))
+                                    })
+                            }),
+                    )
+                    .child(
+                        Button::new("save-user-agent")
+                            .small()
+                            .primary()
+                            .label(self.display_text(self.text("保存", "Save")))
+                            .on_click(cx.listener(|this, _, _, cx| this.save_user_agent(cx))),
+                    ),
+            );
         let motion = div().flex().items_center().child(
             Switch::new("ui-animations")
                 .small()
@@ -447,12 +540,12 @@ impl Desktop {
                 IconName::ArrowDown,
                 self.text("下载行为", "Download behavior"),
                 self.text(
-                    "并发任务、下载线程、限速与恢复",
-                    "Active tasks, download threads, speed and recovery",
+                    "并发任务、下载线程、限速、恢复及 User-Agent",
+                    "Tasks, threads, speed, recovery and User-Agent",
                 ),
             ),
             downloads,
-            Some(recovery.into_any_element()),
+            Some(ua_detail.into_any_element()),
             frames[1],
             cx,
         );

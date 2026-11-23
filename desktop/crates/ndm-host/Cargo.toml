@@ -17,6 +17,7 @@ tempfile = "3"
 embed-resource = "3.0.12"
 
 [dev-dependencies]
+tokio.workspace = true
 zip = { version = "9.8.1", default-features = false }
 
 [target.'cfg(windows)'.dev-dependencies]

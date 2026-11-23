@@ -577,15 +577,52 @@ impl Store {
         self.requeue(id, Some(options))
     }
 
+    pub(crate) fn restart_paused(&self, id: TaskId) -> Result<Task> {
+        let _admission = self.admit_work()?;
+        let mut task = self.get(id)?.ok_or(Error::NotFound)?;
+        if task.state != TaskState::Paused || task.output_path.is_some() {
+            return Err(Error::InvalidState);
+        }
+        task.request.expected_size = None;
+        let request = secrets::protect(&serde_json::to_vec(&task.request)?)?;
+        let mut connection = self.connection()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if tx.execute(
+            "UPDATE tasks SET request = ?1, state = 'queued', progress = NULL,
+             output = NULL, error = NULL, size_verified = NULL, engine_title = NULL
+             WHERE id = ?2 AND state = 'paused'",
+            params![request, id.to_string()],
+        )? != 1
+        {
+            return Err(Error::InvalidState);
+        }
+        tx.execute(
+            "DELETE FROM sftp_pending_hosts WHERE id = ?1",
+            [id.to_string()],
+        )?;
+        // The caller blocks dispatch and the admission lock serializes resume.
+        crate::cache::remove_partial(
+            task.cache_directory
+                .as_deref()
+                .unwrap_or(&task.request.destination),
+            id,
+        )?;
+        let task = read_task(&tx, id)?.ok_or(Error::NotFound)?;
+        tx.commit()?;
+        Ok(task)
+    }
+
     fn requeue(&self, id: TaskId, options: Option<&TaskOptions>) -> Result<()> {
         let _admission = self.admit_work()?;
         let mut conn = self.connection()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let changed = if let Some(options) = options {
             let encrypted = secrets::protect(&serde_json::to_vec(options)?)?;
+            let mut policy = read_task(&tx, id)?.ok_or(Error::NotFound)?.policy;
+            policy.proxy_mode = crate::ProxyMode::Inherit;
             tx.execute(
-                "UPDATE tasks SET state = 'queued', error = NULL, options = ?1 WHERE id = ?2 AND state IN ('paused','failed')",
-                params![encrypted, id.to_string()],
+                "UPDATE tasks SET state = 'queued', error = NULL, options = ?1, policy = ?2 WHERE id = ?3 AND state IN ('paused','failed')",
+                params![encrypted, serde_json::to_vec(&policy)?, id.to_string()],
             )?
         } else {
             tx.execute(
@@ -828,10 +865,27 @@ impl Store {
     }
 
     pub(crate) fn save_progress(&self, id: TaskId, progress: &ProgressSnapshot) -> Result<()> {
+        self.write_progress(id, progress, false)
+    }
+
+    pub(crate) fn save_running_progress(
+        &self,
+        id: TaskId,
+        progress: &ProgressSnapshot,
+    ) -> Result<()> {
+        self.write_progress(id, progress, true)
+    }
+
+    fn write_progress(
+        &self,
+        id: TaskId,
+        progress: &ProgressSnapshot,
+        running_only: bool,
+    ) -> Result<()> {
         let encrypted = secrets::protect(&serde_json::to_vec(progress)?)?;
         self.connection()?.execute(
-            "UPDATE tasks SET progress = ?1 WHERE id = ?2",
-            params![encrypted, id.to_string()],
+            "UPDATE tasks SET progress = ?1 WHERE id = ?2 AND (NOT ?3 OR state = 'running')",
+            params![encrypted, id.to_string(), running_only],
         )?;
         Ok(())
     }
@@ -840,6 +894,25 @@ impl Store {
         let changed = self.connection()?.execute(
             "UPDATE tasks SET state = 'failed', error = ?1 WHERE id = ?2 AND state = 'running'",
             params![reason, id.to_string()],
+        )?;
+        if changed == 1 {
+            Ok(())
+        } else {
+            Err(Error::InvalidState)
+        }
+    }
+
+    pub(crate) fn fail_http(
+        &self,
+        id: TaskId,
+        reason: &'static str,
+        progress: &ProgressSnapshot,
+    ) -> Result<()> {
+        let progress = secrets::protect(&serde_json::to_vec(progress)?)?;
+        let changed = self.connection()?.execute(
+            "UPDATE tasks SET state = 'failed', error = ?1, progress = ?2
+             WHERE id = ?3 AND state = 'running'",
+            params![reason, progress, id.to_string()],
         )?;
         if changed == 1 {
             Ok(())

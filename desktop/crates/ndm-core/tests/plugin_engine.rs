@@ -401,6 +401,7 @@ async fn schedules_installed_engines_with_global_batch_and_plugin_limits() {
             TaskPolicy {
                 batch,
                 download_threads: Some(12),
+                ..Default::default()
             },
         )
     })

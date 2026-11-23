@@ -73,12 +73,14 @@ impl Desktop {
             headers: BTreeMap::new(),
         };
         let proxy = self.preferences.default_proxy();
+        let user_agent = self.preferences.user_agent.clone();
         self.inspecting_hls = true;
         self.clear_notice();
         let result = self.runtime.spawn(async move {
             let cancel = tokio_util::sync::CancellationToken::new();
             let dash = DashOptions {
                 proxy: proxy.clone(),
+                user_agent: user_agent.clone(),
                 ..Default::default()
             };
             if dash_first {
@@ -88,6 +90,7 @@ impl Desktop {
             }
             let hls = HlsOptions {
                 proxy,
+                user_agent,
                 ..Default::default()
             };
             match inspect_hls_with_options(&request, &hls, cancel.clone()).await {

@@ -42,6 +42,10 @@ pub struct DashOptions {
     pub max_bytes_per_second: Option<u64>,
     #[serde(default)]
     pub proxy: Option<ProxyOptions>,
+    #[serde(default)]
+    pub proxy_mode: crate::ProxyMode,
+    #[serde(default)]
+    pub user_agent: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -111,7 +115,11 @@ impl Network {
             return Err(Error::Dash);
         }
         Ok(Self {
-            client: network_client(options.proxy.as_ref())?,
+            client: network_client(
+                options.proxy.as_ref(),
+                options.proxy_mode,
+                options.user_agent.as_deref(),
+            )?,
             origin,
             headers: request_headers(request)?,
             cancel,

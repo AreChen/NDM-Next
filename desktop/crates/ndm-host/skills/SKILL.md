@@ -42,9 +42,18 @@ This `ndm_download` request queues a direct file.
   The app-wide limit and engine limits still apply. Use
   `ndm_get_download_limits` to inspect global defaults and
   `ndm_set_download_limits` for an explicit application-wide change.
+- For a built-in HTTP(S) item, omit `proxy_mode` to inherit the app's route.
+  Use `"proxy_mode":"direct"` on that item when the user asks to bypass both
+  the app and system proxies. Use `user_agent` on the item when the user
+  specifies a User-Agent for the request.
 - Report the returned task IDs and say the tasks were queued. To confirm
   completion, use `ndm_task_status` with a returned ID. A completed task's
   `output` is the path to report. Summarize any failure with its task ID.
+- For a failed built-in file download, report the available `error.code`,
+  `error.http_status`, `error.stage`, and `proxy.effective`. Check
+  `progress.http` for the Range probe status and redirect count. A null field
+  means the detail is unavailable. Use `progress.activity` and its sample time
+  to describe slow downloads, and compare samples before calling a task stalled.
 - Use `ndm_list_tasks` when you need to find a task or look at recent activity.
   Filter by `state` when appropriate. Pass `next_cursor` back as `cursor` with
   the same filter to read the next page. A null cursor means the list ended.

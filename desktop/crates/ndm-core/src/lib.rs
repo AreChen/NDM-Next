@@ -9,6 +9,7 @@ pub use directories::{
 };
 mod continuation;
 mod dash;
+mod diagnostics;
 mod ftp;
 mod hls;
 mod http;
@@ -29,6 +30,10 @@ mod task_progress;
 pub use dash::{
     DashAudio, DashCatalog, DashOptions, DashOutcome, DashRepresentation, download_dash,
     download_dash_with_media_tool, execute_dash, inspect_dash, inspect_dash_with_options,
+};
+pub use diagnostics::{
+    DownloadFailure, HttpDiagnostics, HttpStage, ProxyMode, ProxyRoute, TaskActivity,
+    validate_user_agent,
 };
 pub use ftp::{FtpOptions, FtpSecurity, download_ftp, execute_ftp};
 pub use hls::{

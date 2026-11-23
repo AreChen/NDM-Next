@@ -7,7 +7,7 @@ use std::{
         Arc, Mutex, RwLock,
         atomic::{AtomicBool, Ordering},
     },
-    time::Instant,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use futures_util::FutureExt;
@@ -19,8 +19,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     DashOptions, DownloadLimits, DownloadProgress, Error, FtpOptions, HlsOptions, HttpOptions,
-    ProgressSnapshot, ProxyOptions, Result, SftpOptions, Store, Task, TaskCommand, TaskId,
-    TaskOptions, TaskState, execute_dash, execute_ftp, execute_hls, execute_http, execute_sftp,
+    ProgressSnapshot, ProxyMode, ProxyOptions, Result, SftpOptions, Store, Task, TaskActivity,
+    TaskCommand, TaskId, TaskOptions, TaskState, execute_dash, execute_ftp, execute_hls,
+    execute_http, execute_sftp,
 };
 
 #[derive(Clone, Debug)]
@@ -373,6 +374,41 @@ impl Scheduler {
         Ok(())
     }
 
+    /// Start a queued or running task from the beginning without creating a copy.
+    pub async fn restart_active(&self, id: TaskId) -> Result<Task> {
+        let worker = {
+            let _maintenance = self.0.maintenance.write().unwrap();
+            let task = self.0.store.get(id)?.ok_or(Error::NotFound)?;
+            if !matches!(task.state, TaskState::Queued | TaskState::Running) {
+                return Err(Error::InvalidState);
+            }
+            let worker = self.0.active.lock().unwrap().get(&id).cloned();
+            if let Some(worker) = &worker {
+                worker.manual_pause.store(true, Ordering::Release);
+                worker.cancel.cancel();
+            } else {
+                self.0.store.pause(id)?;
+            }
+            worker
+        };
+        if let Some(mut worker) = worker {
+            while !*worker.done.borrow_and_update() {
+                if worker.done.changed().await.is_err() {
+                    break;
+                }
+            }
+        }
+        let task = {
+            let _maintenance = self.0.maintenance.write().unwrap();
+            if self.0.active.lock().unwrap().contains_key(&id) {
+                return Err(Error::InvalidState);
+            }
+            self.0.store.restart_paused(id)?
+        };
+        self.notify();
+        Ok(task)
+    }
+
     /// Restart only this task through the supplied proxy, retaining its request,
     /// protocol selections and resumable data. Credentials remain encrypted by Store.
     pub async fn retry_with_proxy(&self, id: TaskId, proxy: ProxyOptions) -> Result<()> {
@@ -572,9 +608,58 @@ fn plugin_id(task: &Task) -> Option<&str> {
     }
 }
 
+struct ActivityMeter {
+    sampled: Instant,
+    changed: Instant,
+    counters: [u64; 5],
+}
+
+impl ActivityMeter {
+    fn new() -> Self {
+        let now = Instant::now();
+        Self {
+            sampled: now,
+            changed: now,
+            counters: [0; 5],
+        }
+    }
+
+    fn sample(&mut self, progress: &mut ProgressSnapshot, running: bool) {
+        let now = Instant::now();
+        let counters = [
+            progress.transferred,
+            progress.downloaded,
+            progress.merged,
+            progress.saved,
+            progress.finalized_ms,
+        ];
+        if self.counters != counters {
+            self.changed = now;
+        }
+        let elapsed = now.duration_since(self.sampled).as_millis();
+        let received = progress.transferred.saturating_sub(self.counters[0]);
+        let recent_bytes_per_second = (running && elapsed > 0)
+            .then(|| ((received as u128 * 1_000) / elapsed).min(u64::MAX as u128) as u64);
+        progress.activity = Some(TaskActivity {
+            sampled_at_unix_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+                .min(u64::MAX as u128) as u64,
+            idle_ms: now
+                .duration_since(self.changed)
+                .as_millis()
+                .min(u64::MAX as u128) as u64,
+            recent_bytes_per_second,
+        });
+        self.sampled = now;
+        self.counters = counters;
+    }
+}
+
 async fn run_one(inner: Arc<Inner>, task: Task, active: Active, done: watch::Sender<bool>) {
     let _ = inner.events.send(SchedulerEvent::Started(task.id));
-    let result = std::panic::AssertUnwindSafe(async {
+    let transfer = std::panic::AssertUnwindSafe(async {
         {
             let _maintenance = inner.maintenance.read().unwrap();
             let preferred = inner.options.read().unwrap().cache_directory.clone();
@@ -584,8 +669,25 @@ async fn run_one(inner: Arc<Inner>, task: Task, active: Active, done: watch::Sen
         }
         execute_one(&inner, &task, &active).await
     })
-    .catch_unwind()
-    .await;
+    .catch_unwind();
+    tokio::pin!(transfer);
+    let period = Duration::from_secs(1);
+    let mut tick = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut meter = ActivityMeter::new();
+    let result = loop {
+        tokio::select! {
+            biased;
+            result = &mut transfer => break result,
+            _ = tick.tick() => {
+                let mut progress = active.snapshot();
+                meter.sample(&mut progress, true);
+                if inner.store.ai_enabled().unwrap_or(false) {
+                    let _ = inner.store.save_running_progress(task.id, &progress);
+                }
+            }
+        }
+    };
     match result {
         Ok(Err(Error::SftpUnknownHost { fingerprint })) => {
             let _ = inner.events.send(SchedulerEvent::SftpHostKeyRequired {
@@ -617,6 +719,7 @@ async fn run_one(inner: Arc<Inner>, task: Task, active: Active, done: watch::Sen
         let _ = inner.store.resume(task.id);
     }
     let mut progress = active.snapshot();
+    meter.sample(&mut progress, false);
     if let Some(peers) = &mut progress.peers {
         peers.inactive();
     }
@@ -648,11 +751,11 @@ async fn run_one(inner: Arc<Inner>, task: Task, active: Active, done: watch::Sen
         eprintln!("Could not save download progress for {}: {error}", task.id);
     }
     inner.active.lock().unwrap().remove(&task.id);
-    let _ = done.send(true);
     let _ = inner.events.send(SchedulerEvent::Finished {
         id: task.id,
         progress,
     });
+    let _ = done.send(true);
     inner.wake.notify_one();
 }
 
@@ -663,16 +766,25 @@ fn task_proxy_options(
 ) -> Result<TaskOptions> {
     let mut options = task_options(task, defaults);
     match &mut options {
-        TaskOptions::Http(options) => options.proxy = Some(proxy),
-        TaskOptions::Hls(options) => options.proxy = Some(proxy),
-        TaskOptions::Dash(options) => options.proxy = Some(proxy),
+        TaskOptions::Http(options) => {
+            options.proxy = Some(proxy);
+            options.proxy_mode = ProxyMode::Inherit;
+        }
+        TaskOptions::Hls(options) => {
+            options.proxy = Some(proxy);
+            options.proxy_mode = ProxyMode::Inherit;
+        }
+        TaskOptions::Dash(options) => {
+            options.proxy = Some(proxy);
+            options.proxy_mode = ProxyMode::Inherit;
+        }
         _ => return Err(Error::InvalidState),
     }
     Ok(options)
 }
 
 fn task_options(task: &Task, defaults: &SchedulerOptions) -> TaskOptions {
-    match task.options.clone() {
+    let mut resolved = match task.options.clone() {
         TaskOptions::AutoHttp => TaskOptions::Http(defaults.http.clone()),
         TaskOptions::Auto => {
             match reqwest::Url::parse(&task.request.url).ok().map(|url| {
@@ -741,7 +853,20 @@ fn task_options(task: &Task, defaults: &SchedulerOptions) -> TaskOptions {
             TaskOptions::Ftp(options)
         }
         other => other,
+    };
+    let (mode, ua) = match &mut resolved {
+        TaskOptions::Http(options) => (&mut options.proxy_mode, &mut options.user_agent),
+        TaskOptions::Hls(options) => (&mut options.proxy_mode, &mut options.user_agent),
+        TaskOptions::Dash(options) => (&mut options.proxy_mode, &mut options.user_agent),
+        _ => return resolved,
+    };
+    if task.policy.proxy_mode == ProxyMode::Direct {
+        *mode = ProxyMode::Direct;
     }
+    if ua.is_none() {
+        *ua = defaults.http.user_agent.clone();
+    }
+    resolved
 }
 
 async fn execute_one(inner: &Arc<Inner>, task: &Task, active: &Active) -> Result<()> {
@@ -911,6 +1036,7 @@ mod proxy_tests {
             max_connections: 7,
             max_bytes_per_second: Some(1024),
             proxy: None,
+            ..Default::default()
         });
         let TaskOptions::Http(options) =
             task_proxy_options(&task, &defaults, proxy.clone()).unwrap()

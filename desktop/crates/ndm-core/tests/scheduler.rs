@@ -4,6 +4,7 @@ use axum::{
     http::{Response, StatusCode, header},
     routing::get,
 };
+use futures_util::StreamExt as _;
 use ndm_core::{NewTask, Scheduler, SchedulerOptions, Store, TaskId, TaskState};
 use std::{
     collections::BTreeMap,
@@ -99,6 +100,87 @@ async fn streaming_server(known_length: bool) -> String {
         axum::serve(listener, app).await.unwrap();
     });
     format!("http://{address}/stream")
+}
+
+#[tokio::test]
+async fn running_download_restarts_with_same_id_and_discards_old_partial_files() {
+    let directory = TempDir::new().unwrap();
+    let store = Arc::new(Store::open(&directory.path().join("tasks.db")).unwrap());
+    store.set_ai_enabled(true).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/file", listener.local_addr().unwrap());
+    let requests = Arc::new(AtomicUsize::new(0));
+    let count = requests.clone();
+    let app = Router::new().route(
+        "/file",
+        get(move || {
+            let count = count.clone();
+            async move {
+                if count.fetch_add(1, Ordering::SeqCst) == 0 {
+                    let stream = futures_util::stream::once(async {
+                        Ok::<_, std::io::Error>(vec![7; 4096])
+                    })
+                    .chain(futures_util::stream::pending());
+                    Response::builder()
+                        .header(header::CONTENT_LENGTH, 12_288)
+                        .body(Body::from_stream(stream))
+                        .unwrap()
+                } else {
+                    Response::new(Body::from(vec![42; 8192]))
+                }
+            }
+        }),
+    );
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let id = TaskId::new_v4();
+    let mut req = request(directory.path(), &url);
+    req.expected_size = Some(12_288);
+    store.prepare(id, &req).unwrap();
+    store.commit(id).unwrap();
+    std::fs::write(directory.path().join("unrelated.bin"), b"keep").unwrap();
+    let scheduler = Scheduler::start(store.clone(), SchedulerOptions::default()).unwrap();
+
+    // A real transfer starts, then stops making progress while it stays running.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let task = store.get(id).unwrap().unwrap();
+            if task.progress.is_some_and(|progress| {
+                progress.downloaded == 4096
+                    && progress.activity.is_some_and(|activity| {
+                        activity.idle_ms >= 500 && activity.recent_bytes_per_second == Some(0)
+                    })
+            }) {
+                assert_eq!(task.state, TaskState::Running);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let restarted = scheduler.restart_active(id).await.unwrap();
+    assert_eq!(restarted.id, id);
+    assert_eq!(restarted.state, TaskState::Queued);
+    assert_eq!(restarted.request.url, url);
+    assert_eq!(restarted.request.expected_size, None);
+    assert!(restarted.progress.is_none());
+    wait_for(&store, id, TaskState::Completed).await;
+    scheduler.shutdown().await;
+    let tasks = store.list().unwrap();
+    assert_eq!(tasks.len(), 1);
+    let task = &tasks[0];
+    assert_eq!(task.id, id);
+    assert_eq!(
+        std::fs::read(task.output_path.as_ref().unwrap()).unwrap(),
+        vec![42; 8192],
+    );
+    assert_eq!(task.progress.as_ref().unwrap().transferred_total, 8192);
+    assert_eq!(requests.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        std::fs::read(directory.path().join("unrelated.bin")).unwrap(),
+        b"keep",
+    );
 }
 
 #[tokio::test]

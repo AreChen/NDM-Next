@@ -22,7 +22,10 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::{Error, NewTask, Result, Store, TaskId, secrets};
+use crate::{
+    DownloadFailure, Error, HttpDiagnostics, HttpStage, NewTask, ProxyMode, Result, Store,
+    TaskActivity, TaskId, diagnostics::Routing, secrets, validate_user_agent,
+};
 
 const MAX_CONNECTIONS: usize = 16;
 
@@ -32,6 +35,10 @@ pub struct HttpOptions {
     pub max_bytes_per_second: Option<u64>,
     #[serde(default)]
     pub proxy: Option<ProxyOptions>,
+    #[serde(default)]
+    pub proxy_mode: ProxyMode,
+    #[serde(default)]
+    pub user_agent: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +89,7 @@ struct ProgressState {
     total_known: AtomicBool,
     segments: RwLock<Vec<Arc<SegmentState>>>,
     peers: RwLock<Option<ndm_plugin_sdk::PeerStats>>,
+    http: RwLock<Option<HttpDiagnostics>>,
 }
 
 struct SegmentState {
@@ -137,6 +145,10 @@ pub struct ProgressSnapshot {
     pub segments: Vec<SegmentSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub peers: Option<ndm_plugin_sdk::PeerStats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http: Option<HttpDiagnostics>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activity: Option<TaskActivity>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -213,6 +225,8 @@ impl DownloadProgress {
                 })
                 .collect(),
             peers: *self.0.peers.read().unwrap(),
+            http: *self.0.http.read().unwrap(),
+            activity: None,
         }
     }
 
@@ -314,14 +328,17 @@ pub async fn execute_http(
             Err(Error::Cancelled)
         }
         Err(error) => {
-            let reason = match error {
-                Error::HttpStatus(_) => "server rejected the download",
-                Error::InvalidHttpResponse => "server returned an inconsistent response",
-                Error::Network(_) => "network error",
-                Error::Io(_) => "file or operating system error",
-                _ => "download failed",
-            };
-            store.fail(id, reason)?;
+            let failure = DownloadFailure::from_error(&error);
+            {
+                let mut http = progress.0.http.write().unwrap();
+                let diagnostics = http.get_or_insert_default();
+                diagnostics.failure = Some(failure);
+                if let Error::HttpStatus(status) = &error {
+                    diagnostics.http_status = Some(*status);
+                }
+            }
+            // Store terminal error and trace together, including for direct core callers.
+            store.fail_http(id, failure.message(), &progress.snapshot())?;
             Err(error)
         }
     }
@@ -333,17 +350,29 @@ impl Default for HttpOptions {
             max_connections: 16,
             max_bytes_per_second: None,
             proxy: None,
+            proxy_mode: ProxyMode::Inherit,
+            user_agent: None,
         }
     }
 }
 
-pub(crate) fn network_client(proxy: Option<&ProxyOptions>) -> Result<Client> {
+pub(crate) fn network_client(
+    proxy: Option<&ProxyOptions>,
+    mode: ProxyMode,
+    user_agent: Option<&str>,
+) -> Result<Client> {
     let mut builder = Client::builder()
         .connect_timeout(Duration::from_secs(30))
         .read_timeout(Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::none())
         .referer(false);
-    if let Some(config) = proxy {
+    if let Some(user_agent) = user_agent {
+        validate_user_agent(user_agent)?;
+        builder = builder.user_agent(user_agent);
+    }
+    if mode == ProxyMode::Direct {
+        builder = builder.no_proxy();
+    } else if let Some(config) = proxy {
         config.validate()?;
         let mut proxy = reqwest::Proxy::all(&config.url).map_err(|_| Error::InvalidProxy)?;
         if let Some(username) = &config.username {
@@ -352,6 +381,49 @@ pub(crate) fn network_client(proxy: Option<&ProxyOptions>) -> Result<Client> {
         builder = builder.proxy(proxy);
     }
     builder.build().map_err(network)
+}
+
+#[derive(Clone)]
+struct HttpTrace<'a> {
+    progress: &'a DownloadProgress,
+    routing: &'a Routing,
+    details: HttpDiagnostics,
+}
+
+impl HttpTrace<'_> {
+    fn record(&self) {
+        *self.progress.0.http.write().unwrap() = Some(self.details);
+    }
+
+    fn stage(&mut self, stage: HttpStage) {
+        self.details.stage = stage;
+        self.record();
+    }
+
+    async fn send(
+        &mut self,
+        stage: HttpStage,
+        client: &Client,
+        builder: reqwest::RequestBuilder,
+        cancel: &CancellationToken,
+    ) -> Result<Response> {
+        self.details.http_status = None;
+        self.details.redirect_count = 0;
+        self.details.effective_proxy = None;
+        self.stage(stage);
+        send_observed(client, builder, cancel, |url, status, redirects| {
+            self.details.stage = if status.is_some_and(|status| status.is_redirection()) {
+                HttpStage::Redirect
+            } else {
+                stage
+            };
+            self.details.http_status = status.map(|status| status.as_u16());
+            self.details.redirect_count = redirects;
+            self.details.effective_proxy = self.routing.for_url(url);
+            self.record();
+        })
+        .await
+    }
 }
 
 #[derive(PartialEq, Eq, Serialize, Deserialize)]
@@ -407,9 +479,24 @@ async fn download_http_with_progress(
     progress.0.transferred.store(0, Ordering::Relaxed);
     progress.0.phase.store(0, Ordering::Release);
     progress.set_total(None);
+    let routing = if client.is_none() {
+        Routing::new(options.proxy_mode, options.proxy.as_ref())
+    } else {
+        Routing::CustomClient
+    };
+    let mut trace = HttpTrace {
+        progress: &progress,
+        routing: &routing,
+        details: HttpDiagnostics::default(),
+    };
+    trace.record();
     let client = match client {
         Some(client) => client,
-        None => network_client(options.proxy.as_ref())?,
+        None => network_client(
+            options.proxy.as_ref(),
+            options.proxy_mode,
+            options.user_agent.as_deref(),
+        )?,
     };
     let headers = request_headers(request)?;
     fs::create_dir_all(&request.destination).await?;
@@ -423,51 +510,47 @@ async fn download_http_with_progress(
         next: Mutex::new(Instant::now()),
     });
 
-    let probe = send(
-        &client,
-        client
-            .get(&request.url)
-            .headers(headers.clone())
-            .header(header::RANGE, "bytes=0-0"),
-        &cancel,
-    )
-    .await?;
-    let discovered_filename = disposition_filename(probe.headers()).or_else(|| {
-        probe
-            .url()
-            .path_segments()
-            .and_then(|mut parts| parts.next_back())
-            .filter(|segment| !segment.is_empty())
-            .and_then(|segment| {
-                percent_encoding::percent_decode_str(segment)
-                    .decode_utf8()
-                    .ok()
-            })
-            .map(|name| name.into_owned())
-    });
-    let ranged = if probe.status() == StatusCode::PARTIAL_CONTENT {
+    let probe = trace
+        .send(
+            HttpStage::RangeProbe,
+            &client,
+            client
+                .get(&request.url)
+                .headers(headers.clone())
+                .header(header::RANGE, "bytes=0-0"),
+            &cancel,
+        )
+        .await?;
+    trace.details.range_probe_status = Some(probe.status().as_u16());
+    trace.record();
+    let mut discovered_filename = probe
+        .status()
+        .is_success()
+        .then(|| response_filename(&probe, None))
+        .flatten();
+    let range_total = if probe.status() == StatusCode::PARTIAL_CONTENT {
         probe
             .headers()
             .get(header::CONTENT_RANGE)
             .and_then(|v| v.to_str().ok())
             .and_then(parse_content_range)
             .filter(|&(start, end, total)| start == 0 && end == 0 && total > 0)
-            .and_then(|(_, _, total)| {
-                strong_etag(probe.headers())
-                    .map(|etag| (total, etag, probe.url().as_str().to_owned()))
-            })
+            .map(|(_, _, total)| total)
     } else {
         None
     };
+    if let (Some(expected), Some(total)) = (request.expected_size, range_total)
+        && expected != total
+    {
+        trace.stage(HttpStage::IntegrityCheck);
+        return Err(Error::InvalidHttpResponse);
+    }
+    let expected_size = request.expected_size.or(range_total);
+    let ranged = range_total.zip(strong_etag(probe.headers()));
 
     let assembled = work_dir.join("assembled.part");
-    if let Some((total, validator, resource_url)) = ranged {
-        if request
-            .expected_size
-            .is_some_and(|expected| expected != total)
-        {
-            return Err(Error::InvalidHttpResponse);
-        }
+    if let Some((total, validator)) = ranged {
+        let resource_url = probe.url().as_str().to_owned();
         drop(probe);
         progress.set_total(Some(total));
         let connections = options
@@ -503,48 +586,80 @@ async fn download_http_with_progress(
             let start = ((total as u128 * index as u128) / connections as u128) as u64;
             let end = ((total as u128 * (index + 1) as u128) / connections as u128) as u64 - 1;
             let part = work_dir.join(format!("segment-{index}.part"));
-            transfers.push(fetch_segment(
-                client.clone(),
-                request.url.clone(),
-                headers.clone(),
-                part,
-                start,
-                end,
-                total,
-                manifest.validator.clone(),
-                manifest.resource_url.clone(),
-                limiter.clone(),
-                segment_cancel.clone(),
-                progress.clone(),
-                segment.clone(),
-            ));
+            let client = client.clone();
+            let url = request.url.clone();
+            let headers = headers.clone();
+            let validator = manifest.validator.clone();
+            let resource = manifest.resource_url.clone();
+            let limiter = limiter.clone();
+            let cancel = segment_cancel.clone();
+            let segment = segment.clone();
+            let mut segment_trace = trace.clone();
+            segment_trace.details.stage = HttpStage::Segment;
+            transfers.push(async move {
+                let result = fetch_segment(
+                    client,
+                    url,
+                    headers,
+                    part,
+                    start,
+                    end,
+                    total,
+                    validator,
+                    resource,
+                    limiter,
+                    cancel,
+                    segment,
+                    &mut segment_trace,
+                )
+                .await;
+                (result, segment_trace.details)
+            });
         }
         let mut first_error = None;
-        while let Some(result) = transfers.next().await {
+        let mut last_segment = None;
+        while let Some((result, segment)) = transfers.next().await {
             if let Err(error) = result
                 && first_error.is_none()
             {
-                first_error = Some(error);
+                first_error = Some((error, segment));
                 segment_cancel.cancel();
+            } else if segment.http_status.is_some() {
+                last_segment = Some(segment);
             }
         }
         match first_error {
-            Some(Error::InvalidHttpResponse) if !cancel.is_cancelled() => {
+            Some((error, segment)) => {
+                trace.details = segment;
+                trace.record();
+                if cancel.is_cancelled() || !range_failure_can_retry_full(&error) {
+                    return Err(error);
+                }
                 progress.0.downloaded.store(0, Ordering::Relaxed);
-                let response =
-                    send(&client, client.get(&request.url).headers(headers), &cancel).await?;
+                let response = trace
+                    .send(
+                        HttpStage::FullDownload,
+                        &client,
+                        client.get(&request.url).headers(headers),
+                        &cancel,
+                    )
+                    .await?;
+                discovered_filename = response_filename(&response, discovered_filename);
                 download_full(
                     response,
                     &assembled,
                     &limiter,
                     &cancel,
-                    &progress,
-                    request.expected_size,
+                    expected_size,
+                    &mut trace,
                 )
                 .await?;
             }
-            Some(error) => return Err(error),
             None => {
+                if let Some(segment) = last_segment {
+                    trace.details = segment;
+                }
+                trace.stage(HttpStage::IntegrityCheck);
                 assemble_segments(
                     &work_dir,
                     &assembled,
@@ -559,29 +674,37 @@ async fn download_http_with_progress(
     } else {
         let response = if probe.status() == StatusCode::OK {
             probe
-        } else if matches!(
-            probe.status(),
-            StatusCode::PARTIAL_CONTENT | StatusCode::RANGE_NOT_SATISFIABLE
-        ) {
+        } else if probe.status() == StatusCode::PARTIAL_CONTENT
+            || range_failure_can_retry_full(&Error::HttpStatus(probe.status().as_u16()))
+        {
             drop(probe);
-            send(&client, client.get(&request.url).headers(headers), &cancel).await?
+            trace
+                .send(
+                    HttpStage::FullDownload,
+                    &client,
+                    client.get(&request.url).headers(headers),
+                    &cancel,
+                )
+                .await?
         } else {
             return Err(Error::HttpStatus(probe.status().as_u16()));
         };
+        discovered_filename = response_filename(&response, discovered_filename);
         download_full(
             response,
             &assembled,
             &limiter,
             &cancel,
-            &progress,
-            request.expected_size,
+            expected_size,
+            &mut trace,
         )
         .await?;
     }
     if cancel.is_cancelled() {
         return Err(Error::Cancelled);
     }
-    if let Some(size) = request.expected_size
+    trace.stage(HttpStage::IntegrityCheck);
+    if let Some(size) = expected_size
         && fs::metadata(&assembled).await?.len() != size
     {
         return Err(Error::InvalidHttpResponse);
@@ -595,6 +718,7 @@ async fn download_http_with_progress(
             .or(discovered_filename.as_deref())
             .unwrap_or("download"),
     );
+    trace.stage(HttpStage::Publish);
     let target = publish_download(
         &assembled,
         &request.destination,
@@ -608,6 +732,15 @@ async fn download_http_with_progress(
     let _ = clear_parts(&work_dir).await;
     let _ = fs::remove_dir(&work_dir).await;
     Ok(target)
+}
+
+// Some endpoints reject Range while accepting an ordinary GET. Keep the
+// same URL, credentials and proxy policy for the single streaming fallback.
+fn range_failure_can_retry_full(error: &Error) -> bool {
+    matches!(
+        error,
+        Error::InvalidHttpResponse | Error::HttpStatus(400 | 403 | 405 | 416 | 501)
+    )
 }
 
 async fn assemble_segments(
@@ -661,19 +794,27 @@ async fn download_full(
     assembled: &Path,
     limiter: &RateLimiter,
     cancel: &CancellationToken,
-    progress: &DownloadProgress,
     expected_size: Option<u64>,
+    trace: &mut HttpTrace<'_>,
 ) -> Result<()> {
     if response.status() != StatusCode::OK {
         return Err(Error::HttpStatus(response.status().as_u16()));
     }
+    trace.stage(HttpStage::FullDownload);
+    let progress = trace.progress;
     let expected = response.content_length();
+    if let (Some(response_size), Some(expected_size)) = (expected, expected_size)
+        && response_size != expected_size
+    {
+        trace.stage(HttpStage::IntegrityCheck);
+        return Err(Error::InvalidHttpResponse);
+    }
     let maximum = match (expected, expected_size) {
         (Some(a), Some(b)) => Some(a.min(b)),
         (Some(a), None) | (None, Some(a)) => Some(a),
         (None, None) => None,
     };
-    progress.set_total(expected);
+    progress.set_total(expected.or(expected_size));
     let segment = progress
         .replace_segments([expected.or(expected_size)])
         .remove(0);
@@ -693,8 +834,15 @@ async fn download_full(
         progress.finalize();
     }
     file.flush().await?;
+    if matches!(&result, Err(Error::InvalidHttpResponse)) {
+        trace.stage(HttpStage::IntegrityCheck);
+    }
     let written = result?;
-    if expected.is_some_and(|expected| expected != written) {
+    if expected
+        .or(expected_size)
+        .is_some_and(|expected| expected != written)
+    {
+        trace.stage(HttpStage::IntegrityCheck);
         return Err(Error::InvalidHttpResponse);
     }
     file.sync_all().await?;
@@ -755,11 +903,22 @@ pub(crate) async fn send(
     builder: reqwest::RequestBuilder,
     cancel: &CancellationToken,
 ) -> Result<Response> {
+    send_observed(client, builder, cancel, |_, _, _| {}).await
+}
+
+async fn send_observed(
+    client: &Client,
+    builder: reqwest::RequestBuilder,
+    cancel: &CancellationToken,
+    mut observe: impl FnMut(&reqwest::Url, Option<StatusCode>, u8),
+) -> Result<Response> {
     let mut request = builder.build().map_err(network)?;
-    for _ in 0..=10 {
+    for redirects in 0..=10 {
         let previous = request.url().clone();
         let mut next_request = request.try_clone().ok_or(Error::InvalidHttpResponse)?;
+        observe(&previous, None, redirects);
         let response = send_with_retries(client, &request, cancel).await?;
+        observe(response.url(), Some(response.status()), redirects);
         if !matches!(
             response.status(),
             StatusCode::MOVED_PERMANENTLY
@@ -782,7 +941,7 @@ pub(crate) async fn send(
         }
         if next.origin() != previous.origin() {
             let mut safe = HeaderMap::new();
-            for name in [header::RANGE, header::IF_RANGE] {
+            for name in [header::RANGE, header::IF_RANGE, header::USER_AGENT] {
                 if let Some(value) = next_request.headers().get(&name) {
                     safe.insert(name, value.clone());
                 }
@@ -859,9 +1018,10 @@ async fn fetch_segment(
     resource_url: String,
     limiter: Arc<RateLimiter>,
     cancel: CancellationToken,
-    progress: DownloadProgress,
     segment: Arc<SegmentState>,
+    trace: &mut HttpTrace<'_>,
 ) -> Result<()> {
+    let progress = trace.progress;
     let length = end - start + 1;
     let mut file = fs::OpenOptions::new()
         .create(true)
@@ -887,16 +1047,18 @@ async fn fetch_segment(
             return Ok(());
         }
         let range_start = start + present;
-        let response = send(
-            &client,
-            client
-                .get(&url)
-                .headers(headers.clone())
-                .header(header::RANGE, format!("bytes={range_start}-{end}"))
-                .header(header::IF_RANGE, &validator),
-            &cancel,
-        )
-        .await?;
+        let response = trace
+            .send(
+                HttpStage::Segment,
+                &client,
+                client
+                    .get(&url)
+                    .headers(headers.clone())
+                    .header(header::RANGE, format!("bytes={range_start}-{end}"))
+                    .header(header::IF_RANGE, &validator),
+                &cancel,
+            )
+            .await?;
         if !matches!(
             response.status(),
             StatusCode::PARTIAL_CONTENT | StatusCode::OK | StatusCode::RANGE_NOT_SATISFIABLE
@@ -913,6 +1075,7 @@ async fn fetch_segment(
                 != Some((range_start, end, total))
             || strong_etag(response.headers()).as_deref() != Some(validator.as_str())
         {
+            trace.stage(HttpStage::IntegrityCheck);
             return Err(Error::InvalidHttpResponse);
         }
         let result = write_response(
@@ -920,7 +1083,7 @@ async fn fetch_segment(
             &mut file,
             &limiter,
             &cancel,
-            &progress,
+            progress,
             Some(&segment),
             Some(length - present),
         )
@@ -931,7 +1094,10 @@ async fn fetch_segment(
                 file.sync_data().await?;
                 return Ok(());
             }
-            Ok(_) => return Err(Error::InvalidHttpResponse),
+            Ok(_) => {
+                trace.stage(HttpStage::IntegrityCheck);
+                return Err(Error::InvalidHttpResponse);
+            }
             Err(Error::Network(_)) if attempt < 2 => {
                 let next_present = file.metadata().await?.len();
                 if next_present < present || next_present > length {
@@ -1020,6 +1186,24 @@ impl RateLimiter {
             _ = tokio::time::sleep_until(ready) => Ok(()),
         }
     }
+}
+
+fn response_filename(response: &Response, fallback: Option<String>) -> Option<String> {
+    disposition_filename(response.headers())
+        .or(fallback)
+        .or_else(|| {
+            response
+                .url()
+                .path_segments()
+                .and_then(|mut parts| parts.next_back())
+                .filter(|segment| !segment.is_empty())
+                .and_then(|segment| {
+                    percent_encoding::percent_decode_str(segment)
+                        .decode_utf8()
+                        .ok()
+                })
+                .map(|name| name.into_owned())
+        })
 }
 
 fn disposition_filename(headers: &HeaderMap) -> Option<String> {

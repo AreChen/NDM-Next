@@ -53,6 +53,25 @@ updates the app's defaults for queued and future work. Built-in HTTP caps
 segment connections at 16 and HLS uses up to four concurrent fragments.
 A plugin defines how it uses its thread setting.
 
+Set the default User-Agent under **Settings → Download behavior → More
+settings**. Start with a Chrome, Firefox, or Safari preset and edit it as
+needed. Save a blank value to restore the default. A User-Agent captured
+by the browser extension or specified for an MCP item takes precedence.
+
+For a built-in HTTP(S) item, set `proxy_mode` to `direct` to bypass the app
+and system proxies for that download. Use `inherit` or omit the field to
+follow the app's current settings. Set `user_agent` on the item for an
+individual override.
+
+`ndm_task_status` and `ndm_list_tasks` provide a redacted `error` for failed
+tasks. For built-in file downloads, look at `error.http_status`, `error.stage`,
+`progress.http.range_probe_status`, `progress.http.redirect_count`, and
+`proxy.effective` for the latest attempted route. Fields are null until the
+relevant information is available, including for failures recorded by older
+versions. While AI access is on, the scheduler samples ongoing task progress
+about once a second. Use `progress.activity` to check the sample time,
+recent transfer rate, and time since the last observed progress.
+
 - [Plugin market catalog](https://github.com/AreChen/NDM-Next-Plugin-Market)
 - [Download engine SDK](../desktop/crates/ndm-plugin-sdk/README.md)
 - [Codex CLI Skill](../desktop/crates/ndm-host/skills/SKILL.md)
@@ -97,3 +116,19 @@ Codex 可发起下载、查询状态、暂停与恢复。省略保存位置时�
 下载线程数，并且仍受全局任务上限与引擎上限约束。明确要求修改全局
 设置时，新值会应用到排队和后续任务。内置 HTTP 最多使用 16 个分段
 连接，HLS 同时下载最多 4 个分片。插件可根据协议决定线程设置的用途。
+
+在 **设置 → 下载行为 → 更多设置** 可设置默认 User-Agent。可以选用
+Chrome、Firefox 或 Safari 预设，再按需编辑。留空保存会恢复默认。
+浏览器接管请求捕获的 User-Agent 和 MCP 单项指定的值优先于默认值。
+
+内置 HTTP(S) 任务可传入 `"proxy_mode":"direct"`，让该任务绕过 NDM Next
+和系统代理。传入 `inherit` 或省略该字段会沿用当前设置。单项也可以传入
+`user_agent`。
+
+`ndm_task_status` 与 `ndm_list_tasks` 为失败任务返回脱敏的 `error`。
+内置文件下载会记录 `error.http_status`、`error.stage`、
+`progress.http.range_probe_status`、`progress.http.redirect_count`，
+以及最近一次请求使用的 `proxy.effective`。缺少记录时字段返回空值，
+旧版本失败的任务也适用。开启 AI 接入后，调度器约每秒记录一次进行中
+任务的进度。通过 `progress.activity` 可查询采样时间、近期传输速度和
+自上次观察到进展以来的时长。

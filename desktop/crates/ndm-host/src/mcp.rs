@@ -8,8 +8,10 @@ use std::{
 };
 
 use ndm_core::{
-    BatchLimit, NewTask, Store, Task, TaskCommand, TaskId, TaskOptions, TaskPolicy, TaskState,
+    BatchLimit, DownloadFailure, NewTask, ProxyMode, Store, Task, TaskCommand, TaskId, TaskOptions,
+    TaskPolicy, TaskState,
     plugins::{InstalledPlugin, PluginRegistry, built_in_source, parse_source},
+    validate_user_agent,
 };
 use ndm_plugin_sdk::{read_message, write_message};
 use serde::Deserialize;
@@ -161,7 +163,7 @@ impl Server {
             ),
             tool(
                 "ndm_task_status",
-                "Look up an NDM Next task by ID.",
+                "Look up a task, including recent throughput, idle time and redacted HTTP diagnostics when available.",
                 task_id.clone(),
                 &["task_id"],
             ),
@@ -199,10 +201,10 @@ impl Server {
         {
             for action in &plugin.manifest.tools {
                 let mut fields = item_fields();
-                fields
-                    .as_object_mut()
-                    .expect("tool fields are an object")
-                    .remove("plugin");
+                let fields_object = fields.as_object_mut().expect("tool fields are an object");
+                for key in ["plugin", "proxy_mode", "user_agent"] {
+                    fields_object.remove(key);
+                }
                 fields["options"] = plugin.option_schema(action);
                 if let Some(limit) = plugin.manifest.limits.download_threads {
                     fields["download_threads"]["maximum"] = json!(limit);
@@ -407,6 +409,17 @@ impl Server {
             if options.is_none() && !built_in_source(&source) {
                 return Err("No installed download engine handles this source.");
             }
+            let proxy_mode = item.proxy_mode.unwrap_or_default();
+            if (proxy_mode == ProxyMode::Direct || item.user_agent.is_some())
+                && (options.is_some() || !matches!(source.scheme(), "http" | "https"))
+            {
+                return Err("Proxy and User-Agent overrides apply to built-in HTTP(S) downloads.");
+            }
+            let mut headers = std::collections::BTreeMap::new();
+            if let Some(user_agent) = item.user_agent {
+                validate_user_agent(&user_agent).map_err(|_| "Invalid User-Agent.")?;
+                headers.insert("user-agent".into(), user_agent);
+            }
             let destination = item.destination.unwrap_or_else(|| directory.clone());
             let threads = item.download_threads.or(batch.download_threads);
             if !destination.is_absolute() || threads.is_some_and(|n| !(1..=256).contains(&n)) {
@@ -420,7 +433,7 @@ impl Server {
                 suggested_filename: None,
                 source_url: None,
                 expected_size: None,
-                headers: Default::default(),
+                headers,
             };
             tasks.push((
                 TaskId::new_v4(),
@@ -429,6 +442,7 @@ impl Server {
                 TaskPolicy {
                     batch: batch_limit,
                     download_threads: threads,
+                    proxy_mode,
                 },
             ));
         }
@@ -500,6 +514,8 @@ struct Item {
     destination: Option<PathBuf>,
     plugin: Option<String>,
     download_threads: Option<u32>,
+    proxy_mode: Option<ProxyMode>,
+    user_agent: Option<String>,
     #[serde(default)]
     options: Map<String, Value>,
 }
@@ -543,9 +559,29 @@ fn task_json(task: &Task) -> Value {
         .map(|name| name.to_string_lossy())
         .or_else(|| task.engine_title.as_deref().map(Into::into))
         .or_else(|| task.request.suggested_filename.as_deref().map(Into::into));
+    let http = task.progress.as_ref().and_then(|progress| progress.http);
+    let error = (task.state == TaskState::Failed).then(|| {
+        let code = http.and_then(|details| details.failure).unwrap_or_else(|| {
+            task.error
+                .as_deref()
+                .map(DownloadFailure::from_stored_reason)
+                .unwrap_or(DownloadFailure::DownloadFailed)
+        });
+        json!({
+            "code":code,
+            "message":code.message(),
+            "http_status":http.and_then(|details| details.http_status),
+            "stage":http.map(|details| details.stage)
+        })
+    });
     json!({
         "id":task.id,"name":name,"engine":engine,"state":task.state.as_str(),
-        "output":task.output_path,"progress":task.progress
+        "output":task.output_path,"progress":task.progress,
+        "error":error,
+        "proxy":{
+            "requested":task.policy.proxy_mode,
+            "effective":http.and_then(|details| details.effective_proxy)
+        }
     })
 }
 
@@ -563,7 +599,9 @@ fn item_fields() -> Value {
         "destination":{"type":"string","description":"Absolute download directory. Omit to use NDM Next's default."},
         "plugin":{"type":"string","description":"Optional installed plugin ID"},
         "options":{"type":"object","description":"Options declared by the selected plugin"},
-        "download_threads":thread_limit()
+        "download_threads":thread_limit(),
+        "proxy_mode":{"type":"string","enum":["inherit","direct"],"description":"For built-in HTTP(S). Direct bypasses both NDM Next and system proxies for this item."},
+        "user_agent":{"type":"string","maxLength":1024,"description":"Optional User-Agent for this built-in HTTP(S) item. Omit to use app defaults."}
     })
 }
 

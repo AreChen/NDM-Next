@@ -93,6 +93,7 @@ pub(crate) struct Desktop {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     extension_id_input: Entity<InputState>,
     speed_input: Entity<InputState>,
+    user_agent_input: Entity<InputState>,
     proxy_url_input: Entity<InputState>,
     proxy_user_input: Entity<InputState>,
     proxy_password_input: Entity<InputState>,
@@ -245,6 +246,10 @@ impl Desktop {
             cx.new(|cx| InputState::new(window, cx).placeholder("chrome://extensions → ID"));
         let speed_input = cx.new(|cx| {
             InputState::new(window, cx).default_value(preferences.max_kib_per_second.to_string())
+        });
+        let user_agent_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(preferences.user_agent.clone().unwrap_or_default())
         });
         let proxy_url_input = cx.new(|cx| {
             InputState::new(window, cx)
@@ -470,6 +475,7 @@ impl Desktop {
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             extension_id_input,
             speed_input,
+            user_agent_input,
             proxy_url_input,
             proxy_user_input,
             proxy_password_input,

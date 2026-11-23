@@ -4,7 +4,10 @@ use ndm_core::{Store, Task, TaskId, TaskState};
 /// task and its output stay intact; the core publishes with collision-safe names.
 pub(crate) fn enqueue(store: &Store, source: TaskId) -> ndm_core::Result<Task> {
     let task = store.get(source)?.ok_or(ndm_core::Error::NotFound)?;
-    if task.state == TaskState::Prepared {
+    if !matches!(
+        task.state,
+        TaskState::Paused | TaskState::Completed | TaskState::Failed
+    ) {
         return Err(ndm_core::Error::InvalidState);
     }
     let mut request = task.request;
@@ -17,14 +20,10 @@ pub(crate) fn enqueue(store: &Store, source: TaskId) -> ndm_core::Result<Task> {
             .map(|name| name.to_string_lossy().into_owned());
     }
     let id = TaskId::new_v4();
-    store.prepare_with_options(id, &request, &task.options)?;
-    match store.commit(id) {
-        Ok(task) => Ok(task),
-        Err(error) => {
-            let _ = store.abort(id);
-            Err(error)
-        }
-    }
+    let mut policy = task.policy;
+    policy.batch = None;
+    store.enqueue(&[(id, request, task.options, policy)])?;
+    store.get(id)?.ok_or(ndm_core::Error::NotFound)
 }
 
 #[cfg(test)]

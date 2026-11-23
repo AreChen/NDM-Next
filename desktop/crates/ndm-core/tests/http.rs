@@ -16,9 +16,10 @@ use axum::{
 };
 use bytes::Bytes;
 use ndm_core::{
-    DownloadProgress, HttpOptions, NewTask, ProxyOptions, Store, TaskId, TaskState, download_http,
-    execute_http,
+    DownloadFailure, DownloadProgress, Error, HttpOptions, HttpStage, NewTask, ProxyMode,
+    ProxyOptions, ProxyRoute, Store, TaskId, TaskState, download_http, execute_http,
 };
+use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use tokio::{net::TcpListener, sync::RwLock};
 use tokio_util::sync::CancellationToken;
@@ -785,7 +786,8 @@ async fn cancelled_task_stays_paused_until_explicitly_resumed() {
 }
 
 #[tokio::test]
-async fn cross_origin_redirect_does_not_forward_private_headers_or_page_query() {
+async fn cross_origin_redirect_keeps_segments_and_user_agent_without_forwarding_private_headers() {
+    let expected = Bytes::from(data(19));
     let captured = Arc::new(Mutex::new(Vec::<HeaderMap>::new()));
     let destination = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let destination_address = destination.local_addr().unwrap();
@@ -793,11 +795,31 @@ async fn cross_origin_redirect_does_not_forward_private_headers_or_page_query() 
         "/file",
         get({
             let captured = captured.clone();
+            let expected = expected.clone();
             move |headers: HeaderMap| {
                 let captured = captured.clone();
+                let expected = expected.clone();
                 async move {
+                    let range = headers[header::RANGE].to_str().unwrap();
+                    let (start, end) = range
+                        .strip_prefix("bytes=")
+                        .unwrap()
+                        .split_once('-')
+                        .unwrap();
+                    let (start, end) = (
+                        start.parse::<usize>().unwrap(),
+                        end.parse::<usize>().unwrap(),
+                    );
                     captured.lock().unwrap().push(headers);
-                    "download"
+                    Response::builder()
+                        .status(StatusCode::PARTIAL_CONTENT)
+                        .header(header::ETAG, "\"fixture-model\"")
+                        .header(
+                            header::CONTENT_RANGE,
+                            format!("bytes {start}-{end}/{}", expected.len()),
+                        )
+                        .body(Body::from(expected.slice(start..=end)))
+                        .unwrap()
                 }
             }
         }),
@@ -831,26 +853,148 @@ async fn cross_origin_redirect_does_not_forward_private_headers_or_page_query() 
         .insert("Authorization".into(), "Bearer private-token".into());
     req.headers
         .insert("X-Api-Key".into(), "private-api-key".into());
-    let output = download_http(
-        &req,
-        TaskId::new_v4(),
-        &HttpOptions::default(),
+    req.headers
+        .insert("User-Agent".into(), "NDM test task".into());
+    let store = Store::open(&dir.path().join("tasks.db")).unwrap();
+    let id = TaskId::new_v4();
+    store.prepare(id, &req).unwrap();
+    store.commit(id).unwrap();
+    let output = execute_http(
+        &store,
+        id,
+        &HttpOptions {
+            max_connections: 4,
+            proxy_mode: ProxyMode::Direct,
+            user_agent: Some("NDM test default".into()),
+            ..Default::default()
+        },
         CancellationToken::new(),
+        DownloadProgress::default(),
     )
     .await
     .unwrap();
-    assert_eq!(std::fs::read(output).unwrap(), b"download");
+    assert_eq!(
+        Sha256::digest(std::fs::read(output).unwrap()),
+        Sha256::digest(&expected)
+    );
+    let task = store.get(id).unwrap().unwrap();
+    assert_eq!(task.size_verified, Some(true));
     let captured = captured.lock().unwrap();
-    assert!(!captured.is_empty());
+    assert_eq!(captured.len(), 5);
     for headers in captured.iter() {
+        assert_eq!(headers[header::USER_AGENT], "NDM test task");
+        if headers[header::RANGE] != "bytes=0-0" {
+            assert_eq!(headers[header::IF_RANGE], "\"fixture-model\"");
+        }
         assert!(!headers.contains_key(header::COOKIE));
         assert!(!headers.contains_key(header::AUTHORIZATION));
         assert!(!headers.contains_key("x-api-key"));
-        if let Some(referer) = headers.get(header::REFERER) {
-            let referer = referer.to_str().unwrap();
-            assert!(!referer.contains("private-"));
-        }
+        assert!(!headers.contains_key(header::REFERER));
     }
+}
+
+#[tokio::test]
+async fn rejected_range_retries_plain_get_with_the_same_direct_route_and_default_user_agent() {
+    let dir = TempDir::new().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = Router::new().route(
+        "/repo",
+        get(|headers: HeaderMap| async move {
+            assert_eq!(headers[header::USER_AGENT], "NDM test default");
+            if headers.contains_key(header::RANGE) {
+                return Response::builder()
+                    .status(StatusCode::FORBIDDEN)
+                    .body(Body::empty())
+                    .unwrap();
+            }
+            Response::builder()
+                .header(
+                    header::CONTENT_DISPOSITION,
+                    "attachment; filename=model.bin",
+                )
+                .body(Body::from("complete model"))
+                .unwrap()
+        }),
+    );
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let store = Store::open(&dir.path().join("tasks.db")).unwrap();
+    let id = TaskId::new_v4();
+    let mut req = request(dir.path(), format!("http://{address}/repo"));
+    req.suggested_filename = None;
+    store.prepare(id, &req).unwrap();
+    store.commit(id).unwrap();
+    let progress = DownloadProgress::default();
+    let output = execute_http(
+        &store,
+        id,
+        &HttpOptions {
+            proxy: Some(ProxyOptions {
+                url: "http://127.0.0.1:0".into(),
+                username: None,
+                password: None,
+            }),
+            proxy_mode: ProxyMode::Direct,
+            user_agent: Some("NDM test default".into()),
+            ..Default::default()
+        },
+        CancellationToken::new(),
+        progress.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(output.file_name().unwrap().to_str(), Some("model.bin"));
+    assert_eq!(std::fs::read(output).unwrap(), b"complete model");
+    let http = progress.snapshot().http.unwrap();
+    assert_eq!(http.range_probe_status, Some(403));
+    assert_eq!(http.http_status, Some(200));
+    assert_eq!(http.effective_proxy, Some(ProxyRoute::Direct));
+    assert_eq!(http.failure, None);
+}
+
+#[tokio::test]
+async fn range_without_a_strong_etag_still_rejects_an_incomplete_full_response() {
+    let dir = TempDir::new().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = Router::new().route(
+        "/repo",
+        get(|headers: HeaderMap| async move {
+            if headers.contains_key(header::RANGE) {
+                assert_eq!(headers[header::RANGE], "bytes=0-0");
+                return Response::builder()
+                    .status(StatusCode::PARTIAL_CONTENT)
+                    .header(header::CONTENT_RANGE, "bytes 0-0/14")
+                    .body(Body::from("c"))
+                    .unwrap();
+            }
+            Response::new(Body::from("corrupt"))
+        }),
+    );
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let store = Store::open(&dir.path().join("tasks.db")).unwrap();
+    let id = TaskId::new_v4();
+    store
+        .prepare(id, &request(dir.path(), format!("http://{address}/repo")))
+        .unwrap();
+    store.commit(id).unwrap();
+    let result = execute_http(
+        &store,
+        id,
+        &HttpOptions::default(),
+        CancellationToken::new(),
+        DownloadProgress::default(),
+    )
+    .await;
+    assert!(matches!(result, Err(Error::InvalidHttpResponse)));
+    assert!(!dir.path().join("file.bin").exists());
+    let task = store.get(id).unwrap().unwrap();
+    assert_eq!(task.state, TaskState::Failed);
+    let http = task.progress.unwrap().http.unwrap();
+    assert_eq!(http.range_probe_status, Some(206));
+    assert_eq!(http.http_status, Some(200));
+    assert_eq!(http.stage, HttpStage::IntegrityCheck);
+    assert_eq!(http.failure, Some(DownloadFailure::InvalidResponse));
 }
 
 #[tokio::test]

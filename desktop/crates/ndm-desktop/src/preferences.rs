@@ -55,6 +55,7 @@ pub struct Preferences {
     pub last_update_check: Option<u64>,
     pub available_update: Option<String>,
     pub max_kib_per_second: u64,
+    pub user_agent: Option<String>,
     pub proxy_enabled_by_default: bool,
     #[serde(skip)]
     pub proxy: Option<ndm_core::ProxyOptions>,
@@ -83,6 +84,7 @@ impl Default for Preferences {
             last_update_check: None,
             available_update: None,
             max_kib_per_second: 0,
+            user_agent: None,
             proxy_enabled_by_default: false,
             proxy: None,
         }
@@ -113,6 +115,9 @@ impl Preferences {
                     preferences.cache_dir = ndm_core::default_cache_directory();
                 }
                 preferences.cache_retention_days = preferences.cache_retention_days.min(3650);
+                preferences.user_agent = preferences
+                    .user_agent
+                    .filter(|value| ndm_core::validate_user_agent(value).is_ok());
                 if let Some(encrypted) = value.get("proxy_protected") {
                     let encrypted: Vec<u8> =
                         serde_json::from_value(encrypted.clone()).map_err(std::io::Error::other)?;
@@ -169,6 +174,8 @@ impl Preferences {
                     Some(self.max_kib_per_second.saturating_mul(1024))
                 },
                 proxy: self.default_proxy(),
+                user_agent: self.user_agent.clone(),
+                ..Default::default()
             },
         }
     }
@@ -243,6 +250,7 @@ mod tests {
             auto_update: false,
             last_update_check: Some(1_000),
             available_update: Some("99.0.0".into()),
+            user_agent: Some("NDM test default".into()),
             ..Default::default()
         };
         preferences.save(&path).unwrap();
@@ -250,6 +258,7 @@ mod tests {
         fs::write(&path, br#"{"theme":"Light"}"#).unwrap();
         let restored = Preferences::load(&path).unwrap();
         assert_eq!(restored.theme, Theme::Light);
+        assert_eq!(restored.user_agent, None);
         assert_eq!(restored.max_connections, 16);
         assert_eq!(restored.start_at_login, None);
         assert!(restored.auto_update);

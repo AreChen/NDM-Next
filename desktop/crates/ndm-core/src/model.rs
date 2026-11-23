@@ -41,6 +41,8 @@ impl fmt::Debug for PluginOptions {
 pub struct TaskPolicy {
     pub batch: Option<BatchLimit>,
     pub download_threads: Option<u32>,
+    #[serde(default)]
+    pub proxy_mode: crate::ProxyMode,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

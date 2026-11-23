@@ -236,6 +236,155 @@ fn task_pages_filter_state_and_continue_without_repeating_ids() {
     assert!(next["structuredContent"]["next_cursor"].is_null());
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn download_overrides_and_failure_diagnostics_round_trip_through_mcp() {
+    use ndm_core::{HttpOptions, ProxyMode, ProxyOptions, Scheduler, SchedulerOptions, TaskState};
+    use std::{
+        io::{BufRead, Read},
+        net::TcpListener,
+        os::unix::net::UnixListener,
+        sync::Arc,
+    };
+
+    let profile = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::open(&profile.path().join("tasks.db")).unwrap());
+    store.set_ai_enabled(true).unwrap();
+    // Register the local readiness/wake fixture without launching the UI.
+    let socket =
+        UnixListener::bind(ndm_core::unix_instance::socket_path(profile.path()).unwrap()).unwrap();
+    let desktop = std::thread::spawn(move || {
+        for command in *b"RW" {
+            let (mut connection, _) = socket.accept().unwrap();
+            let mut received = [0];
+            connection.read_exact(&mut received).unwrap();
+            assert_eq!(received, [command]);
+            connection.write_all(&[1]).unwrap();
+        }
+    });
+    let origin = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!(
+        "http://{}/repo?token=private-link",
+        origin.local_addr().unwrap()
+    );
+    let http = std::thread::spawn(move || {
+        for (path, has_range, response) in [
+            (
+                "/repo",
+                true,
+                "302 Found\r\nLocation: /model?token=private-redirect\r\nContent-Length: 0\r\n",
+            ),
+            ("/model", true, "403 Forbidden\r\nContent-Length: 0\r\n"),
+            (
+                "/repo",
+                false,
+                "302 Found\r\nLocation: /model?token=private-redirect\r\nContent-Length: 0\r\n",
+            ),
+            (
+                "/model",
+                false,
+                "401 Unauthorized\r\nContent-Length: 12\r\n",
+            ),
+        ] {
+            let (mut connection, _) = origin.accept().unwrap();
+            connection
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(&connection);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(line.starts_with(&format!("GET {path}?")));
+            let mut headers = String::new();
+            loop {
+                line.clear();
+                if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                    break;
+                }
+                headers.push_str(&line.to_ascii_lowercase());
+            }
+            assert!(headers.contains("user-agent: private-agent\r\n"));
+            assert_eq!(headers.contains("range: bytes=0-0\r\n"), has_range);
+            let body = if response.starts_with("401") {
+                "private-body"
+            } else {
+                ""
+            };
+            let reply = format!("HTTP/1.1 {response}Connection: close\r\n\r\n{body}");
+            connection.write_all(reply.as_bytes()).unwrap();
+        }
+    });
+
+    let mut mcp = Server::start(profile.path());
+    mcp.call("initialize", json!({"protocolVersion":"2025-11-25"}));
+    let reply = mcp.call(
+        "tools/call",
+        json!({
+            "name":"ndm_download",
+            "arguments":{"destination":profile.path(),"items":[{
+                "source":url,"proxy_mode":"direct","user_agent":"private-agent"
+            }]}
+        }),
+    );
+    assert_ne!(reply["isError"], true);
+    let id: TaskId =
+        serde_json::from_value(reply["structuredContent"]["task_ids"][0].clone()).unwrap();
+    assert_eq!(
+        store.get(id).unwrap().unwrap().policy.proxy_mode,
+        ProxyMode::Direct
+    );
+    desktop.join().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let scheduler = Scheduler::start(
+            store.clone(),
+            SchedulerOptions {
+                http: HttpOptions {
+                    proxy: Some(ProxyOptions {
+                        url: "http://127.0.0.1:0".into(),
+                        username: Some("private-proxy".into()),
+                        password: Some("private-password".into()),
+                    }),
+                    user_agent: Some("ndm-default".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if store.get(id).unwrap().unwrap().state == TaskState::Failed {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        scheduler.shutdown().await;
+    });
+    http.join().unwrap();
+    let result = mcp.call(
+        "tools/call",
+        json!({
+            "name":"ndm_task_status","arguments":{"task_id":id}
+        }),
+    );
+    let task = &result["structuredContent"];
+    assert_eq!(task["state"], "failed");
+    assert_eq!(
+        task["proxy"],
+        json!({"requested":"direct","effective":"direct"})
+    );
+    assert_eq!(task["error"]["code"], "http_status");
+    assert_eq!(task["error"]["http_status"], 401);
+    assert_eq!(task["error"]["stage"], "full_download");
+    assert_eq!(task["progress"]["http"]["range_probe_status"], 403);
+    assert_eq!(task["progress"]["http"]["redirect_count"], 1);
+    assert_eq!(task["progress"]["downloaded"], 0);
+    assert!(!result.to_string().contains("private-"));
+}
+
 #[test]
 fn managed_skill_refreshes_legacy_installs_and_plugin_guides() {
     let root = tempfile::tempdir().unwrap();

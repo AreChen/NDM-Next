@@ -274,7 +274,7 @@ mod tests {
             &request,
             CancellationToken::new(),
             None,
-            None,
+            &HlsOptions::default(),
             progress.clone(),
         )
         .unwrap();
