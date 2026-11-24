@@ -1673,7 +1673,11 @@ impl Desktop {
                 this.section = section;
                 match section {
                     Section::Plugins => this.open_plugin_market(cx),
-                    Section::Settings => this.refresh_codex_status(cx),
+                    Section::Settings
+                        if this.settings_open.contains(&plugins::AI_CLIENTS_GROUP) =>
+                    {
+                        this.refresh_ai_client_status(cx);
+                    }
                     _ => {}
                 }
                 cx.notify();

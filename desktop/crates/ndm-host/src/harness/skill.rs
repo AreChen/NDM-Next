@@ -11,25 +11,22 @@ use ndm_core::{
     plugins::{InstalledPlugin, PluginRegistry},
 };
 
-use super::Target;
-
 const SKILL: &str = include_str!("../../skills/SKILL.md");
 const OWNER: &str = "<!-- Managed by the NDM Next desktop integration. -->";
 const MAX_DOCUMENT_BYTES: u64 = 256 * 1024;
 
-pub(super) fn is_installed(target: &Target) -> io::Result<bool> {
-    let path = target.skill_path();
+pub(super) fn is_installed(path: &Path) -> io::Result<bool> {
     if !directory_exists(path.parent().expect("Skill parent"))? {
         return Ok(false);
     }
-    Ok(owned_document(&path)?.is_some())
+    Ok(owned_document(path)?.is_some())
 }
 
-pub(super) fn write(target: &Target) -> io::Result<()> {
-    let store = Store::open(&target.profile.join("tasks.db")).map_err(io::Error::other)?;
+pub(super) fn write(path: &Path, profile: &Path) -> io::Result<()> {
+    let store = Store::open(&profile.join("tasks.db")).map_err(io::Error::other)?;
     let enabled = store.ai_enabled().map_err(io::Error::other)?;
     let plugins = if enabled {
-        PluginRegistry::new(&target.profile).list()?
+        PluginRegistry::new(profile).list()?
     } else {
         Vec::new()
     };
@@ -55,7 +52,6 @@ pub(super) fn write(target: &Target) -> io::Result<()> {
         });
     }
 
-    let path = target.skill_path();
     let directory = path.parent().expect("Skill parent");
     fs::create_dir_all(directory.parent().expect("Skills parent"))?;
     ensure_directory(directory)?;
@@ -65,7 +61,7 @@ pub(super) fn write(target: &Target) -> io::Result<()> {
     ensure_directory(&plugins)?;
     let index_path = plugins.join("index.md");
     // Check conflicts before updating currently published guides.
-    owned_document(&path)?;
+    owned_document(path)?;
     owned_document(&index_path)?;
     for file in guides.keys() {
         owned_document(&plugins.join(file))?;
@@ -75,12 +71,11 @@ pub(super) fn write(target: &Target) -> io::Result<()> {
     }
     write_document(&index_path, &index)?;
     let skill = format!("{SKILL}\n<!-- NDM Next {} -->\n", env!("CARGO_PKG_VERSION"));
-    write_document(&path, &skill)?;
+    write_document(path, &skill)?;
     remove_stale_guides(&plugins, &guides)
 }
 
-pub(super) fn remove(target: &Target) -> io::Result<()> {
-    let path = target.skill_path();
+pub(super) fn remove(path: &Path) -> io::Result<()> {
     let directory = path.parent().expect("Skill parent");
     let references = directory.join("references");
     let plugins = references.join("plugins");
@@ -93,7 +88,7 @@ pub(super) fn remove(target: &Target) -> io::Result<()> {
         let _ = fs::remove_dir(plugins);
         let _ = fs::remove_dir(references);
     }
-    fs::remove_file(&path)?;
+    fs::remove_file(path)?;
     let _ = fs::remove_dir(directory);
     Ok(())
 }

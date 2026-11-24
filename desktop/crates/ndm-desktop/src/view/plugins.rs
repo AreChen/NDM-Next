@@ -6,22 +6,21 @@ use ndm_core::plugins::{
     PackageProgress, Panel, PluginRegistry, TextEditor, built_in_source, normalize_proxy_address,
     parse_source,
 };
-use ndm_host::harness::{CodexCli, Harness, Status, Target};
 use serde_json::{Map, Value, json};
 
+mod ai;
 mod defaults;
 mod market;
 mod option_editors;
 mod source_picker;
 pub(super) use market::market_search_placeholder;
+pub(super) const AI_CLIENTS_GROUP: usize = 7;
 
 #[derive(Default)]
 pub(super) struct Integration {
     market: market::Market,
     defaults: Option<defaults::Editor>,
-    ai_enabled: bool,
-    codex: Option<Status>,
-    codex_busy: bool,
+    ai: ai::Clients,
     draft: Option<Draft>,
     draft_work: Option<gpui_kit::Task<()>>,
 }
@@ -58,17 +57,10 @@ enum PackageAction {
     AiAccess { id: String, enabled: bool },
 }
 
-#[derive(Clone, Copy)]
-enum CodexAction {
-    Inspect,
-    Install,
-    Remove,
-}
-
 impl Integration {
     pub(super) fn new(store: &Store) -> Self {
         Self {
-            ai_enabled: store.ai_enabled().unwrap_or(false),
+            ai: ai::Clients::new(store),
             ..Self::default()
         }
     }
@@ -211,7 +203,7 @@ impl Desktop {
                     Ok::<_, std::io::Error>(())
                 }.await;
                 // A package operation can change the registry before cleanup reports an error.
-                let synced = tokio::task::spawn_blocking(move || sync_skill(profile)).await;
+                let synced = tokio::task::spawn_blocking(move || ai::sync_skills(profile)).await;
                 change?;
                 let installed = registry.list()?;
                 Ok::<_, std::io::Error>((installed, matches!(synced, Ok(Ok(())))))
@@ -230,8 +222,8 @@ impl Desktop {
                             this.text("插件已更新。", "Plugin changes saved.")
                         } else {
                             this.text(
-                                "插件已更新，但无法刷新 Codex Skill。",
-                                "Plugin changes saved. The Codex Skill could not be refreshed.",
+                                "插件已更新，部分 AI Skill 刷新失败。",
+                                "Plugin changes saved. Some AI Skills could not be refreshed.",
                             )
                         }.into(), cx);
                     }
@@ -810,235 +802,6 @@ impl Desktop {
         }
         .and_then(|fields| fields.get_mut(index))
     }
-
-    pub(super) fn refresh_codex_status(&mut self, cx: &mut Context<Self>) {
-        self.codex_action(CodexAction::Inspect, cx);
-    }
-
-    pub(crate) fn refresh_managed_skill(&self, cx: &mut Context<Self>) {
-        let profile = self.store.profile_directory().to_owned();
-        let task = self.runtime.spawn_blocking(move || sync_skill(profile));
-        cx.spawn(async move |view, cx| {
-            if !matches!(task.await, Ok(Ok(()))) {
-                let _ = view.update(cx, |this, cx| {
-                    this.set_notice(
-                        this.text(
-                            "无法刷新 Codex Skill。请检查 AI 集成设置。",
-                            "Could not refresh the Codex Skill. Check AI integration settings.",
-                        )
-                        .into(),
-                        cx,
-                    );
-                    cx.notify();
-                });
-            }
-        })
-        .detach();
-    }
-
-    fn codex_action(&mut self, action: CodexAction, cx: &mut Context<Self>) {
-        if self.integration.codex_busy {
-            return;
-        }
-        self.integration.codex_busy = true;
-        let profile = self.store.profile_directory().to_owned();
-        let runtime = self.runtime.clone();
-        cx.spawn(async move |view, cx| {
-            let status = runtime.spawn_blocking(move || {
-                let target = Target::for_desktop(profile)?;
-                match action {
-                    CodexAction::Inspect => CodexCli.sync_skill(&target)?,
-                    CodexAction::Install => CodexCli.install(&target)?,
-                    CodexAction::Remove => CodexCli.remove(&target)?,
-                }
-                CodexCli.status(&target)
-            }).await;
-            let _ = view.update(cx, |this, cx| {
-                this.integration.codex_busy = false;
-                match status {
-                    Ok(Ok(status)) => this.integration.codex = Some(status),
-                    _ => {
-                        this.integration.codex = None;
-                        if !matches!(action, CodexAction::Inspect) {
-                            this.set_notice(this.text(
-                                "无法配置 Codex CLI。请确认已安装 Codex CLI，并检查现有的 ndm-next 配置。",
-                                "Could not configure Codex CLI. Check that the CLI is installed and review the existing ndm-next configuration.",
-                            ).into(), cx);
-                        }
-                    }
-                }
-                cx.notify();
-            });
-        }).detach();
-        cx.notify();
-    }
-
-    pub(super) fn ai_panel(&self, cx: &mut Context<Self>) -> AnyElement {
-        use gpui_kit::assets::IconName as AssetIcon;
-        let tone = crate::motion::ThemeTone::current(cx);
-        let busy = self.integration.codex_busy;
-        let status = self.integration.codex;
-        let installed = status.is_some_and(|status| status.registered && status.skill_installed);
-        let view = cx.entity().downgrade();
-        let status_text = match status {
-            _ if busy => self.text("处理中…", "Working…"),
-            Some(_) if installed => self.text("MCP 与 Skill 已安装", "MCP and Skill installed"),
-            Some(_) => self.text("待安装 MCP 与 Skill", "MCP and Skill available to install"),
-            None => self.text("安装状态不可用", "Installation status unavailable"),
-        };
-
-        crate::view::settings::card_surface(7, tone)
-            .flex()
-            .flex_col()
-            .gap_3()
-            .p_3()
-            .border_color(rgb(tone.rgb(0x554681, 0xc9bce9)))
-            .bg(linear_gradient(
-                112.,
-                linear_color_stop(rgb(tone.rgb(0x2b2150, 0xf2eaff)), 0.),
-                linear_color_stop(rgb(tone.rgb(0x123542, 0xe7f8fc)), 1.),
-            ))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .child(
-                        div()
-                            .size(px(40.))
-                            .flex()
-                            .flex_shrink_0()
-                            .items_center()
-                            .justify_center()
-                            .rounded_lg()
-                            .border_1()
-                            .border_color(rgba(tone.rgba(0xb59aff70, 0x885dff48)))
-                            .bg(rgba(tone.rgba(0x885dff55, 0x885dff20)))
-                            .text_color(rgb(tone.rgb(0xebddff, 0x5936a5)))
-                            .child(Icon::new(AssetIcon::Sparkles).with_size(px(20.))),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div().text_base().font_weight(FontWeight::SEMIBOLD).child(
-                                    self.display_text(self.text("AI 集成", "AI integration")),
-                                ),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(tone.rgb(0xc2c8e3, 0x455272)))
-                                    .child(self.text(
-                                        "让 Codex CLI 发起和管理下载",
-                                        "Start and manage downloads from Codex CLI",
-                                    )),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .px_2()
-                            .py_1()
-                            .rounded_md()
-                            .bg(rgba(tone.rgba(0x0c142b66, 0xffffffb0)))
-                            .child(
-                                crate::motion::Switch::new("enable-ai-integration")
-                                    .checked(self.integration.ai_enabled)
-                                    .label(self.text("AI 接入", "AI access"))
-                                    .on_click(move |enabled, _, cx| {
-                                        let _ = view.update(cx, |this, cx| {
-                                            if this.store.set_ai_enabled(*enabled).is_ok() {
-                                                this.integration.ai_enabled = *enabled;
-                                                this.refresh_managed_skill(cx);
-                                            } else {
-                                                this.set_notice(
-                                                    this.text(
-                                                        "无法保存 AI 设置。",
-                                                        "Could not save AI settings.",
-                                                    )
-                                                    .into(),
-                                                    cx,
-                                                );
-                                            }
-                                            cx.notify();
-                                        });
-                                    }),
-                            ),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .border_t_1()
-                    .border_color(rgba(tone.rgba(0xb5acdf40, 0x76689932)))
-                    .pt_3()
-                    .child(
-                        Icon::new(AssetIcon::Terminal)
-                            .with_size(px(16.))
-                            .text_color(rgb(tone.rgb(0x96e4f1, 0x26687b))),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .items_center()
-                            .flex_wrap()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child("Codex CLI"),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(if installed && !busy {
-                                        tone.rgb(0x8be0c6, 0x226958)
-                                    } else {
-                                        tone.rgb(0xc2c8e3, 0x455272)
-                                    }))
-                                    .child(status_text),
-                            ),
-                    )
-                    .child(
-                        Button::new("install-codex-integration")
-                            .small()
-                            .primary()
-                            .flex_shrink_0()
-                            .disabled(busy)
-                            .loading(busy)
-                            .label(if installed {
-                                self.text("卸载", "Uninstall")
-                            } else {
-                                self.text("安装", "Install")
-                            })
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.codex_action(
-                                    if installed {
-                                        CodexAction::Remove
-                                    } else {
-                                        CodexAction::Install
-                                    },
-                                    cx,
-                                );
-                            })),
-                    ),
-            )
-            .into_any_element()
-    }
-}
-
-fn sync_skill(profile: PathBuf) -> std::io::Result<()> {
-    CodexCli.sync_skill(&Target::for_desktop(profile)?)
 }
 
 fn option_fields(

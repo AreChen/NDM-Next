@@ -27,11 +27,18 @@ const USER_AGENT_PRESETS: [(&str, &str); 3] = [
 ];
 
 impl Desktop {
-    fn toggle_settings_group(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn toggle_settings_group(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !toggle_group(&mut self.settings_open, index) {
             self.page_focus.focus(window, cx);
         } else if index == 6 {
             self.maintain_storage(false, false, cx);
+        } else if index == plugins::AI_CLIENTS_GROUP {
+            self.refresh_ai_client_status(cx);
         }
         cx.notify();
     }
@@ -192,7 +199,7 @@ impl Desktop {
         let tone = crate::motion::ThemeTone::current(cx);
         let muted = tone.rgb(0x95a5c0, 0x71809a);
         let view = cx.entity().downgrade();
-        let frames: [Frame; 7] = std::array::from_fn(|index| {
+        let frames: [Frame; plugins::AI_CLIENTS_GROUP + 1] = std::array::from_fn(|index| {
             disclosure_frame(index, self.settings_open.contains(&index), window, cx)
         });
         let current_language = self.preferences.language;
@@ -710,7 +717,7 @@ impl Desktop {
                                 )),
                         ),
                 );
-        panel = panel.child(self.ai_panel(cx));
+        panel = panel.child(self.ai_panel(frames[plugins::AI_CLIENTS_GROUP], cx));
         let mut cards = cards.into_iter();
         let mut row_index = 0;
         while let Some(first) = cards.next() {
@@ -751,7 +758,12 @@ fn disclosure_frame(index: usize, open: bool, window: &mut Window, cx: &mut App)
     })
 }
 
-fn settings_detail(index: usize, frame: Frame, open: bool, detail: AnyElement) -> AnyElement {
+pub(super) fn settings_detail(
+    index: usize,
+    frame: Frame,
+    open: bool,
+    detail: AnyElement,
+) -> AnyElement {
     // Kit provides measured layout/clipping only; gpui-motion-kit owns timing
     // and presence. Keep the outgoing form mounted until its exit finishes.
     let body = div()

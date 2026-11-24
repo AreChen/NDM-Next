@@ -47,7 +47,7 @@ New profiles use 16 download connections and startup at login. Existing saved ch
 
 Install **BitTorrent** for `.torrent` files and magnet links, or **Media Downloader** for streaming video, audio, and playlists from supported sites. Both engines are available in the [desktop plugin market](assets/readme/plugin-market.webp).
 
-Enable [AI integration](assets/readme/ai-settings.webp) to queue and manage downloads from Codex CLI through MCP and the companion Skill. [Plugin and AI setup guide](docs/plugins-and-ai.md)
+Use AI integration to queue and manage downloads from OpenAI Codex (CLI and desktop), Claude Code, Pi, and OpenCode through MCP and the companion Skill. [Plugin and AI setup guide](docs/plugins-and-ai.md)
 
 ## Browser extension
 

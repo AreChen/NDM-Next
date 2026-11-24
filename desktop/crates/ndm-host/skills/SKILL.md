@@ -9,10 +9,11 @@ description: Use the local NDM Next MCP server to download files, media, playlis
 
 ## Choose an engine
 
-- Use the `ndm-next` MCP server. If its tools are unavailable, check that Codex
-  CLI integration is installed and **Settings → AI integration → AI access**
-  is enabled in NDM Next. After installing or updating the server, restart an
-  existing Codex session if its tools still show the previous version.
+- Use the `ndm-next` MCP server. Check that your client is configured under
+  **Settings → AI integration** and that **AI access** is on in NDM Next.
+  Restart the client session after installing or updating the registration.
+  Clients can prefix these tool names with the server name. Use the names
+  shown in the client's tool list, such as `mcp__ndm_next__ndm_download` in Pi.
 - Direct HTTP(S), FTP(S), SFTP, HLS and static DASH downloads use the built-in
   engine when there is no automatic plugin match. Pass URLs as supplied or use
   absolute paths for local inputs such as torrent files.

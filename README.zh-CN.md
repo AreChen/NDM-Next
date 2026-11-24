@@ -47,7 +47,7 @@
 
 在[桌面插件市场](assets/readme/plugin-market.webp)安装 **BitTorrent**，即可下载 `.torrent` 文件和磁力链接。安装 **Media Downloader**，即可下载受支持网站的流媒体视频、音频和播放列表。
 
-开启 [AI 接入](assets/readme/ai-settings.webp)后，可通过 MCP 和配套 Skill 在 Codex CLI 中创建和管理下载任务。[插件与 AI 接入指南](docs/plugins-and-ai.md)
+开启 AI 接入后，可通过 MCP 和配套 Skill 在 OpenAI Codex（CLI 与桌面版）、Claude Code、Pi 和 OpenCode 中创建和管理下载任务。[插件与 AI 接入指南](docs/plugins-and-ai.md)
 
 ## 浏览器扩展
 

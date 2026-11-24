@@ -1,4 +1,4 @@
-//! Local stdio transport used by the optional Codex CLI integration.
+//! Local stdio transport for the optional AI client integrations.
 use std::{
     io::{self, BufReader, Write},
     path::PathBuf,

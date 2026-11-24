@@ -1,4 +1,4 @@
-# Plugins and Codex CLI
+# Plugins and AI clients
 
 Open **Plugin market** to browse, install, update, or uninstall plugins.
 Search by name or keyword in English or Chinese, and narrow the cards by
@@ -9,7 +9,7 @@ developer you trust. An engine package contains a native executable.
 The market shows downloaded bytes and the verification and installation stages.
 
 Open **Settings** on an installed plugin card to save default download options.
-They apply to new tasks, including downloads requested through Codex CLI.
+They apply to new tasks, including downloads requested by AI clients.
 An option chosen for an individual task takes precedence.
 Saved defaults use the same local protection as download task options.
 Media Downloader can preserve the native container or copy video tracks to
@@ -30,22 +30,37 @@ The task list shows connected peers and the share ratio. Open download details
 for the connected seeders, discovered peers, and upload statistics. Use
 **Start seeding** and **Stop seeding** in either window after download completes.
 
-In **Settings → AI integration**, install the Codex CLI MCP registration
-and Skill when you want them. Turn on **AI access** to make download tools
-available. AI access starts disabled. When enabled, tools from installed
-plugins become available automatically. Restart an existing Codex CLI
-session after first installing the integration. From NDM Next 0.6.0, the
-installed Skill refreshes after a desktop upgrade, a plugin install, update
-or removal, and an AI access change. The plugin market's **AI on** control
-lets you disable AI use for one engine. The engine stays available for regular
-desktop and browser downloads.
+Open **Settings → AI integration** and expand the client list. Install MCP
+and the Skill for each client you use, then turn on **AI access** to make
+download tools available. AI access starts disabled. Reopen the client
+session after installation. Each row shows the local configuration state
+and offers repair when the NDM Next executable has moved.
+
+| Client | User MCP configuration | User Skill location |
+| --- | --- | --- |
+| OpenAI Codex CLI and desktop | `~/.codex/config.toml` | `~/.agents/skills/ndm-next/` |
+| Claude Code | `~/.claude.json` | `~/.claude/skills/ndm-next/` |
+| Pi with built-in MCP | `~/.pi/agent/mcp.json` | `~/.pi/agent/skills/ndm-next/` |
+| OpenCode | `~/.config/opencode/opencode.json(c)` | `~/.config/opencode/skills/ndm-next/` |
+
+Codex CLI and the desktop app share MCP settings on the same Codex host.
+NDM Next can write this configuration even on a desktop-only installation.
+Pi's built-in MCP is available from version 0.99.0. NDM Next works with both
+OpenCode's legacy MCP map and the V2 `mcp.servers` structure. These are the
+default locations. Absolute configuration paths inherited by NDM Next from
+the client's environment can override them.
+
+NDM Next refreshes its installed Skill copies after a desktop upgrade,
+a plugin install, update or removal, and an AI access change. The plugin
+market's **AI on** control lets you disable AI use for one engine.
+The engine stays available for regular desktop and browser downloads.
 
 Use `ndm_list_engines` with a source to see compatible engines, the automatic
 selection and current option schemas. The main Skill links to plugin guides
 under `references/plugins/` for source-specific usage. For task history,
 `ndm_list_tasks` supports a state filter and a cursor for older results.
 
-Codex can queue downloads in the default folder or an explicit absolute
+AI clients can queue downloads in the default folder or an explicit absolute
 directory, check status, pause, and resume. A batch can specify its own
 simultaneous-task and per-download thread settings. The app-wide task limit
 and the engine's limits still apply. A request to change global settings
@@ -74,9 +89,9 @@ recent transfer rate, and time since the last observed progress.
 
 - [Plugin market catalog](https://github.com/AreChen/NDM-Next-Plugin-Market)
 - [Download engine SDK](../desktop/crates/ndm-plugin-sdk/README.md)
-- [Codex CLI Skill](../desktop/crates/ndm-host/skills/SKILL.md)
+- [NDM Next Skill](../desktop/crates/ndm-host/skills/SKILL.md)
 
-# 插件与 Codex CLI
+# 插件与 AI 客户端
 
 打开 **插件市场** 浏览、安装、更新或卸载插件。输入中英文名称或关键词，
 可按分类筛选，也可以选择 **仅已安装**。卡片与分类跟随应用语言。市场会校验安装包的
@@ -85,7 +100,7 @@ SHA-256。也可以通过 **导入插件** 安装你信任的开发者提供的�
 从市场安装或更新时会显示已下载大小，以及校验与安装阶段。
 
 在已安装的插件卡片上打开 **设置**，可保存该插件的默认下载选项。默认值用于
-新任务，也适用于 Codex CLI 发起的下载。单次任务可单独修改选项。
+新任务，也适用于 AI 客户端发起的下载。单次任务可单独修改选项。
 已保存的默认值与下载任务选项使用同样的本地加密方式。
 流媒体下载插件可优先保留原生封装，也可指定 MP4、WebM 或 MKV。字幕支持作者上传
 和自动字幕，可以勾选多种语言。需要单独使用 HTTP(S) 或 SOCKS 代理时，在插件
@@ -100,18 +115,31 @@ YouTube、Bilibili、TikTok、Vimeo 等常见媒体网页会匹配 **流媒体�
 任务列表显示连接数和分享率，独立下载窗口可展开查看做种节点、已发现节点
 及上传速度。下载完成后，两处均可 **开始做种** 或 **停止做种**。
 
-在 **设置 → AI 集成** 按需为 Codex CLI 安装 MCP 和 Skill，再开启
-**AI 接入**。AI 接入默认关闭。开启后，已安装插件会自动向 Codex
-公开各自的下载工具。首次安装后请重启已打开的 Codex CLI 会话。
-从 NDM Next 0.6.0 起，桌面升级、安装、更新或卸载插件以及更改 AI 接入后，
-应用会刷新已安装的 Skill。点击插件市场卡片的 **AI 已开** 可关闭单个引擎的
+在 **设置 → AI 集成** 展开客户端列表，为需要的客户端安装 MCP 和 Skill，再开启
+**AI 接入**。AI 接入默认关闭。安装后重新打开对应客户端的会话。客户端行会显示
+本地配置状态，移动过 NDM Next 时可点 **修复**。
+
+| 客户端 | 用户级 MCP 配置 | 用户级 Skill 目录 |
+| --- | --- | --- |
+| OpenAI Codex CLI 与桌面版 | `~/.codex/config.toml` | `~/.agents/skills/ndm-next/` |
+| Claude Code | `~/.claude.json` | `~/.claude/skills/ndm-next/` |
+| 支持内置 MCP 的 Pi | `~/.pi/agent/mcp.json` | `~/.pi/agent/skills/ndm-next/` |
+| OpenCode | `~/.config/opencode/opencode.json(c)` | `~/.config/opencode/skills/ndm-next/` |
+
+同一 Codex 主机上的 CLI 和桌面版共用 MCP 配置，只有桌面版也可安装。
+Pi 需要 0.99.0 或更新版本使用内置 MCP。OpenCode 支持旧版 MCP 配置和 V2 的
+`mcp.servers` 结构。表中为默认位置，NDM Next 启动时继承的客户端绝对配置路径
+可覆盖默认值。
+
+桌面升级、安装、更新或卸载插件以及更改 AI 接入后，应用会刷新各客户端中
+已安装的 NDM Next Skill。点击插件市场卡片的 **AI 已开** 可关闭单个引擎的
 AI 接入。桌面和浏览器仍可使用该引擎下载。
 
 将来源传给 `ndm_list_engines` 可查看兼容引擎、自动选择和当前参数。
 主 Skill 会链接到 `references/plugins/` 中各个引擎的使用指南。
 `ndm_list_tasks` 可按状态筛选，并通过分页游标继续查询更早的任务。
 
-Codex 可发起下载、查询状态、暂停与恢复。省略保存位置时使用 NDM
+AI 客户端可发起下载、查询状态、暂停与恢复。省略保存位置时使用 NDM
 默认下载目录，也可传入绝对路径。单批任务可以设置并发任务数和每项
 下载线程数，并且仍受全局任务上限与引擎上限约束。明确要求修改全局
 设置时，新值会应用到排队和后续任务。内置 HTTP 最多使用 16 个分段

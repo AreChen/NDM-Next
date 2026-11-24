@@ -8,7 +8,7 @@ use std::{
 };
 
 use ndm_core::{NewTask, Store, TaskId, plugins::PluginRegistry};
-use ndm_host::harness::{CodexCli, Harness, Target};
+use ndm_host::harness::{Harness, Target, sync_skills};
 use ndm_plugin_sdk::{read_message, write_message};
 use serde_json::{Value, json};
 
@@ -388,17 +388,17 @@ fn download_overrides_and_failure_diagnostics_round_trip_through_mcp() {
 #[test]
 fn managed_skill_refreshes_legacy_installs_and_plugin_guides() {
     let root = tempfile::tempdir().unwrap();
-    let target = Target {
-        home: root.path().join("home"),
-        profile: root.path().join("profile"),
-        executable: env!("CARGO_BIN_EXE_ndm-host").into(),
-    };
+    let target = Target::new(
+        env!("CARGO_BIN_EXE_ndm-host").into(),
+        root.path().join("profile"),
+        root.path().join("home"),
+    );
     fs::create_dir(&target.profile).unwrap();
     let store = Store::open(&target.profile.join("tasks.db")).unwrap();
     store.set_ai_enabled(true).unwrap();
     let root = target.home.join(".agents/skills/ndm-next");
     let registry = PluginRegistry::new(&target.profile);
-    CodexCli.sync_skill(&target).unwrap();
+    sync_skills(&target).unwrap();
     assert!(!root.exists());
     fs::create_dir_all(&root).unwrap();
     fs::write(
@@ -408,7 +408,9 @@ fn managed_skill_refreshes_legacy_installs_and_plugin_guides() {
     .unwrap();
 
     registry.import(&fixture(&target.profile).unwrap()).unwrap();
-    CodexCli.sync_skill(&target).unwrap();
+    Harness::ClaudeCode.install(&target).unwrap();
+    Harness::OpenCode.install(&target).unwrap();
+    sync_skills(&target).unwrap();
     let guides = root.join("references/plugins");
     let guide = guides.join("plugin-fixture.md");
     assert!(
@@ -424,19 +426,32 @@ fn managed_skill_refreshes_legacy_installs_and_plugin_guides() {
 
     let update = plugin_package(&target.profile, "0.2.0", Some("Engine usage example")).unwrap();
     registry.import(&update).unwrap();
-    CodexCli.sync_skill(&target).unwrap();
+    sync_skills(&target).unwrap();
     let text = fs::read_to_string(&guide).unwrap();
     assert!(text.contains("0.2.0") && text.contains("Engine usage example"));
+    for other in [".claude/skills", ".config/opencode/skills"] {
+        assert_eq!(
+            fs::read_to_string(
+                target
+                    .home
+                    .join(other)
+                    .join("ndm-next/references/plugins/plugin-fixture.md")
+            )
+            .unwrap(),
+            text,
+        );
+    }
+    assert!(!target.home.join(".pi").exists());
     fs::write(guides.join("plugin-local.md"), "User guide").unwrap();
     registry.set_ai_access("fixture", false).unwrap();
-    CodexCli.sync_skill(&target).unwrap();
+    sync_skills(&target).unwrap();
     assert!(!guide.exists());
     assert!(guides.join("plugin-local.md").exists());
     registry.set_ai_access("fixture", true).unwrap();
-    CodexCli.sync_skill(&target).unwrap();
+    sync_skills(&target).unwrap();
     assert!(guide.exists());
     store.set_ai_enabled(false).unwrap();
-    CodexCli.sync_skill(&target).unwrap();
+    sync_skills(&target).unwrap();
     assert!(!guide.exists());
     assert!(
         fs::read_to_string(guides.join("index.md"))
@@ -447,36 +462,37 @@ fn managed_skill_refreshes_legacy_installs_and_plugin_guides() {
 
 #[test]
 #[ignore = "requires Codex CLI on PATH and uses an isolated configuration"]
-fn installs_and_removes_the_codex_integration() {
-    if let Some(directory) = std::env::var_os("NDM_TEST_CODEX_DIRECTORY") {
-        let directory = PathBuf::from(directory);
-        let profile = directory.join("profile");
-        fs::create_dir_all(&profile).unwrap();
-        let target = Target {
-            executable: env!("CARGO_BIN_EXE_ndm-host").into(),
-            profile,
-            home: directory,
-        };
-        CodexCli.install(&target).unwrap();
-        let status = CodexCli.status(&target).unwrap();
-        assert!(status.registered && status.skill_installed);
-        CodexCli.remove(&target).unwrap();
-        let status = CodexCli.status(&target).unwrap();
-        assert!(!status.registered && !status.skill_installed);
-        return;
-    }
+fn codex_cli_reads_the_shared_registration() {
     let directory = tempfile::tempdir().unwrap();
-    let codex_home = directory.path().join("codex");
-    fs::create_dir(&codex_home).unwrap();
-    let status = Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "installs_and_removes_the_codex_integration",
-            "--ignored",
-        ])
-        .env("NDM_TEST_CODEX_DIRECTORY", directory.path())
-        .env("CODEX_HOME", codex_home)
-        .status()
+    let target = Target::new(
+        env!("CARGO_BIN_EXE_ndm-host").into(),
+        directory.path().join("profile"),
+        directory.path().to_path_buf(),
+    );
+    let list = || {
+        let output = Command::new("codex")
+            .current_dir(directory.path())
+            .env("CODEX_HOME", target.home.join(".codex"))
+            .args(["mcp", "list", "--json"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "Codex could not read the isolated configuration"
+        );
+        serde_json::from_slice::<Vec<Value>>(&output.stdout).unwrap()
+    };
+    Harness::Codex.install(&target).unwrap();
+    let servers = list();
+    let server = servers
+        .iter()
+        .find(|server| server["name"] == "ndm-next")
         .unwrap();
-    assert!(status.success());
+    assert_eq!(server["transport"]["command"], json!(target.executable));
+    assert_eq!(
+        server["transport"]["args"],
+        json!(["--mcp", "--data-dir", target.profile.to_str().unwrap()])
+    );
+    Harness::Codex.remove(&target).unwrap();
+    assert!(!list().iter().any(|server| server["name"] == "ndm-next"));
 }

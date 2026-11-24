@@ -6,12 +6,14 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+jsonc-parser = { version = "0.34", features = ["cst"] }
 ndm-core = { path = "../ndm-core" }
 ndm-plugin-sdk = { path = "../ndm-plugin-sdk" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile = "3"
+toml_edit = "0.25"
 
 [build-dependencies]
 embed-resource = "3.0.12"
