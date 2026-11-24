@@ -1,6 +1,7 @@
 use std::{
     collections::VecDeque,
     fmt,
+    io::SeekFrom,
     path::{Path, PathBuf},
     sync::{
         Arc, RwLock,
@@ -17,7 +18,7 @@ use reqwest::{
 use serde::{Deserialize, Serialize};
 use tokio::{
     fs,
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt},
     sync::Mutex,
     time::Instant,
 };
@@ -1130,15 +1131,18 @@ impl RangeSource<'_> {
         let progress = trace.progress;
         let length = range.end - range.start;
         let end = range.end - 1;
+        // One worker owns each part. Open it for writing so Windows can also
+        // truncate an oversized response back to the last validated offset.
         let mut file = fs::OpenOptions::new()
             .create(true)
-            .append(true)
-            .read(true)
+            .write(true)
+            .truncate(false)
             .open(&part)
             .await?;
-        let mut present = file.metadata().await?.len();
+        let mut present = file.seek(SeekFrom::End(0)).await?;
         if present > length {
             file.set_len(0).await?;
+            file.rewind().await?;
             present = 0;
         }
         if present != segment.downloaded.load(Ordering::Relaxed) {

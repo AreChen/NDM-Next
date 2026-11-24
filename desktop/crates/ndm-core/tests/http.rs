@@ -510,6 +510,32 @@ async fn oversized_chunked_range_is_rejected_without_filling_disk() {
 }
 
 #[tokio::test]
+async fn resume_rewrites_an_oversized_part_from_zero_and_keeps_complete_parts() {
+    let dir = TempDir::new().unwrap();
+    let expected = data(25);
+    let half = expected.len() / 2;
+    let (server, url) = fixture(Mode::Ranges, expected.clone(), false).await;
+    let id = TaskId::new_v4();
+    let cache = seed_range_manifest(dir.path(), id, &url, expected.len(), 2);
+    std::fs::write(cache.join("segment-0.part"), vec![0xff; half + 1]).unwrap();
+    std::fs::write(cache.join("segment-1.part"), &expected[half..]).unwrap();
+
+    let output = download_http(
+        &request(dir.path(), url),
+        id,
+        &HttpOptions::default(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(std::fs::read(output).unwrap(), expected);
+    assert_eq!(
+        *server.ranges.lock().unwrap(),
+        ["bytes=0-0".to_owned(), format!("bytes=0-{}", half - 1)]
+    );
+}
+
+#[tokio::test]
 async fn oversized_body_rolls_back_only_untrusted_bytes_before_a_later_resume() {
     let dir = TempDir::new().unwrap();
     let expected = data(24);
@@ -520,10 +546,8 @@ async fn oversized_body_rolls_back_only_untrusted_bytes_before_a_later_resume() 
     let part = cache.join("segment-0.part");
     std::fs::write(&part, prefix).unwrap();
     let req = request(dir.path(), url);
-    assert!(matches!(
-        download_http(&req, id, &HttpOptions::default(), CancellationToken::new()).await,
-        Err(Error::HttpStatus(403))
-    ));
+    let result = download_http(&req, id, &HttpOptions::default(), CancellationToken::new()).await;
+    assert!(matches!(result, Err(Error::HttpStatus(403))), "{result:?}");
     assert_eq!(std::fs::read(&part).unwrap(), prefix);
     let output = download_http(&req, id, &HttpOptions::default(), CancellationToken::new())
         .await
