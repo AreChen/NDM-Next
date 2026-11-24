@@ -1,7 +1,6 @@
 use super::*;
 use crate::{
     PeerStats, cache,
-    plugin_engine::PluginEngine,
     plugin_transfer::build_request,
     plugins::{InstalledPlugin, PluginRegistry},
 };
@@ -129,7 +128,7 @@ impl Scheduler {
         {
             return Err(Error::InvalidState);
         }
-        let engine = PluginEngine::new(plugin.executable())?;
+        let engine = plugin.engine()?;
         let workspace = cache::engine_workspace(&task)?;
         let threads = self.0.options.read().unwrap().http.max_connections as u32;
         let request = build_request(&task, &plugin, options.clone(), threads, workspace)?;

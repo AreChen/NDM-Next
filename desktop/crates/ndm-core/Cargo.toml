@@ -6,7 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+base64 = "0.22"
 futures-util.workspace = true
+hex = "0.4"
 httpdate = "1"
 hyper-util = { version = "0.1", features = ["client-proxy-system"] }
 hls-engine.workspace = true

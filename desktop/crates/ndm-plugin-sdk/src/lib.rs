@@ -18,6 +18,16 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 pub const ENGINE_PROTOCOL_VERSION: u32 = 1;
 pub const ENGINE_ARGUMENT: &str = "--ndm-engine";
 pub const MEDIA_TOOLS_ENV: &str = "NDM_MEDIA_TOOLS";
+pub const RUNTIMES_ENV: &str = "NDM_PLUGIN_RUNTIMES";
+
+/// Absolute path of an executable declared in this package's runtime_dependencies.
+pub fn runtime_path(name: &str) -> Option<PathBuf> {
+    let value = std::env::var(RUNTIMES_ENV).ok()?;
+    serde_json::from_str::<BTreeMap<String, PathBuf>>(&value)
+        .ok()?
+        .remove(name)
+        .filter(|path| path.is_absolute())
+}
 pub const MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 /// Optional engine-owned state that can be retained after publishing a completed transfer.
 pub const ENGINE_STATE_DIRECTORY: &str = "state";

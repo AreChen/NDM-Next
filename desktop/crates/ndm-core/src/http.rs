@@ -16,6 +16,7 @@ use reqwest::{
     header::{self, HeaderMap, HeaderName, HeaderValue},
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tokio::{
     fs,
     io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt},
@@ -25,9 +26,13 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    DownloadFailure, Error, HttpDiagnostics, HttpStage, NewTask, ProxyMode, Result, Store,
-    TaskActivity, TaskId, diagnostics::Routing, secrets, validate_user_agent,
+    DownloadFailure, Error, HttpDiagnostics, HttpRangeMode, HttpStage, NewTask, ProxyMode, Result,
+    Store, TaskActivity, TaskId, diagnostics::Routing, secrets, validate_user_agent,
 };
+
+mod repository;
+use repository::Sha256Bytes;
+pub use repository::http_filename_hint;
 
 const MAX_CONNECTIONS: usize = 16;
 const RANGE_WAVES: usize = 4;
@@ -312,16 +317,35 @@ pub async fn execute_http(
     cancel: CancellationToken,
     progress: DownloadProgress,
 ) -> Result<PathBuf> {
+    execute_http_with_title(store, id, options, cancel, progress, || {}).await
+}
+
+pub(crate) async fn execute_http_with_title(
+    store: &Store,
+    id: TaskId,
+    options: &HttpOptions,
+    cancel: CancellationToken,
+    progress: DownloadProgress,
+    title_changed: impl Fn() + Sync,
+) -> Result<PathBuf> {
     let task = store.get(id)?.ok_or(Error::NotFound)?;
     store.start(id)?;
+    let report = |name: &str| {
+        if store.set_engine_title(id, name).unwrap_or(false) {
+            title_changed();
+        }
+    };
     match download_http_with_progress(
         &task.request,
         id,
         options,
         cancel,
         progress.clone(),
-        Some(&task.work_directory()),
-        None,
+        HttpContext {
+            work_directory: Some(&task.work_directory()),
+            report_filename: Some(&report),
+            client: None,
+        },
     )
     .await
     {
@@ -395,6 +419,7 @@ struct HttpTrace<'a> {
     progress: &'a DownloadProgress,
     routing: &'a Routing,
     details: HttpDiagnostics,
+    linked_sha256: Option<Sha256Bytes>,
 }
 
 impl HttpTrace<'_> {
@@ -418,7 +443,14 @@ impl HttpTrace<'_> {
         self.details.redirect_count = 0;
         self.details.effective_proxy = None;
         self.stage(stage);
-        send_observed(client, builder, cancel, |url, status, redirects| {
+        send_observed(client, builder, cancel, |url, response, redirects| {
+            let status = response.map(Response::status);
+            if stage == HttpStage::RangeProbe
+                && let Some(response) = response.filter(|r| r.status().is_redirection())
+                && let Some(digest) = repository::hf_lfs_digest(url, response.headers())
+            {
+                self.linked_sha256 = Some(digest);
+            }
             self.details.stage = if status.is_some_and(|status| status.is_redirection()) {
                 HttpStage::Redirect
             } else {
@@ -435,12 +467,32 @@ impl HttpTrace<'_> {
 
 #[derive(PartialEq, Eq, Serialize, Deserialize)]
 struct ResumeManifest {
-    validator: String,
+    validator: RangeValidator,
     resource_url: String,
     total: u64,
     // Older manifests used the connection count as the number of equal parts.
     #[serde(rename = "connections")]
     parts: usize,
+}
+
+// The string variant preserves manifests written by 0.6.3 and earlier.
+#[derive(PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+enum RangeValidator {
+    Etag(String),
+    Digest { sha256: Sha256Bytes },
+}
+
+impl RangeValidator {
+    fn accepts(&self, response: &Response, resource_url: &str) -> bool {
+        match self {
+            Self::Etag(etag) => {
+                response.url().as_str() == resource_url
+                    && strong_etag(response.headers()).as_ref() == Some(etag)
+            }
+            Self::Digest { .. } => true, // Every assembled byte is checked before publication.
+        }
+    }
 }
 
 impl ResumeManifest {
@@ -475,8 +527,7 @@ pub async fn download_http(
         options,
         cancel,
         DownloadProgress::default(),
-        None,
-        None,
+        HttpContext::default(),
     )
     .await
 }
@@ -492,7 +543,25 @@ pub async fn download_http_with_client(
     progress: DownloadProgress,
     client: Client,
 ) -> Result<PathBuf> {
-    download_http_with_progress(request, id, options, cancel, progress, None, Some(client)).await
+    download_http_with_progress(
+        request,
+        id,
+        options,
+        cancel,
+        progress,
+        HttpContext {
+            client: Some(client),
+            ..Default::default()
+        },
+    )
+    .await
+}
+
+#[derive(Default)]
+struct HttpContext<'a> {
+    work_directory: Option<&'a Path>,
+    client: Option<Client>,
+    report_filename: Option<&'a (dyn Fn(&str) + Sync)>,
 }
 
 async fn download_http_with_progress(
@@ -501,14 +570,13 @@ async fn download_http_with_progress(
     options: &HttpOptions,
     cancel: CancellationToken,
     progress: DownloadProgress,
-    work_directory: Option<&std::path::Path>,
-    client: Option<Client>,
+    context: HttpContext<'_>,
 ) -> Result<PathBuf> {
     progress.0.downloaded.store(0, Ordering::Relaxed);
     progress.0.transferred.store(0, Ordering::Relaxed);
     progress.0.phase.store(0, Ordering::Release);
     progress.set_total(None);
-    let routing = if client.is_none() {
+    let routing = if context.client.is_none() {
         Routing::new(options.proxy_mode, options.proxy.as_ref())
     } else {
         Routing::CustomClient
@@ -517,9 +585,10 @@ async fn download_http_with_progress(
         progress: &progress,
         routing: &routing,
         details: HttpDiagnostics::default(),
+        linked_sha256: None,
     };
     trace.record();
-    let client = match client {
+    let client = match context.client {
         Some(client) => client,
         None => network_client(
             options.proxy.as_ref(),
@@ -527,9 +596,13 @@ async fn download_http_with_progress(
             options.user_agent.as_deref(),
         )?,
     };
-    let headers = request_headers(request)?;
+    let mut headers = request_headers(request)?;
+    headers
+        .entry(header::ACCEPT_ENCODING)
+        .or_insert(HeaderValue::from_static("identity"));
     fs::create_dir_all(&request.destination).await?;
-    let work_dir = work_directory
+    let work_dir = context
+        .work_directory
         .map(std::path::Path::to_owned)
         .unwrap_or_else(|| request.destination.join(format!(".ndm-next-{id}")));
     fs::create_dir_all(&work_dir).await?;
@@ -551,11 +624,36 @@ async fn download_http_with_progress(
     let probe_time = probe_started.elapsed();
     trace.details.range_probe_status = Some(probe.status().as_u16());
     trace.record();
-    let mut discovered_filename = probe
-        .status()
-        .is_success()
-        .then(|| response_filename(&probe, None))
-        .flatten();
+    let source = reqwest::Url::parse(&request.url).map_err(|_| Error::InvalidHttpResponse)?;
+    let explicit_name = request
+        .suggested_filename
+        .as_deref()
+        .filter(|name| !name.trim().is_empty());
+    let mut discovered_filename = None;
+    let mut attachment = None;
+    let mut observe_name = |response: &Response| {
+        if !response.status().is_success() {
+            return;
+        }
+        if let Some(value) = disposition_filename(response.headers()) {
+            attachment = Some(value);
+        }
+        let name = attachment
+            .clone()
+            .or_else(|| repository::source_filename(&source))
+            .or_else(|| http_filename_hint(response.url()))
+            .or_else(|| http_filename_hint(&source))
+            .map(|name| safe_filename(&name));
+        if explicit_name.is_none()
+            && name != discovered_filename
+            && let (Some(report), Some(name)) = (context.report_filename, &name)
+        {
+            report(name);
+        }
+        // An opaque redirect path may be signed. Only use it as the last-resort output name.
+        discovered_filename = name.or_else(|| response_basename(response));
+    };
+    observe_name(&probe);
     let range_total = if probe.status() == StatusCode::PARTIAL_CONTENT {
         probe
             .headers()
@@ -574,11 +672,41 @@ async fn download_http_with_progress(
         return Err(Error::InvalidHttpResponse);
     }
     let expected_size = request.expected_size.or(range_total);
-    let ranged = range_total.zip(strong_etag(probe.headers()));
+    let mut digest = probe
+        .status()
+        .is_success()
+        .then(|| repository::representation_digest(probe.headers()))
+        .flatten()
+        .or(trace.linked_sha256);
+    if digest.is_none()
+        && let Some(total) = range_total
+    {
+        digest = repository::modelscope_digest(&source, total, &client, &headers, &cancel).await;
+    }
+    let validator = digest
+        .map(|sha256| RangeValidator::Digest { sha256 })
+        .or_else(|| strong_etag(probe.headers()).map(RangeValidator::Etag));
+    let ranged = range_total.zip(validator);
+    trace.details.range_mode = Some(match &ranged {
+        Some(_) if options.max_connections <= 1 => HttpRangeMode::ConnectionLimit,
+        Some((_, RangeValidator::Etag(_))) => HttpRangeMode::StrongEtag,
+        Some((_, RangeValidator::Digest { .. })) => HttpRangeMode::VerifiedSha256,
+        None if probe.status() == StatusCode::OK => HttpRangeMode::RangeIgnored,
+        None if probe.status() != StatusCode::PARTIAL_CONTENT => HttpRangeMode::RangeRejected,
+        None if range_total.is_none() => HttpRangeMode::InvalidContentRange,
+        None if options.max_connections <= 1 => HttpRangeMode::ConnectionLimit,
+        None => HttpRangeMode::MissingValidator,
+    });
+    trace.record();
 
     let assembled = work_dir.join("assembled.part");
     if let Some((total, validator)) = ranged {
-        let resource_url = probe.url().as_str().to_owned();
+        let resource_url = if digest.is_some() {
+            source.as_str()
+        } else {
+            probe.url().as_str()
+        }
+        .to_owned();
         drop(probe);
         progress.set_total(Some(total));
         let connections = options.max_connections.clamp(1, MAX_CONNECTIONS);
@@ -649,6 +777,7 @@ async fn download_http_with_progress(
                 if !range_failure_can_retry_full(&error) {
                     return Err(error);
                 }
+                trace.details.range_mode = Some(HttpRangeMode::SegmentFallback);
                 progress.0.downloaded.store(0, Ordering::Relaxed);
                 let response = trace
                     .send(
@@ -658,28 +787,32 @@ async fn download_http_with_progress(
                         &cancel,
                     )
                     .await?;
-                discovered_filename = response_filename(&response, discovered_filename);
-                download_full(
+                observe_name(&response);
+                let fallback = download_full(
                     response,
                     &assembled,
                     &limiter,
                     &cancel,
                     expected_size,
+                    digest,
                     &mut trace,
                 )
-                .await?;
+                .await;
+                if matches!(fallback, Err(Error::ChecksumMismatch)) {
+                    clear_parts(&work_dir).await?;
+                }
+                fallback?;
             }
             Ok(()) => {
                 trace.stage(HttpStage::IntegrityCheck);
-                assemble_segments(
-                    &work_dir,
-                    &assembled,
-                    manifest.parts,
-                    total,
-                    &cancel,
-                    &progress,
-                )
-                .await?;
+                let result =
+                    assemble_segments(&work_dir, &assembled, &manifest, &cancel, &progress).await;
+                if matches!(result, Err(Error::ChecksumMismatch)) {
+                    clear_parts(&work_dir).await?;
+                    progress.0.downloaded.store(0, Ordering::Relaxed);
+                    progress.replace_segments([]);
+                }
+                result?;
             }
         }
     } else {
@@ -700,13 +833,17 @@ async fn download_http_with_progress(
         } else {
             return Err(Error::HttpStatus(probe.status().as_u16()));
         };
-        discovered_filename = response_filename(&response, discovered_filename);
+        // A 200 probe is also the full response.
+        if trace.details.range_probe_status != Some(200) {
+            observe_name(&response);
+        }
         download_full(
             response,
             &assembled,
             &limiter,
             &cancel,
             expected_size,
+            digest,
             &mut trace,
         )
         .await?;
@@ -722,10 +859,7 @@ async fn download_http_with_progress(
     }
 
     let filename = safe_filename(
-        request
-            .suggested_filename
-            .as_deref()
-            .filter(|name| !name.trim().is_empty())
+        explicit_name
             .or(discovered_filename.as_deref())
             .unwrap_or("download"),
     );
@@ -757,22 +891,35 @@ fn range_failure_can_retry_full(error: &Error) -> bool {
 async fn assemble_segments(
     work_dir: &Path,
     assembled: &Path,
-    parts: usize,
-    total: u64,
+    manifest: &ResumeManifest,
     cancel: &CancellationToken,
     progress: &DownloadProgress,
 ) -> Result<()> {
     progress.begin_merge();
     let mut merged = fs::File::create(assembled).await?;
     let mut buffer = vec![0_u8; 256 * 1024];
-    for index in 0..parts {
+    let mut hasher = matches!(manifest.validator, RangeValidator::Digest { .. }).then(Sha256::new);
+    for index in 0..manifest.parts {
         let mut part = fs::File::open(work_dir.join(format!("segment-{index}.part"))).await?;
-        copy_segment(&mut part, &mut merged, &mut buffer, cancel, progress).await?;
+        copy_segment(
+            &mut part,
+            &mut merged,
+            &mut buffer,
+            cancel,
+            progress,
+            hasher.as_mut(),
+        )
+        .await?;
     }
     progress.finalize();
     merged.flush().await?;
-    if merged.metadata().await?.len() != total {
+    if merged.metadata().await?.len() != manifest.total {
         return Err(Error::InvalidHttpResponse);
+    }
+    if let (Some(hasher), RangeValidator::Digest { sha256 }) = (hasher, &manifest.validator)
+        && <Sha256Bytes>::from(hasher.finalize()) != *sha256
+    {
+        return Err(Error::ChecksumMismatch);
     }
     merged.sync_all().await?;
     Ok(())
@@ -784,6 +931,7 @@ async fn copy_segment(
     buffer: &mut [u8],
     cancel: &CancellationToken,
     progress: &DownloadProgress,
+    mut hasher: Option<&mut Sha256>,
 ) -> Result<()> {
     loop {
         let count = tokio::select! {
@@ -795,6 +943,9 @@ async fn copy_segment(
             break;
         }
         output.write_all(&buffer[..count]).await?;
+        if let Some(h) = hasher.as_mut() {
+            h.update(&buffer[..count]);
+        }
         progress.0.merged.fetch_add(count as u64, Ordering::Relaxed);
     }
     Ok(())
@@ -806,11 +957,13 @@ async fn download_full(
     limiter: &RateLimiter,
     cancel: &CancellationToken,
     expected_size: Option<u64>,
+    sha256: Option<Sha256Bytes>,
     trace: &mut HttpTrace<'_>,
 ) -> Result<()> {
     if response.status() != StatusCode::OK {
         return Err(Error::HttpStatus(response.status().as_u16()));
     }
+    let sha256 = sha256.or_else(|| repository::representation_digest(response.headers()));
     trace.stage(HttpStage::FullDownload);
     let progress = trace.progress;
     let expected = response.content_length();
@@ -838,15 +991,25 @@ async fn download_full(
         cancel,
         progress,
         Some(&segment),
-        maximum,
+        BodyIntegrity { maximum, sha256 },
     )
     .await;
     if result.is_ok() {
         progress.finalize();
     }
     file.flush().await?;
-    if matches!(&result, Err(Error::InvalidHttpResponse)) {
+    if matches!(
+        &result,
+        Err(Error::InvalidHttpResponse | Error::ChecksumMismatch)
+    ) {
         trace.stage(HttpStage::IntegrityCheck);
+    }
+    if matches!(result, Err(Error::ChecksumMismatch)) {
+        drop(file);
+        remove_if_present(assembled.to_owned()).await?;
+        progress.0.downloaded.store(0, Ordering::Relaxed);
+        progress.replace_segments([]);
+        return Err(Error::ChecksumMismatch);
     }
     let written = result?;
     if expected
@@ -921,7 +1084,7 @@ async fn send_observed(
     client: &Client,
     builder: reqwest::RequestBuilder,
     cancel: &CancellationToken,
-    mut observe: impl FnMut(&reqwest::Url, Option<StatusCode>, u8),
+    mut observe: impl FnMut(&reqwest::Url, Option<&Response>, u8),
 ) -> Result<Response> {
     let mut request = builder.build().map_err(network)?;
     for redirects in 0..=10 {
@@ -929,7 +1092,7 @@ async fn send_observed(
         let mut next_request = request.try_clone().ok_or(Error::InvalidHttpResponse)?;
         observe(&previous, None, redirects);
         let response = send_with_retries(client, &request, cancel).await?;
-        observe(response.url(), Some(response.status()), redirects);
+        observe(response.url(), Some(&response), redirects);
         if !matches!(
             response.status(),
             StatusCode::MOVED_PERMANENTLY
@@ -952,7 +1115,12 @@ async fn send_observed(
         }
         if next.origin() != previous.origin() {
             let mut safe = HeaderMap::new();
-            for name in [header::RANGE, header::IF_RANGE, header::USER_AGENT] {
+            for name in [
+                header::RANGE,
+                header::IF_RANGE,
+                header::USER_AGENT,
+                header::ACCEPT_ENCODING,
+            ] {
                 if let Some(value) = next_request.headers().get(&name) {
                     safe.insert(name, value.clone());
                 }
@@ -1105,6 +1273,8 @@ impl RangeSource<'_> {
             {
                 if completed_request {
                     limit = 1;
+                    trace.details.range_mode = Some(HttpRangeMode::RateLimited);
+                    trace.record();
                 } else if first_error.is_none() {
                     first_error = Some((Error::HttpStatus(429), details));
                 }
@@ -1159,17 +1329,16 @@ impl RangeSource<'_> {
                 return Ok(RangeOutcome::Complete);
             }
             let range_start = range.start + present;
+            let mut request = self
+                .client
+                .get(self.url)
+                .headers(self.headers.clone())
+                .header(header::RANGE, format!("bytes={range_start}-{end}"));
+            if let RangeValidator::Etag(etag) = &self.manifest.validator {
+                request = request.header(header::IF_RANGE, etag);
+            }
             let response = trace
-                .send(
-                    HttpStage::Segment,
-                    self.client,
-                    self.client
-                        .get(self.url)
-                        .headers(self.headers.clone())
-                        .header(header::RANGE, format!("bytes={range_start}-{end}"))
-                        .header(header::IF_RANGE, &self.manifest.validator),
-                    self.cancel,
-                )
+                .send(HttpStage::Segment, self.client, request, self.cancel)
                 .await?;
             if response.status() == StatusCode::TOO_MANY_REQUESTS
                 && !response.headers().contains_key(header::RETRY_AFTER)
@@ -1183,15 +1352,16 @@ impl RangeSource<'_> {
                 return Err(Error::HttpStatus(response.status().as_u16()));
             }
             if response.status() != StatusCode::PARTIAL_CONTENT
-                || response.url().as_str() != self.manifest.resource_url
+                || !self
+                    .manifest
+                    .validator
+                    .accepts(&response, &self.manifest.resource_url)
                 || response
                     .headers()
                     .get(header::CONTENT_RANGE)
                     .and_then(|v| v.to_str().ok())
                     .and_then(parse_content_range)
                     != Some((range_start, end, self.manifest.total))
-                || strong_etag(response.headers()).as_deref()
-                    != Some(self.manifest.validator.as_str())
             {
                 trace.stage(HttpStage::IntegrityCheck);
                 return Err(Error::InvalidHttpResponse);
@@ -1203,7 +1373,10 @@ impl RangeSource<'_> {
                 self.cancel,
                 progress,
                 Some(segment),
-                Some(length - present),
+                BodyIntegrity {
+                    maximum: Some(length - present),
+                    sha256: None,
+                },
             )
             .await;
             file.flush().await?;
@@ -1250,6 +1423,11 @@ impl RangeSource<'_> {
     }
 }
 
+struct BodyIntegrity {
+    maximum: Option<u64>,
+    sha256: Option<Sha256Bytes>,
+}
+
 async fn write_response(
     response: Response,
     file: &mut fs::File,
@@ -1257,10 +1435,11 @@ async fn write_response(
     cancel: &CancellationToken,
     progress: &DownloadProgress,
     segment: Option<&SegmentState>,
-    maximum: Option<u64>,
+    integrity: BodyIntegrity,
 ) -> Result<u64> {
     let mut body = response.bytes_stream();
     let mut total = 0u64;
+    let mut hasher = integrity.sha256.map(|_| Sha256::new());
     loop {
         let chunk = tokio::select! {
             biased;
@@ -1276,11 +1455,14 @@ async fn write_response(
         let next = total
             .checked_add(chunk.len() as u64)
             .ok_or(Error::InvalidHttpResponse)?;
-        if maximum.is_some_and(|maximum| next > maximum) {
+        if integrity.maximum.is_some_and(|maximum| next > maximum) {
             return Err(Error::InvalidHttpResponse);
         }
         limiter.wait(chunk.len(), cancel).await?;
         file.write_all(&chunk).await?;
+        if let Some(h) = &mut hasher {
+            h.update(&chunk);
+        }
         progress.add(chunk.len() as u64);
         if let Some(segment) = segment {
             segment
@@ -1288,6 +1470,11 @@ async fn write_response(
                 .fetch_add(chunk.len() as u64, Ordering::Relaxed);
         }
         total = next;
+    }
+    if let (Some(h), Some(expected)) = (hasher, integrity.sha256)
+        && <Sha256Bytes>::from(h.finalize()) != expected
+    {
+        return Err(Error::ChecksumMismatch);
     }
     Ok(total)
 }
@@ -1322,22 +1509,18 @@ impl RateLimiter {
     }
 }
 
-fn response_filename(response: &Response, fallback: Option<String>) -> Option<String> {
-    disposition_filename(response.headers())
-        .or(fallback)
-        .or_else(|| {
-            response
-                .url()
-                .path_segments()
-                .and_then(|mut parts| parts.next_back())
-                .filter(|segment| !segment.is_empty())
-                .and_then(|segment| {
-                    percent_encoding::percent_decode_str(segment)
-                        .decode_utf8()
-                        .ok()
-                })
-                .map(|name| name.into_owned())
+fn response_basename(response: &Response) -> Option<String> {
+    response
+        .url()
+        .path_segments()
+        .and_then(|mut parts| parts.next_back())
+        .filter(|segment| !segment.is_empty())
+        .and_then(|segment| {
+            percent_encoding::percent_decode_str(segment)
+                .decode_utf8()
+                .ok()
         })
+        .map(|name| name.into_owned())
 }
 
 fn disposition_filename(headers: &HeaderMap) -> Option<String> {
@@ -1674,8 +1857,12 @@ mod publication_tests {
         assemble_segments(
             directory.path(),
             &assembled,
-            2,
-            12,
+            &ResumeManifest {
+                parts: 2,
+                total: 12,
+                validator: RangeValidator::Etag(String::new()),
+                resource_url: String::new(),
+            },
             &CancellationToken::new(),
             &progress,
         )
@@ -1762,6 +1949,7 @@ mod publication_tests {
                 &mut buffer,
                 &CancellationToken::new(),
                 &observed,
+                None,
             )
             .await
         });
@@ -1790,8 +1978,12 @@ mod publication_tests {
         let result = assemble_segments(
             directory.path(),
             &directory.path().join("assembled.part"),
-            1,
-            14,
+            &ResumeManifest {
+                parts: 1,
+                total: 14,
+                validator: RangeValidator::Etag(String::new()),
+                resource_url: String::new(),
+            },
             &cancel,
             &DownloadProgress::default(),
         )

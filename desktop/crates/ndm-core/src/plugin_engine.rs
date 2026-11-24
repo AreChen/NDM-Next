@@ -55,6 +55,7 @@ pub(crate) enum EngineUpdate {
 #[derive(Clone)]
 pub struct PluginEngine {
     executable: PathBuf,
+    pub(crate) runtimes: std::sync::Arc<crate::plugins::ResolvedRuntimes>,
 }
 
 impl PluginEngine {
@@ -73,7 +74,10 @@ impl PluginEngine {
                 "download engine is not a regular file",
             ));
         }
-        Ok(Self { executable })
+        Ok(Self {
+            executable,
+            runtimes: Default::default(),
+        })
     }
 
     /// Run one transfer and reclaim its process tree before returning.
@@ -174,6 +178,13 @@ impl PluginEngine {
             )
         })?;
         let mut command = Command::new(&self.executable);
+        command.env_remove(ndm_plugin_sdk::RUNTIMES_ENV);
+        if !self.runtimes.paths.is_empty() {
+            command.env(
+                ndm_plugin_sdk::RUNTIMES_ENV,
+                serde_json::to_string(&self.runtimes.paths).map_err(io::Error::other)?,
+            );
+        }
         command
             .arg(ENGINE_ARGUMENT)
             .current_dir(installed_directory)

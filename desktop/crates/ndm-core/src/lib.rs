@@ -33,8 +33,8 @@ pub use dash::{
     download_dash_with_media_tool, execute_dash, inspect_dash, inspect_dash_with_options,
 };
 pub use diagnostics::{
-    DownloadFailure, HttpDiagnostics, HttpStage, ProxyMode, ProxyRoute, TaskActivity,
-    validate_user_agent,
+    DownloadFailure, HttpDiagnostics, HttpRangeMode, HttpStage, ProxyMode, ProxyRoute,
+    TaskActivity, validate_user_agent,
 };
 pub use ftp::{FtpOptions, FtpSecurity, download_ftp, execute_ftp};
 pub use hls::{
@@ -44,6 +44,7 @@ pub use hls::{
 pub use http::{
     CHROME_USER_AGENT, DownloadProgress, HttpOptions, ProgressPhase, ProgressSnapshot,
     ProxyOptions, SegmentSnapshot, download_http, download_http_with_client, execute_http,
+    http_filename_hint,
 };
 #[cfg(windows)]
 pub use installation::shutdown_desktop_installation;
@@ -94,6 +95,8 @@ pub enum Error {
     HttpStatus(u16),
     #[error("HTTP server returned an invalid or inconsistent response")]
     InvalidHttpResponse,
+    #[error("download SHA-256 does not match the source")]
+    ChecksumMismatch,
     #[error("download request contains an invalid or reserved header")]
     InvalidHeader,
     #[error("replacement download address is invalid")]

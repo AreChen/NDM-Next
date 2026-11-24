@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     DownloadProgress, Error, PluginOptions, Result, Store, Task, TaskId, cache,
     http::{publish_download, safe_filename},
-    plugin_engine::{EngineError, EngineOutcome, EngineUpdate, PluginEngine},
+    plugin_engine::{EngineError, EngineOutcome, EngineUpdate},
     plugins::{InstalledPlugin, PluginRegistry},
 };
 
@@ -73,7 +73,7 @@ async fn transfer(
         .get(&options.id)?
         .ok_or(Error::PluginUnavailable)?;
     let workspace = cache::engine_workspace(&task)?;
-    let engine = PluginEngine::new(plugin.executable())?;
+    let engine = plugin.engine()?;
     let request = build_request(&task, &plugin, options, default_threads, workspace.clone())?;
     let mut resolved = false;
     let outcome = engine

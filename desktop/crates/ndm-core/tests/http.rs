@@ -25,6 +25,382 @@ use tokio::{net::TcpListener, sync::RwLock};
 use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
+async fn running_task_publishes_attachment_name_before_the_body_arrives() {
+    let dir = TempDir::new().unwrap();
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!(
+        "http://{}/download?filename=hint.zip",
+        listener.local_addr().unwrap()
+    );
+    let app = Router::new().route(
+        "/download",
+        get({
+            let gate = gate.clone();
+            move || {
+                let gate = gate.clone();
+                async move {
+                    Response::builder()
+                        .header(
+                            header::CONTENT_DISPOSITION,
+                            "attachment; filename=actual.zip",
+                        )
+                        .body(Body::from_stream(futures_util::stream::once(async move {
+                            let _permit = gate.acquire().await.unwrap();
+                            Ok::<_, std::io::Error>(Bytes::from_static(b"content"))
+                        })))
+                        .unwrap()
+                }
+            }
+        }),
+    );
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let store = Arc::new(Store::open(&dir.path().join("tasks.db")).unwrap());
+    let id = TaskId::new_v4();
+    let mut req = request(dir.path(), url);
+    req.suggested_filename = None;
+    store.prepare(id, &req).unwrap();
+    store.commit(id).unwrap();
+    let run = tokio::spawn({
+        let store = store.clone();
+        async move {
+            execute_http(
+                &store,
+                id,
+                &Default::default(),
+                CancellationToken::new(),
+                Default::default(),
+            )
+            .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(4), async {
+        loop {
+            let task = store.get(id).unwrap().unwrap();
+            if task.engine_title.as_deref() == Some("actual.zip") {
+                assert_eq!(task.state, TaskState::Running);
+                assert!(task.output_path.is_none());
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    gate.add_permits(1);
+    assert_eq!(
+        run.await.unwrap().unwrap().file_name().unwrap(),
+        "actual.zip"
+    );
+}
+
+#[tokio::test]
+async fn digest_bound_ranges_handle_rotating_urls_and_reject_corrupt_bytes() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use ndm_core::HttpRangeMode;
+    for (corrupt, fallback) in [(false, false), (true, false), (false, true), (true, true)] {
+        let dir = TempDir::new().unwrap();
+        let expected = Arc::new(data(3));
+        let repr = format!("sha-256=:{}:", STANDARD.encode(Sha256::digest(&*expected)));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let active = Arc::new(AtomicUsize::new(0));
+        let tickets = Arc::new(AtomicUsize::new(0));
+        let app = Router::new()
+            .route(
+                "/repo",
+                get(move || {
+                    let ticket = tickets.fetch_add(1, Ordering::SeqCst);
+                    async move {
+                        (
+                            StatusCode::FOUND,
+                            [(header::LOCATION, format!("/blob?sig={ticket}"))],
+                        )
+                    }
+                }),
+            )
+            .route(
+                "/blob",
+                get({
+                    let peak = peak.clone();
+                    let expected = expected.clone();
+                    move |headers: HeaderMap| {
+                        let (peak, active, expected, repr) =
+                            (peak.clone(), active.clone(), expected.clone(), repr.clone());
+                        async move {
+                            let range = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
+                            assert!(!headers.contains_key(header::IF_RANGE));
+                            let n = expected.len();
+                            if range == Some("bytes=0-0") {
+                                return Response::builder()
+                                    .status(206)
+                                    .header("repr-digest", repr)
+                                    .header(header::CONTENT_RANGE, format!("bytes 0-0/{n}"))
+                                    .body(Body::from(vec![expected[0]]))
+                                    .unwrap();
+                            }
+                            if let Some(range) = range {
+                                let count = active.fetch_add(1, Ordering::SeqCst) + 1;
+                                peak.fetch_max(count, Ordering::SeqCst);
+                                tokio::time::sleep(Duration::from_millis(35)).await;
+                                active.fetch_sub(1, Ordering::SeqCst);
+                                if fallback {
+                                    return Response::builder()
+                                        .status(416)
+                                        .body(Body::empty())
+                                        .unwrap();
+                                }
+                                let (start, end) = range[6..].split_once('-').unwrap();
+                                let (start, end) = (
+                                    start.parse::<usize>().unwrap(),
+                                    end.parse::<usize>().unwrap(),
+                                );
+                                let mut part = expected[start..=end].to_vec();
+                                if corrupt {
+                                    part[0] ^= 1;
+                                }
+                                return Response::builder()
+                                    .status(206)
+                                    .header(
+                                        header::CONTENT_RANGE,
+                                        format!("bytes {start}-{end}/{n}"),
+                                    )
+                                    .body(Body::from(part))
+                                    .unwrap();
+                            }
+                            let mut full = (*expected).clone();
+                            if corrupt {
+                                full[0] ^= 1;
+                            }
+                            Response::builder().body(Body::from(full)).unwrap()
+                        }
+                    }
+                }),
+            );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/repo?FilePath=vae%2Fmodel.safetensors",
+            listener.local_addr().unwrap()
+        );
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let id = TaskId::new_v4();
+        let mut req = request(dir.path(), url);
+        req.suggested_filename = None;
+        // A rotating redirect must still reuse a part when the repository digest
+        // matches. A different revision of the same size must fetch every part.
+        if !fallback {
+            let cache = dir.path().join(format!(".ndm-next-{id}"));
+            std::fs::create_dir(&cache).unwrap();
+            let digest: [u8; 32] = if corrupt {
+                [0; 32]
+            } else {
+                Sha256::digest(&*expected).into()
+            };
+            let manifest = serde_json::json!({"validator":{"sha256":digest},"resource_url":req.url,"total":expected.len(),"connections":4});
+            std::fs::write(
+                cache.join("resume.bin"),
+                ndm_core::protect_user_data(&serde_json::to_vec(&manifest).unwrap()).unwrap(),
+            )
+            .unwrap();
+            std::fs::write(
+                cache.join("segment-0.part"),
+                &expected[..expected.len() / 4],
+            )
+            .unwrap();
+        }
+        let store = Store::open(&dir.path().join("tasks.db")).unwrap();
+        store.prepare(id, &req).unwrap();
+        store.commit(id).unwrap();
+        let progress = DownloadProgress::default();
+        let result = execute_http(
+            &store,
+            id,
+            &HttpOptions {
+                max_connections: 4,
+                ..Default::default()
+            },
+            CancellationToken::new(),
+            progress.clone(),
+        )
+        .await;
+        assert!(peak.load(Ordering::SeqCst) > 1);
+        if !fallback {
+            let reused = if corrupt { 0 } else { expected.len() / 4 };
+            assert_eq!(
+                progress.snapshot().transferred,
+                (expected.len() - reused) as u64
+            );
+        }
+        assert_eq!(
+            progress.snapshot().http.unwrap().range_mode,
+            Some(if fallback {
+                HttpRangeMode::SegmentFallback
+            } else {
+                HttpRangeMode::VerifiedSha256
+            })
+        );
+        if corrupt {
+            assert!(matches!(result, Err(Error::ChecksumMismatch)));
+            assert_eq!(progress.snapshot().downloaded, 0);
+            assert_eq!(
+                progress.snapshot().http.unwrap().stage,
+                HttpStage::IntegrityCheck
+            );
+            assert_eq!(store.get(id).unwrap().unwrap().state, TaskState::Failed);
+            assert!(!dir.path().join("model.safetensors").exists());
+            assert!(
+                !dir.path()
+                    .join(format!(".ndm-next-{id}/resume.bin"))
+                    .exists()
+            );
+        } else {
+            let output = result.unwrap();
+            assert_eq!(output.file_name().unwrap(), "model.safetensors");
+            assert_eq!(std::fs::read(output).unwrap(), *expected);
+        }
+    }
+}
+
+fn receiving_ranges(progress: &DownloadProgress) -> usize {
+    progress
+        .snapshot()
+        .segments
+        .iter()
+        .filter(|segment| segment.active && segment.downloaded > 0)
+        .count()
+}
+
+#[tokio::test]
+#[ignore = "samples live ranges from the public 7B INT8 model, then pauses"]
+async fn public_int8_model_transfers_multiple_ranges_before_pause() {
+    for (site, url) in [
+        (
+            "ModelScope",
+            "https://www.modelscope.cn/api/v1/models/Comfy-Org/SeedVR2/repo?Revision=master&FilePath=diffusion_models%2Fseedvr2_7b_int8_convrot.safetensors",
+        ),
+        (
+            "Hugging Face",
+            "https://huggingface.co/Comfy-Org/SeedVR2/resolve/main/diffusion_models/seedvr2_7b_int8_convrot.safetensors",
+        ),
+    ] {
+        let dir = TempDir::new().unwrap();
+        let mut req = request(dir.path(), url.into());
+        req.suggested_filename = None;
+        let id = TaskId::new_v4();
+        let store = Store::open(&dir.path().join("tasks.db")).unwrap();
+        store.prepare(id, &req).unwrap();
+        store.commit(id).unwrap();
+        let progress = DownloadProgress::default();
+        let cancel = CancellationToken::new();
+        let options = HttpOptions {
+            max_connections: 8,
+            max_bytes_per_second: Some(8 * 1024 * 1024),
+            ..Default::default()
+        };
+        let run = execute_http(&store, id, &options, cancel.clone(), progress.clone());
+        tokio::pin!(run);
+        let mut seen = 0;
+        let result = tokio::time::timeout(Duration::from_secs(90), async {
+            loop {
+                tokio::select! {
+                    result = &mut run => break result,
+                    _ = tokio::time::sleep(Duration::from_millis(20)) => {
+                        seen = seen.max(receiving_ranges(&progress));
+                        if seen >= 2 {
+                            cancel.cancel();
+                        }
+                    }
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(matches!(result, Err(Error::Cancelled)) && seen >= 2);
+        let task = store.get(id).unwrap().unwrap();
+        assert_eq!(task.state, TaskState::Paused);
+        assert_eq!(
+            task.engine_title.as_deref(),
+            Some("seedvr2_7b_int8_convrot.safetensors")
+        );
+        assert_eq!(progress.snapshot().total, Some(8_334_897_976));
+        assert_eq!(
+            progress.snapshot().http.unwrap().range_mode,
+            Some(ndm_core::HttpRangeMode::VerifiedSha256)
+        );
+        println!(
+            "{site} 7B INT8: {seen} active ranges with received bytes; paused before completion"
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore = "downloads the public 478 MiB SeedVR2 VAE from each repository"]
+async fn public_model_repositories_use_verified_parallel_ranges() {
+    const HASH: &str = "20678548f420d98d26f11442d3528f8b8c94e57ee046ef93dbb7633da8612ca1";
+    for (site, url) in [
+        (
+            "ModelScope",
+            "https://www.modelscope.cn/api/v1/models/Comfy-Org/SeedVR2/repo?Revision=master&FilePath=vae%2Fseedvr2_ema_vae_fp16.safetensors",
+        ),
+        (
+            "Hugging Face",
+            "https://huggingface.co/Comfy-Org/SeedVR2/resolve/main/vae/seedvr2_ema_vae_fp16.safetensors",
+        ),
+    ] {
+        let dir = TempDir::new().unwrap();
+        let mut req = request(dir.path(), url.to_owned());
+        req.suggested_filename = None;
+        let id = TaskId::new_v4();
+        let store = Store::open(&dir.path().join("tasks.db")).unwrap();
+        store.prepare(id, &req).unwrap();
+        store.commit(id).unwrap();
+        let progress = DownloadProgress::default();
+        let options = HttpOptions {
+            max_connections: 8,
+            ..Default::default()
+        };
+        let run = execute_http(
+            &store,
+            id,
+            &options,
+            CancellationToken::new(),
+            progress.clone(),
+        );
+        tokio::pin!(run);
+        let mut peak = 0;
+        let output = tokio::time::timeout(Duration::from_secs(240), async {
+            loop {
+                tokio::select! {
+                    result = &mut run => break result,
+                    _ = tokio::time::sleep(Duration::from_millis(20)) => {
+                        peak = peak.max(receiving_ranges(&progress));
+                    }
+                }
+            }
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            output.file_name().unwrap(),
+            "seedvr2_ema_vae_fp16.safetensors"
+        );
+        let mut digest = Sha256::new();
+        let bytes = std::io::copy(&mut std::fs::File::open(output).unwrap(), &mut digest).unwrap();
+        assert_eq!(hex::encode(digest.finalize()), HASH);
+        assert_eq!(
+            progress.snapshot().http.unwrap().range_mode,
+            Some(ndm_core::HttpRangeMode::VerifiedSha256)
+        );
+        assert!(peak > 1, "{site} used {peak} active ranges");
+        println!("{site}: {bytes} bytes, {peak} active ranges, SHA-256 verified");
+    }
+}
+
+#[tokio::test]
 async fn missing_suggested_filename_uses_content_disposition_or_url_safely() {
     let dir = TempDir::new().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

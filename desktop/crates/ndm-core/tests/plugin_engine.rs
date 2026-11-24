@@ -30,6 +30,7 @@ fn main() {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
         Some(ENGINE_ARGUMENT) => fixture_engine(),
+        Some("--fixture-runtime-version") => println!("fixture runtime 1"),
         Some(DESCENDANT_ARGUMENT) => {
             let _connection = std::net::TcpStream::connect(args.next().unwrap()).unwrap();
             loop {
@@ -56,7 +57,20 @@ fn fixture_engine() {
     .unwrap();
     let request = match read_message(&mut input).unwrap().unwrap() {
         HostMessage::Download { request } => request,
-        HostMessage::Inspect { .. } => {
+        HostMessage::Inspect { request } => {
+            if request.options.get("mode").and_then(|v| v.as_str()) == Some("shared-tool") {
+                let tool = ndm_plugin_sdk::runtime_path("tool").expect("installed runtime");
+                assert_ne!(tool, env::current_exe().unwrap());
+                let result = Command::new(tool)
+                    .arg("--fixture-runtime-version")
+                    .output()
+                    .unwrap();
+                assert!(result.status.success());
+                assert_eq!(
+                    std::str::from_utf8(&result.stdout).unwrap().trim(),
+                    "fixture runtime 1"
+                );
+            }
             write_message(
                 &mut output,
                 &EngineMessage::Inspected {
@@ -225,7 +239,8 @@ async fn run_tests() {
     stops_and_reaps_descendant(&engine).await;
     schedules_installed_engines_with_global_batch_and_plugin_limits().await;
     inspects_selected_outputs_and_restarts_sharing_without_touching_files().await;
-    println!("5 download engine process and scheduler tests passed");
+    invokes_an_installed_provider_from_a_consumer_worker().await;
+    println!("6 download engine process and scheduler tests passed");
 }
 
 fn fixture_package(profile: &Path, id: &str, active: u32) -> std::path::PathBuf {
@@ -235,7 +250,7 @@ fn fixture_package(profile: &Path, id: &str, active: u32) -> std::path::PathBuf 
     let mut zip = zip::ZipWriter::new(file);
     let options = zip::write::SimpleFileOptions::default();
     zip.start_file("plugin.json", options).unwrap();
-    serde_json::to_writer(&mut zip, &serde_json::json!({
+    let mut manifest = serde_json::json!({
         "schema":1,"id":id,"version":"0.1.0","engine":executable,"engine_protocol":1,
         "name":{"en":id},"description":{"en":"Local download fixture"},
         "inputs":[{"schemes":["fixture"]}],"limits":{"active_tasks":active,"download_threads":4},
@@ -244,7 +259,14 @@ fn fixture_package(profile: &Path, id: &str, active: u32) -> std::path::PathBuf 
           {"key":"mode","kind":"text","max_length":32,"label":{"en":"Mode"}},
           {"key":"address","kind":"text","max_length":64,"label":{"en":"Local fixture address"}}
         ]
-    })).unwrap();
+    });
+    if id == "runtime-consumer" {
+        manifest["schema"] = 2.into();
+        manifest["runtime_dependencies"] = serde_json::json!([
+            {"name":"tool","plugin":"runtime-provider","version":"^0.1","path":executable}
+        ]);
+    }
+    serde_json::to_writer(&mut zip, &manifest).unwrap();
     zip.start_file(&executable, options.unix_permissions(0o755))
         .unwrap();
     io::copy(
@@ -254,6 +276,29 @@ fn fixture_package(profile: &Path, id: &str, active: u32) -> std::path::PathBuf 
     .unwrap();
     zip.finish().unwrap();
     archive
+}
+
+async fn invokes_an_installed_provider_from_a_consumer_worker() {
+    let dir = tempfile::tempdir().unwrap();
+    let registry = PluginRegistry::new(dir.path());
+    registry
+        .import(&fixture_package(dir.path(), "runtime-provider", 1))
+        .unwrap();
+    let consumer = registry
+        .import(&fixture_package(dir.path(), "runtime-consumer", 1))
+        .unwrap();
+    let response = consumer
+        .inspect_source(
+            reqwest::Url::parse("fixture://shared").unwrap(),
+            [("mode".into(), "shared-tool".into())]
+                .into_iter()
+                .collect(),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(response.files[0].path, "selected.bin");
 }
 
 async fn inspects_selected_outputs_and_restarts_sharing_without_touching_files() {

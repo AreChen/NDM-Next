@@ -1,11 +1,11 @@
 //! Metadata shared by the installer, native controls, and MCP.
 use std::{collections::HashSet, fmt, io, path::Path};
 
-use semver::Version;
+use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-pub const MANIFEST_VERSION: u32 = 1;
+pub const MANIFEST_VERSION: u32 = 2;
 pub const MANIFEST_FILE: &str = "plugin.json";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,6 +54,18 @@ pub struct PluginManifest {
     pub skill: Option<String>,
     #[serde(default)]
     pub tools: Vec<DownloadTool>,
+    /// Executables supplied by a compatible version of another installed package.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtime_dependencies: Vec<RuntimeDependency>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeDependency {
+    pub name: String,
+    pub plugin: String,
+    pub version: VersionReq,
+    pub path: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
@@ -183,7 +195,7 @@ pub struct PanelField {
 
 impl PluginManifest {
     pub fn validate(&self) -> io::Result<()> {
-        if self.schema != MANIFEST_VERSION
+        if !(1..=MANIFEST_VERSION).contains(&self.schema)
             || self.engine_protocol != crate::ENGINE_PROTOCOL_VERSION
             || !valid_identifier(&self.id)
             || !self.name.valid(128)
@@ -211,6 +223,19 @@ impl PluginManifest {
             || self.tools.len() > 8
         {
             return Err(invalid("invalid or incompatible plugin manifest"));
+        }
+        let mut runtimes = HashSet::new();
+        if (!self.runtime_dependencies.is_empty() && self.schema < 2)
+            || self.runtime_dependencies.len() > 16
+            || self.runtime_dependencies.iter().any(|dep| {
+                !valid_identifier(&dep.name)
+                    || !valid_identifier(&dep.plugin)
+                    || dep.plugin == self.id
+                    || !valid_package_path(&dep.path)
+                    || !runtimes.insert(&dep.name)
+            })
+        {
+            return Err(invalid("invalid plugin runtime dependencies"));
         }
         let mut keys = HashSet::new();
         for field in &self.options {

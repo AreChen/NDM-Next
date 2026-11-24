@@ -1,5 +1,8 @@
 pub(crate) fn description(code: &str, chinese: bool) -> &str {
     match (code, chinese) {
+        ("download SHA-256 does not match the source", true) => {
+            "文件的 SHA-256 与来源提供的摘要不一致，校验失败。"
+        }
         ("dash_drm_unsupported", true) => "此 DASH 媒体受 DRM 保护，无法下载。",
         ("dash_drm_unsupported", false) => "DRM-protected DASH media cannot be downloaded.",
         ("dash_dynamic_unsupported", true) => {

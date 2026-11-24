@@ -126,11 +126,11 @@ fn web_url(value: &str) -> Option<Url> {
 
 impl BrowserTask {
     fn validate(self, destination: PathBuf) -> Option<(NewTask, TaskOptions)> {
-        if web_url(&self.url).is_none()
-            || self
-                .source_url
-                .as_ref()
-                .is_some_and(|source| web_url(source).is_none())
+        let url = web_url(&self.url)?;
+        if self
+            .source_url
+            .as_ref()
+            .is_some_and(|source| web_url(source).is_none())
             || self
                 .suggested_filename
                 .as_ref()
@@ -191,11 +191,22 @@ impl BrowserTask {
         } else {
             TaskOptions::Auto
         };
+        let suggested_filename = self.suggested_filename.filter(|name| {
+            // Chromium sometimes guesses the API route before the attachment headers arrive.
+            is_hls
+                || is_dash
+                || ndm_core::http_filename_hint(&url).is_none()
+                || !matches!(name.to_ascii_lowercase().as_str(), "repo" | "download")
+                || url
+                    .path_segments()
+                    .and_then(|mut segments| segments.next_back())
+                    != Some(name.as_str())
+        });
         Some((
             NewTask {
                 url: self.url,
                 destination,
-                suggested_filename: self.suggested_filename,
+                suggested_filename,
                 source_url: self.source_url,
                 expected_size: if is_hls || is_dash {
                     None

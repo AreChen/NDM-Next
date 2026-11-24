@@ -7,6 +7,9 @@ The market validates the downloaded package against its published SHA-256
 checksum. **Import plugin** also accepts a compatible local ZIP from a
 developer you trust. An engine package contains a native executable.
 The market shows downloaded bytes and the verification and installation stages.
+An enhancement plugin can use the yt-dlp executable supplied by an installed
+Media Downloader plugin. If its required provider or compatible version is
+missing, the installer names it. Uninstall dependent plugins before their provider.
 
 Open **Settings** on an installed plugin card to save default download options.
 They apply to new tasks, including downloads requested by AI clients.
@@ -92,6 +95,12 @@ versions. While AI access is on, the scheduler samples ongoing task progress
 about once a second. Use `progress.activity` to check the sample time,
 recent transfer rate, and time since the last observed progress.
 
+For HTTP transfers, `progress.http.range_mode` reports the range validator
+(`strong_etag` or `verified_sha256`) or the reason for using one connection,
+such as `missing_validator`, `range_ignored`, `connection_limit` or `rate_limited`.
+Repository file paths can supply a name when a task is queued. A server attachment
+name becomes visible while the download is running.
+
 - [Plugin market catalog](https://github.com/AreChen/NDM-Next-Plugin-Market)
 - [Download engine SDK](../desktop/crates/ndm-plugin-sdk/README.md)
 - [NDM Next Skill](../desktop/crates/ndm-host/skills/SKILL.md)
@@ -103,6 +112,8 @@ recent transfer rate, and time since the last observed progress.
 SHA-256。也可以通过 **导入插件** 安装你信任的开发者提供的本地 ZIP。
 插件包包含可执行的下载引擎。
 从市场安装或更新时会显示已下载大小，以及校验与安装阶段。
+增强插件可以直接使用已安装的流媒体下载插件提供的 yt-dlp。安装时如果缺少
+所需插件或版本不兼容，界面会显示依赖名称。卸载时先移除依赖它的增强插件。
 
 在已安装的插件卡片上打开 **设置**，可保存该插件的默认下载选项。默认值用于
 新任务，也适用于 AI 客户端发起的下载。单次任务可单独修改选项。
@@ -169,3 +180,8 @@ Chrome、Firefox 或 Safari 预设，再按需编辑。留空保存会恢复为 
 旧版本失败的任务也适用。开启 AI 接入后，调度器约每秒记录一次进行中
 任务的进度。通过 `progress.activity` 可查询采样时间、近期传输速度和
 自上次观察到进展以来的时长。
+
+HTTP 任务的 `progress.http.range_mode` 会显示分段所用的校验方式（`strong_etag`
+或 `verified_sha256`），也会说明因缺少校验依据、服务器忽略 Range、连接数设置
+或服务端限流而使用单连接的情况。任务排队时可以从仓库路径获取文件名，
+收到服务器的附件名后，下载过程中就会更新。

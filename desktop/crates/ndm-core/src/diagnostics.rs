@@ -74,6 +74,8 @@ pub struct HttpDiagnostics {
     pub stage: HttpStage,
     pub http_status: Option<u16>,
     pub range_probe_status: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range_mode: Option<HttpRangeMode>,
     pub redirect_count: u8,
     pub effective_proxy: Option<ProxyRoute>,
     pub failure: Option<DownloadFailure>,
@@ -81,9 +83,24 @@ pub struct HttpDiagnostics {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum HttpRangeMode {
+    StrongEtag,
+    VerifiedSha256,
+    ConnectionLimit,
+    RangeIgnored,
+    RangeRejected,
+    InvalidContentRange,
+    MissingValidator,
+    SegmentFallback,
+    RateLimited,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DownloadFailure {
     HttpStatus,
     InvalidResponse,
+    ChecksumMismatch,
     Network,
     Timeout,
     Connection,
@@ -98,6 +115,7 @@ impl DownloadFailure {
         match error {
             Error::HttpStatus(_) => Self::HttpStatus,
             Error::InvalidHttpResponse => Self::InvalidResponse,
+            Error::ChecksumMismatch => Self::ChecksumMismatch,
             Error::Network(error) if error.is_timeout() => Self::Timeout,
             Error::Network(error) if error.is_connect() => Self::Connection,
             Error::Network(_) => Self::Network,
@@ -112,6 +130,7 @@ impl DownloadFailure {
         match reason {
             "server rejected the download" => Self::HttpStatus,
             "server returned an inconsistent response" => Self::InvalidResponse,
+            "download SHA-256 does not match the source" => Self::ChecksumMismatch,
             "network error" => Self::Network,
             "file or operating system error" => Self::Filesystem,
             _ => Self::DownloadFailed,
@@ -122,6 +141,7 @@ impl DownloadFailure {
         match self {
             Self::HttpStatus => "server rejected the download",
             Self::InvalidResponse => "server returned an inconsistent response",
+            Self::ChecksumMismatch => "download SHA-256 does not match the source",
             Self::Network => "network error",
             Self::Timeout => "network request timed out",
             Self::Connection => "could not connect to the server or proxy",

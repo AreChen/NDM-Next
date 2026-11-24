@@ -18,6 +18,31 @@ fn request(id: TaskId) -> Value {
 }
 
 #[test]
+fn browser_route_placeholders_allow_a_model_filename_and_keep_custom_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::open(&dir.path().join("tasks.db")).unwrap());
+    let host = Host::new(store.clone(), dir.path().join("downloads"));
+    for (suggestion, expected) in [("repo", None), ("chosen-name", Some("chosen-name"))] {
+        let id = TaskId::new_v4();
+        let mut msg = request(id);
+        msg["task"]["url"] =
+            "https://www.modelscope.cn/api/v1/models/X/Y/repo?FilePath=vae%2Fmodel.bin".into();
+        msg["task"]["suggested_filename"] = suggestion.into();
+        assert_eq!(host.handle(msg)["ok"], true);
+        assert_eq!(
+            store
+                .get(id)
+                .unwrap()
+                .unwrap()
+                .request
+                .suggested_filename
+                .as_deref(),
+            expected
+        );
+    }
+}
+
+#[test]
 fn browser_context_exposes_versions_and_requires_an_eligible_page_engine() {
     let directory = tempfile::tempdir().unwrap();
     let profile = directory.path();

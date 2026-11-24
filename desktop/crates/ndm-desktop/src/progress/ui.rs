@@ -403,7 +403,30 @@ impl Render for ProgressWindow {
                     if peers.is_some() {
                         self.text("活动连接", "Active connections")
                     } else {
-                        self.text("活动分段", "Active segments")
+                        use ndm_core::HttpRangeMode::*;
+                        match self.snapshot.as_ref().and_then(|p| p.http?.range_mode) {
+                            Some(ConnectionLimit) => self.text(
+                                "活动分段（任务连接数上限为 1）",
+                                "Active segments (task limit is 1)",
+                            ),
+                            Some(RangeIgnored | RangeRejected | InvalidContentRange) => self.text(
+                                "活动分段（服务器未返回有效范围）",
+                                "Active segments (server did not return a valid range)",
+                            ),
+                            Some(MissingValidator) => self.text(
+                                "活动分段（缺少可验证的文件版本或摘要）",
+                                "Active segments (no verified file version or digest)",
+                            ),
+                            Some(SegmentFallback) => self.text(
+                                "活动分段（分段响应未通过校验）",
+                                "Active segments (range response failed validation)",
+                            ),
+                            Some(RateLimited) => self.text(
+                                "活动分段（服务器限制并发）",
+                                "Active segments (server rate limit)",
+                            ),
+                            _ => self.text("活动分段", "Active segments"),
+                        }
                     },
                     if let Some(peers) = peers {
                         peers.connected.to_string()

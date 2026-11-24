@@ -1,4 +1,7 @@
 //! Installed engine packages and the official plugin catalog.
+mod runtimes;
+pub(crate) use runtimes::ResolvedRuntimes;
+pub use runtimes::RuntimeDependencyError;
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     fs, io,
@@ -168,6 +171,23 @@ impl InstalledPlugin {
         self.directory.join(&self.manifest.engine)
     }
 
+    pub(crate) fn engine(&self) -> io::Result<crate::plugin_engine::PluginEngine> {
+        let mut engine = crate::plugin_engine::PluginEngine::new(self.executable())?;
+        if !self.manifest.runtime_dependencies.is_empty() {
+            // Installed package layout is registry / plugin id / immutable revision.
+            let root = self
+                .directory
+                .ancestors()
+                .nth(2)
+                .ok_or_else(|| invalid("invalid installed package directory"))?;
+            let registry = PluginRegistry {
+                root: root.to_owned(),
+            };
+            engine.runtimes = std::sync::Arc::new(registry.resolve_runtimes(self)?);
+        }
+        Ok(engine)
+    }
+
     pub fn read_panel(&self) -> io::Result<Option<String>> {
         self.manifest
             .panel
@@ -207,7 +227,7 @@ impl InstalledPlugin {
             options,
             selection: None,
         };
-        crate::plugin_engine::PluginEngine::new(self.executable())?
+        self.engine()?
             .inspect(request, cancel)
             .await
             .map_err(|_| crate::Error::PluginSource)
@@ -358,7 +378,9 @@ impl PluginRegistry {
         if !valid_identifier(id) || !valid_package_path(revision) || revision.contains('/') {
             return Err(invalid("invalid installed plugin reference"));
         }
-        let directory = self.root.join(id).join(revision);
+        let package = self.root.join(id);
+        crate::cache::validate_directory(&package)?;
+        let directory = package.join(revision);
         crate::cache::validate_directory(&directory)?;
         let manifest: PluginManifest = read_json(&directory.join(MANIFEST_FILE))?;
         manifest.validate()?;
@@ -704,6 +726,7 @@ impl PluginRegistry {
         let _lock = self.mutation_lock()?;
         let mut snapshot = self.load()?;
         let revision = crate::TaskId::new_v4().to_string();
+        self.check_runtime_install(&snapshot, &manifest, staging.path())?;
         let versions = self.root.join(&manifest.id);
         fs::create_dir_all(&versions)?;
         let directory = versions.join(&revision);
@@ -729,12 +752,14 @@ impl PluginRegistry {
     pub(crate) fn remove(&self, id: &str) -> io::Result<()> {
         let _lock = self.mutation_lock()?;
         let mut snapshot = self.load()?;
-        if !valid_identifier(id) || snapshot.active.remove(id).is_none() {
+        if !valid_identifier(id) || !snapshot.active.contains_key(id) {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
                 "plugin is not installed",
             ));
         }
+        self.check_runtime_removal(&snapshot, id)?;
+        snapshot.active.remove(id);
         snapshot.preferred.retain(|_, preferred| preferred != id);
         snapshot.option_defaults.remove(id);
         snapshot.ai_disabled.remove(id);
@@ -965,6 +990,78 @@ mod tests {
             .unwrap();
         zip.write_all(b"fixture").unwrap();
         zip.finish().unwrap();
+    }
+
+    #[test]
+    fn shared_runtimes_survive_compatible_updates_and_guard_active_users() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = PluginRegistry::new(dir.path());
+        let engine = format!("worker{}", std::env::consts::EXE_SUFFIX);
+        let mut provider = json!({"schema":1,"id":"provider","version":"1.0.0","name":{"en":"Provider"},
+            "description":{"en":"Provider tool"},"engine":engine,"engine_protocol":1,
+            "inputs":[{"schemes":["fixture"]}],"limits":{"active_tasks":1}});
+        let mut consumer = provider.clone();
+        consumer["id"] = json!("consumer");
+        consumer["schema"] = json!(2);
+        consumer["runtime_dependencies"] =
+            json!([{"plugin":"provider","name":"tool","version":"^1.0","path":engine}]);
+        let archive = dir.path().join("package.zip");
+        let install = |manifest: &Value| {
+            write_package(&archive, manifest);
+            registry.import(&archive)
+        };
+        assert!(
+            install(&consumer)
+                .unwrap_err()
+                .to_string()
+                .contains("provider")
+        );
+        let original = install(&provider).unwrap();
+        let dependent = install(&consumer).unwrap();
+        let old_worker = dependent.engine().unwrap();
+        assert_eq!(old_worker.runtimes.paths["tool"], original.executable());
+        assert!(
+            registry
+                .remove("provider")
+                .unwrap_err()
+                .to_string()
+                .contains("consumer")
+        );
+        provider["version"] = json!("2.0.0");
+        assert!(install(&provider).is_err());
+        assert_eq!(
+            registry.get("provider").unwrap().unwrap().directory,
+            original.directory
+        );
+        provider["version"] = json!("1.1.0");
+        let new_provider = install(&provider).unwrap();
+        assert_ne!(new_provider.directory, original.directory);
+        assert_eq!(
+            dependent.engine().unwrap().runtimes.paths["tool"],
+            new_provider.executable()
+        );
+        assert!(old_worker.runtimes.paths["tool"].is_file());
+        let mut cycle = provider.clone();
+        cycle["schema"] = json!(2);
+        cycle["runtime_dependencies"] = json!([
+            {"name":"other","plugin":"consumer","version":"*","path":engine}
+        ]);
+        assert!(install(&cycle).unwrap_err().to_string().contains("cycle"));
+        for (key, value) in [
+            ("path", json!("../elsewhere")),
+            ("path", json!("missing.exe")),
+            ("plugin", json!("consumer")),
+        ] {
+            let mut bad = consumer.clone();
+            bad["runtime_dependencies"][0][key] = value;
+            assert!(install(&bad).is_err());
+        }
+        consumer["schema"] = json!(1);
+        assert!(install(&consumer).is_err());
+        registry.remove("consumer").unwrap();
+        assert!(registry.remove("provider").is_err());
+        drop(old_worker);
+        registry.remove("provider").unwrap();
     }
 
     #[test]

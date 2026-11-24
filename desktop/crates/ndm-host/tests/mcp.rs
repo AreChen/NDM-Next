@@ -196,15 +196,15 @@ fn task_pages_filter_state_and_continue_without_repeating_ids() {
     let profile = tempfile::tempdir().unwrap();
     let store = Store::open(&profile.path().join("tasks.db")).unwrap();
     store.set_ai_enabled(true).unwrap();
-    let create = |name: &str| {
+    let create = |path: &str, name: Option<&str>| {
         let id = TaskId::new_v4();
         store
             .prepare(
                 id,
                 &NewTask {
-                    url: format!("https://example.test/{name}"),
+                    url: format!("https://example.test/{path}"),
                     destination: profile.path().into(),
-                    suggested_filename: Some(name.into()),
+                    suggested_filename: name.map(str::to_owned),
                     source_url: None,
                     expected_size: None,
                     headers: Default::default(),
@@ -213,11 +213,11 @@ fn task_pages_filter_state_and_continue_without_repeating_ids() {
             .unwrap();
         id
     };
-    let first = create("first.zip");
+    let first = create("repo?FilePath=data%2Ffirst.zip", None);
     store.commit(first).unwrap();
-    let second = create("second.zip");
+    let second = create("second.zip", Some("second.zip"));
     store.commit(second).unwrap();
-    create("prepared.zip");
+    create("prepared.zip", Some("prepared.zip"));
     let mut server = Server::start(profile.path());
     server.call("initialize", json!({"protocolVersion":"2025-11-25"}));
     let page = server.call(
@@ -233,6 +233,7 @@ fn task_pages_filter_state_and_continue_without_repeating_ids() {
         "name":"ndm_list_tasks","arguments":{"state":"queued","limit":1,"cursor":page["next_cursor"]}
     }));
     assert_eq!(next["structuredContent"]["tasks"][0]["id"], json!(first));
+    assert_eq!(next["structuredContent"]["tasks"][0]["name"], "first.zip");
     assert!(next["structuredContent"]["next_cursor"].is_null());
 }
 

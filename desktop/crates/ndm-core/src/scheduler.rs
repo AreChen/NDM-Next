@@ -21,7 +21,7 @@ use crate::{
     DashOptions, DownloadLimits, DownloadProgress, Error, FtpOptions, HlsOptions, HttpOptions,
     ProgressPhase, ProgressSnapshot, ProxyMode, ProxyOptions, Result, SftpOptions, SpeedMeter,
     Store, Task, TaskActivity, TaskCommand, TaskId, TaskOptions, TaskState, execute_dash,
-    execute_ftp, execute_hls, execute_http, execute_sftp,
+    execute_ftp, execute_hls, execute_sftp,
 };
 
 #[derive(Clone, Debug)]
@@ -893,12 +893,15 @@ async fn execute_one(inner: &Arc<Inner>, task: &Task, active: &Active) -> Result
             if let Some(threads) = task.policy.download_threads {
                 options.max_connections = threads as usize;
             }
-            execute_http(
+            crate::http::execute_http_with_title(
                 &inner.store,
                 task.id,
                 &options,
                 active.cancel.clone(),
                 active.progress.clone(),
+                || {
+                    let _ = inner.events.send(SchedulerEvent::TaskTitleChanged(task.id));
+                },
             )
             .await
             .map(|_| ())

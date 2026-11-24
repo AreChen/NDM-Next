@@ -33,7 +33,7 @@ pub(crate) fn display_name(task: &Task) -> Option<String> {
             {
                 url.host_str().map(str::to_owned)
             } else {
-                url_filename(&url)
+                ndm_core::http_filename_hint(&url).or_else(|| url_filename(&url))
             }
         })
 }

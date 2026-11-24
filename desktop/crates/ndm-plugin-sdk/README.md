@@ -51,7 +51,8 @@ An engine can include sibling tools and other resources. A market archive
 targets one OS and architecture and carries a SHA-256 checksum. The ZIP and
 manifest are both checked before installation.
 
-- `schema` and `engine_protocol` are both `1`. Set a stable lowercase
+- Use manifest `schema` 1 for standalone packages or 2 for shared runtime dependencies.
+  Both use `engine_protocol` 1. Set a stable lowercase
   `id`, a semantic `version`, a relative `engine` path, and localized
   `name` and `description` objects. Use `en` and optionally `zh`.
 - `inputs` is a list of automatic matchers. Each matcher has `schemes`
@@ -94,6 +95,34 @@ manifest are both checked before installation.
 - `tools` can expose named MCP download actions. Each has a stable `id`,
   localized `name` and `description`, and optional preset `defaults` for
   the options. NDM registers them while AI integration is enabled.
+
+### Reusing an installed executable
+
+A plugin can use the yt-dlp binary already installed by Media Downloader.
+In the consumer's platform-specific `plugin.json`, add these fields alongside
+its own engine, inputs and options.
+
+```json
+{
+  "schema": 2,
+  "runtime_dependencies": [
+    {"name": "yt-dlp", "plugin": "yt-dlp", "version": "^0.2.1", "path": "runtime/yt-dlp"}
+  ]
+}
+```
+
+Use `runtime/yt-dlp.exe` in the Windows package. The version requirement matches
+the provider **plugin** version. Each dependency names one regular executable
+inside an installed provider. The provider may use schema 1. The consumer can
+ship its own site handling and post-processing code and omit the shared binary
+from its ZIP. Declare `runtime/deno` separately if the engine needs Deno.
+
+Rust workers get the absolute path with `ndm_plugin_sdk::runtime_path("yt-dlp")`.
+Other workers read the JSON map in `NDM_PLUGIN_RUNTIMES`. Launch the tool with
+an argument array and keep outputs in the task workspace. Treat the provider
+directory as read-only. Missing dependencies are reported at installation.
+New workers pick up compatible provider updates, while running workers retain
+their revision. Remove consumers before uninstalling their provider.
 
 ## Languages and marketplace listings
 

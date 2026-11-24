@@ -197,7 +197,10 @@ impl Desktop {
                             let registry = registry.clone();
                             tokio::task::spawn_blocking(move || registry.import_with_progress(&path, report)).await.map_err(std::io::Error::other)??;
                         }
-                        PackageAction::Remove(id) => scheduler.uninstall_plugin(&id).map_err(std::io::Error::other)?,
+                        PackageAction::Remove(id) => scheduler.uninstall_plugin(&id).map_err(|error| match error {
+                            ndm_core::Error::Io(io) => io,
+                            other => std::io::Error::other(other),
+                        })?,
                         PackageAction::AiAccess { id, enabled } => registry.set_ai_access(&id, enabled)?,
                     }
                     Ok::<_, std::io::Error>(())
@@ -227,10 +230,16 @@ impl Desktop {
                             )
                         }.into(), cx);
                     }
-                    _ => this.set_notice(this.text(
-                        "无法完成插件操作。请检查安装包，或暂停下载、清除排队任务并停止做种后重试。",
-                        "Could not change the plugin. Check the package or pause its downloads, clear queued tasks, and stop seeding.",
-                    ).into(), cx),
+                    failure => {
+                        let issue = failure.as_ref().ok().and_then(|r| r.as_ref().err())
+                            .and_then(|e| e.get_ref()?.downcast_ref::<ndm_core::plugins::RuntimeDependencyError>());
+                        let message = issue.map(|issue| issue.localized(this.preferences.language == Language::Chinese))
+                            .unwrap_or_else(|| this.text(
+                                "无法完成插件操作。请检查安装包，或暂停下载、清除排队任务并停止做种后重试。",
+                                "Could not change the plugin. Check the package or pause its downloads, clear queued tasks, and stop seeding.",
+                            ).into());
+                        this.set_notice(message, cx);
+                    }
                 }
                 cx.notify();
             });

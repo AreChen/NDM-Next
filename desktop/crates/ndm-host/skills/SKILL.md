@@ -55,6 +55,9 @@ This `ndm_download` request queues a direct file.
   `progress.http` for the Range probe status and redirect count. A null field
   means the detail is unavailable. Use `progress.activity` and its sample time
   to describe slow downloads, and compare samples before calling a task stalled.
+- For a single-connection HTTP task, read `progress.http.range_mode` before
+  changing thread settings. It distinguishes a task limit, server rate limiting,
+  an ignored or rejected Range request, and a missing file validator.
 - Use `ndm_list_tasks` when you need to find a task or look at recent activity.
   Filter by `state` when appropriate. Pass `next_cursor` back as `cursor` with
   the same filter to read the next page. A null cursor means the list ended.

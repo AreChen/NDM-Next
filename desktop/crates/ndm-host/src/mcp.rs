@@ -558,7 +558,14 @@ fn task_json(task: &Task) -> Value {
         .and_then(std::path::Path::file_name)
         .map(|name| name.to_string_lossy())
         .or_else(|| task.engine_title.as_deref().map(Into::into))
-        .or_else(|| task.request.suggested_filename.as_deref().map(Into::into));
+        .or_else(|| task.request.suggested_filename.as_deref().map(Into::into))
+        .or_else(|| {
+            if matches!(task.options, TaskOptions::Plugin(_)) {
+                return None;
+            }
+            ndm_core::http_filename_hint(&reqwest::Url::parse(&task.request.url).ok()?)
+                .map(Into::into)
+        });
     let http = task.progress.as_ref().and_then(|progress| progress.http);
     let error = (task.state == TaskState::Failed).then(|| {
         let code = http.and_then(|details| details.failure).unwrap_or_else(|| {
