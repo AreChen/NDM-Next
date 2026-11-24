@@ -90,6 +90,8 @@ fn plugin_package(profile: &Path, version: &str, guide: Option<&str>) -> io::Res
             "schema":1,"id":"fixture","version":version,"name":{"en":"Fixture"},
             "description":{"en":"Test engine"},"engine":engine,"engine_protocol":1,
             "inputs":[{"schemes":["fixture"]}],"limits":{"active_tasks":1},
+            "manual_inputs":[{"schemes":["https"],"hosts":["fixture.test"],"suffixes":[".demo"],"exclude_suffixes":[".ignore.demo"]}],
+            "options":[{"key":"label","label":{"en":"Output label"},"kind":"text","max_length":80}],
             "skill": guide.map(|_| "docs/guide.md"),
             "tools":[{"id":"download","name":{"en":"Fixture download"},"description":{"en":"Fixture"} }]
         }),
@@ -408,7 +410,13 @@ fn managed_skill_refreshes_legacy_installs_and_plugin_guides() {
     )
     .unwrap();
 
-    registry.import(&fixture(&target.profile).unwrap()).unwrap();
+    let engine = registry.import(&fixture(&target.profile).unwrap()).unwrap();
+    registry
+        .save_option_defaults(
+            &engine,
+            serde_json::from_value(json!({"label":"private-user-setting"})).unwrap(),
+        )
+        .unwrap();
     Harness::ClaudeCode.install(&target).unwrap();
     Harness::OpenCode.install(&target).unwrap();
     Harness::DeepSeek.install(&target).unwrap();
@@ -420,11 +428,37 @@ fn managed_skill_refreshes_legacy_installs_and_plugin_guides() {
             .unwrap()
             .contains("ndm_list_engines")
     );
+    let generated = fs::read_to_string(&guide).unwrap();
+    for term in [
+        "ndm_fixture__download",
+        "Automatic sources",
+        "Explicit selection",
+        "fixture.test",
+        ".ignore.demo",
+        "`label`",
+        "80 characters",
+    ] {
+        assert!(generated.contains(term), "missing {term}");
+    }
+    assert!(!generated.contains("private-user-setting"));
+    let sdk = root.join("references/sdk");
+    let example = sdk.join("examples/file-copy.json");
+    assert!(sdk.join("quickstart.md").is_file() && example.is_file());
+    fs::remove_file(&example).unwrap();
+    assert!(!Harness::Codex.status(&target).unwrap().skill_installed);
+    fs::write(
+        sdk.join("README.md"),
+        "<!-- Managed by the NDM Next desktop integration. -->\nOlder SDK\n",
+    )
+    .unwrap();
+    sync_skills(&target).unwrap();
+    assert!(Harness::Codex.status(&target).unwrap().skill_installed);
     assert!(
-        fs::read_to_string(&guide)
+        fs::read_to_string(sdk.join("README.md"))
             .unwrap()
-            .contains("ndm_fixture__download")
+            .contains("runtime_dependencies")
     );
+    assert!(example.is_file());
 
     let update = plugin_package(&target.profile, "0.2.0", Some("Engine usage example")).unwrap();
     registry.import(&update).unwrap();
@@ -448,6 +482,7 @@ fn managed_skill_refreshes_legacy_installs_and_plugin_guides() {
     registry.set_ai_access("fixture", false).unwrap();
     sync_skills(&target).unwrap();
     assert!(!guide.exists());
+    assert!(sdk.join("quickstart.md").is_file());
     assert!(guides.join("plugin-local.md").exists());
     registry.set_ai_access("fixture", true).unwrap();
     sync_skills(&target).unwrap();
@@ -455,6 +490,7 @@ fn managed_skill_refreshes_legacy_installs_and_plugin_guides() {
     store.set_ai_enabled(false).unwrap();
     sync_skills(&target).unwrap();
     assert!(!guide.exists());
+    assert!(sdk.join("README.md").is_file() && example.is_file());
     assert!(
         fs::read_to_string(guides.join("index.md"))
             .unwrap()

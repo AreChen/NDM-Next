@@ -178,7 +178,7 @@ Start with [examples/file-copy.rs](examples/file-copy.rs) and
 [examples/file-copy.json](examples/file-copy.json). Build the example and
 package the matching platform executable and manifest at the ZIP root.
 Use the `.exe` suffix in the manifest on Windows. In NDM Next, choose
-**Plugin market → Import plugin**, then add a local `.ndm-example` file.
+**Plugin market → Import plugin**, then add a local `.ndmexample` file.
 
 From the `desktop` directory:
 

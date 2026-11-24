@@ -23,6 +23,51 @@ fn write(path: &Path, content: &str) {
     fs::write(path, content).unwrap();
 }
 
+fn check_skill_bundle(root: &Path) {
+    for guide in [
+        "SKILL.md",
+        "references/downloads.md",
+        "references/diagnostics.md",
+        "references/plugins/index.md",
+        "references/sdk/quickstart.md",
+        "references/sdk/README.md",
+    ] {
+        let path = root.join(guide);
+        let text = fs::read_to_string(&path).unwrap();
+        for link in text.split("](").skip(1) {
+            let (link, _) = link.split_once(')').expect("closed Markdown link");
+            let relative = link.split('#').next().unwrap();
+            if !relative.is_empty() && !relative.starts_with("https://") {
+                assert!(
+                    path.parent().unwrap().join(relative).is_file(),
+                    "{guide} links to missing {link}"
+                );
+            }
+        }
+    }
+    let sdk = root.join("references/sdk");
+    assert!(
+        fs::read_to_string(sdk.join("README.md"))
+            .unwrap()
+            .ends_with(include_str!("../../ndm-plugin-sdk/README.md"))
+    );
+    assert!(
+        fs::read_to_string(sdk.join("examples/file-copy.rs"))
+            .unwrap()
+            .ends_with(include_str!("../../ndm-plugin-sdk/examples/file-copy.rs"))
+    );
+    let bytes = fs::read(sdk.join("examples/file-copy.json")).unwrap();
+    let manifest: ndm_plugin_sdk::PluginManifest = serde_json::from_slice(&bytes).unwrap();
+    manifest.validate().unwrap();
+    let mut example: Value = serde_json::from_slice(&bytes).unwrap();
+    example.as_object_mut().unwrap().remove("$comment");
+    assert_eq!(
+        example,
+        serde_json::from_str::<Value>(include_str!("../../ndm-plugin-sdk/examples/file-copy.json"))
+            .unwrap()
+    );
+}
+
 #[test]
 fn all_clients_register_and_remove_their_own_mcp_and_skill_without_a_cli() {
     let root = tempfile::tempdir().unwrap();
@@ -62,9 +107,10 @@ fn all_clients_register_and_remove_their_own_mcp_and_skill_without_a_cli() {
         client.install(&target).unwrap();
         client.install(&target).unwrap();
         assert!(client.status(&target).unwrap().installed());
-        let skill = target.home.join(skill_root).join("ndm-next/SKILL.md");
+        let root = target.home.join(skill_root).join("ndm-next");
+        check_skill_bundle(&root);
         assert!(
-            fs::read_to_string(skill)
+            fs::read_to_string(root.join("SKILL.md"))
                 .unwrap()
                 .contains("ndm_task_status")
         );
@@ -98,13 +144,7 @@ fn all_clients_register_and_remove_their_own_mcp_and_skill_without_a_cli() {
         client.remove(&target).unwrap();
         client.remove(&target).unwrap();
         assert_eq!(client.status(&target).unwrap(), Status::default());
-        assert!(
-            !target
-                .home
-                .join(skill_root)
-                .join("ndm-next/SKILL.md")
-                .exists()
-        );
+        assert!(!target.home.join(skill_root).join("ndm-next").exists());
     }
     assert!(
         fs::read_to_string(codex_file)
@@ -227,6 +267,65 @@ fn failed_skill_install_restores_the_original_client_config() {
     assert!(Harness::Codex.install(&target).is_err());
     assert_eq!(fs::read_to_string(&codex).unwrap(), original);
     assert_eq!(Harness::Codex.status(&target).unwrap(), Status::default());
+}
+
+#[test]
+fn installing_or_removing_the_sdk_preserves_user_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let target = target(temp.path());
+    let config = target.home.join(".codex/config.toml");
+    let original = "# Existing config\nmodel = \"example\"\n";
+    write(&config, original);
+    let root = target.home.join(".agents/skills/ndm-next");
+    let sdk = root.join("references/sdk");
+    let readme = sdk.join("README.md");
+    write(&readme, "User reference");
+    assert_eq!(
+        Harness::Codex.install(&target).unwrap_err().kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    assert_eq!(fs::read_to_string(&readme).unwrap(), "User reference");
+    assert_eq!(fs::read_to_string(&config).unwrap(), original);
+    assert!(!root.join("SKILL.md").exists());
+    fs::remove_file(&readme).unwrap();
+    Harness::Codex.install(&target).unwrap();
+    let manifest = sdk.join("examples/file-copy.json");
+    write(&manifest, r#"{"id":"user-example"}"#);
+    write(&sdk.join("notes.md"), "User notes");
+    Harness::Codex.remove(&target).unwrap();
+    assert_eq!(
+        fs::read_to_string(&manifest).unwrap(),
+        r#"{"id":"user-example"}"#
+    );
+    assert_eq!(
+        fs::read_to_string(sdk.join("notes.md")).unwrap(),
+        "User notes"
+    );
+    assert!(!readme.exists() && !root.join("SKILL.md").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_inside_the_sdk_is_never_followed() {
+    use std::os::unix::fs::symlink;
+    let temp = tempfile::tempdir().unwrap();
+    let target = target(temp.path());
+    Harness::Codex.install(&target).unwrap();
+    let examples = target
+        .home
+        .join(".agents/skills/ndm-next/references/sdk/examples");
+    let outside = temp.path().join("original-examples");
+    fs::rename(&examples, &outside).unwrap();
+    symlink(&outside, &examples).unwrap();
+    assert_eq!(
+        ndm_host::harness::sync_skills(&target).unwrap_err().kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    assert_eq!(
+        Harness::Codex.remove(&target).unwrap_err().kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    assert!(outside.join("file-copy.rs").is_file());
 }
 
 #[test]

@@ -64,9 +64,17 @@ market's **AI on** control lets you disable AI use for one engine.
 The engine stays available for regular desktop and browser downloads.
 
 Use `ndm_list_engines` with a source to see compatible engines, the automatic
-selection and current option schemas. The main Skill links to plugin guides
-under `references/plugins/` for source-specific usage. For task history,
+selection and current option schemas. The installed Skill includes download
+recipes and a guide to interpreting task status. Each AI-enabled plugin has a
+guide under `references/plugins/` with matching rules, options, MCP tools and
+any usage notes supplied by its author. For task history,
 `ndm_list_tasks` supports a state filter and a cursor for older results.
+
+For plugin development, open `references/sdk/quickstart.md` inside the installed
+Skill. The full SDK reference, a Rust worker and its matching JSON manifest are
+available offline alongside it. The quickstart covers building, packaging,
+importing and testing a plugin, sharing another plugin's tools and shipping a
+usage guide with your package.
 
 AI clients can queue downloads in the default folder or an explicit absolute
 directory, check status, pause, and resume. A batch can specify its own
@@ -156,8 +164,13 @@ DeepSeek Harness 通过自带的 stdio MCP 客户端连接 NDM Next。用户级 
 AI 接入。桌面和浏览器仍可使用该引擎下载。
 
 将来源传给 `ndm_list_engines` 可查看兼容引擎、自动选择和当前参数。
-主 Skill 会链接到 `references/plugins/` 中各个引擎的使用指南。
+主 Skill 附有下载示例和任务诊断指南，并链接到 `references/plugins/` 中对 AI
+开放的各个插件。每份插件指南列出来源匹配规则、选项、MCP 工具和作者提供的使用说明。
 `ndm_list_tasks` 可按状态筛选，并通过分页游标继续查询更早的任务。
+
+开发插件时，打开已安装 Skill 中的 `references/sdk/quickstart.md`。同目录包含可离线阅读的
+完整 SDK 协议、Rust worker 示例和配套 JSON 清单。按指南可以构建、打包、导入、测试插件，
+复用其他插件的工具，并将插件自己的使用指南随包交付。
 
 AI 客户端可发起下载、查询状态、暂停与恢复。省略保存位置时使用 NDM
 默认下载目录，也可传入绝对路径。单批任务可以设置并发任务数和每项

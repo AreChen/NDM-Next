@@ -205,7 +205,7 @@ impl Harness {
         let _lock = integration_lock(target)?;
         let (mut config, mcp) = self.configuration(target)?;
         let skill_path = self.skill_path(target);
-        let skill_installed = skill::is_installed(&skill_path)?;
+        let managed_skill = skill::is_managed(&skill_path)?;
         let updated = match (install, mcp) {
             (true, McpStatus::Missing | McpStatus::NeedsRepair) => {
                 config.register(target, self)?;
@@ -219,7 +219,7 @@ impl Harness {
         };
         let result = if install {
             skill::write(&skill_path, &target.profile)
-        } else if skill_installed {
+        } else if managed_skill {
             skill::remove(&skill_path)
         } else {
             Ok(())
@@ -264,7 +264,7 @@ pub fn sync_skills(target: &Target) -> io::Result<()> {
     let mut result = Ok(());
     for client in Harness::ALL {
         let path = client.skill_path(target);
-        let update = match skill::is_installed(&path) {
+        let update = match skill::is_managed(&path) {
             Ok(true) => skill::write(&path, &target.profile),
             Ok(false) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(()),

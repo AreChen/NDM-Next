@@ -3,12 +3,12 @@
   "id": "file-copy",
   "version": "0.1.0",
   "name": {"en": "File copy example", "zh": "文件复制示例"},
-  "description": {"en": "Copy a local .ndm-example file into the download folder.", "zh": "将本地 .ndm-example 文件复制到下载目录。"},
+  "description": {"en": "Copy a local .ndmexample file into the download folder.", "zh": "将本地 .ndmexample 文件复制到下载目录。"},
   "engine": "file-copy",
   "engine_protocol": 1,
-  "inputs": [{"schemes": ["file"], "suffixes": [".ndm-example"]}],
+  "inputs": [{"schemes": ["file"], "suffixes": [".ndmexample"]}],
   "limits": {"active_tasks": 2},
   "tools": [
-    {"id": "copy", "name": {"en": "Copy file", "zh": "复制文件"}, "description": {"en": "Copy a local .ndm-example file through NDM Next.", "zh": "通过 NDM Next 复制本地 .ndm-example 文件。"}}
+    {"id": "copy", "name": {"en": "Copy file", "zh": "复制文件"}, "description": {"en": "Copy a local .ndmexample file through NDM Next.", "zh": "通过 NDM Next 复制本地 .ndmexample 文件。"}}
   ]
 }
