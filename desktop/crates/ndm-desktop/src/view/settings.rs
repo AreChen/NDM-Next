@@ -2,8 +2,11 @@ use super::*;
 use crate::motion::{SegmentedControl, Switch};
 use gpui_motion_kit::{
     Frame, MotionState,
-    core::{Motion, Target},
+    core::{Easing, Motion, Target, Transition},
 };
+
+const PROXY_GROUP: usize = 2;
+const STORAGE_GROUP: usize = 6;
 
 const CHROME_EXTENSION_URL: &str =
     "https://chromewebstore.google.com/detail/ndm-next/caegebfdojcdlkkiaiokeoadefdooamd";
@@ -32,7 +35,7 @@ impl Desktop {
     ) {
         if !toggle_group(&mut self.settings_open, index) {
             self.page_focus.focus(window, cx);
-        } else if index == 6 {
+        } else if index == STORAGE_GROUP {
             self.maintain_storage(false, false, cx);
         } else if index == plugins::AI_CLIENTS_GROUP {
             self.refresh_ai_client_status(cx);
@@ -571,12 +574,12 @@ impl Desktop {
                     .small()
                     .label(self.display_text(self.text("管理", "Manage")))
                     .on_click(cx.listener(|this, _, window, cx| {
-                        this.toggle_settings_group(6, window, cx);
+                        this.toggle_settings_group(STORAGE_GROUP, window, cx);
                     })),
             );
         let storage = self.settings_group(
             (
-                6,
+                STORAGE_GROUP,
                 IconName::Folder,
                 self.text("存储与缓存", "Storage and cache"),
                 self.text(
@@ -586,7 +589,7 @@ impl Desktop {
             ),
             storage_quick,
             Some(self.storage_settings(dark, cx)),
-            frames[6],
+            frames[STORAGE_GROUP],
             cx,
         );
         let proxy_quick = div()
@@ -611,12 +614,12 @@ impl Desktop {
                     .small()
                     .label(self.display_text(self.text("配置", "Configure")))
                     .on_click(cx.listener(|this, _, window, cx| {
-                        this.toggle_settings_group(2, window, cx);
+                        this.toggle_settings_group(PROXY_GROUP, window, cx);
                     })),
             );
         let proxy = self.settings_group(
             (
-                2,
+                PROXY_GROUP,
                 IconName::Globe,
                 self.text("代理与网络", "Proxy and network"),
                 self.text(
@@ -626,10 +629,10 @@ impl Desktop {
             ),
             proxy_quick,
             Some(proxy.into_any_element()),
-            frames[2],
+            frames[PROXY_GROUP],
             cx,
         );
-        let mut cards = vec![appearance, downloads, storage, proxy];
+        let mut utilities = Vec::new();
         #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         {
             let startup = Switch::new("startup-toggle")
@@ -637,7 +640,7 @@ impl Desktop {
                 .label(self.display_text(self.text("开机自启", "Start on sign-in")))
                 .checked(self.startup_enabled)
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_startup(cx)));
-            cards.push(self.settings_group(
+            utilities.push(self.settings_group(
                 (
                     3,
                     IconName::Settings2,
@@ -657,7 +660,7 @@ impl Desktop {
                 cx,
             ));
         }
-        cards.push(self.settings_group(
+        utilities.push(self.settings_group(
             (
                 4,
                 IconName::Globe,
@@ -674,7 +677,7 @@ impl Desktop {
         ));
         let wide =
             two_columns(window.viewport_size().width.as_f32() - self.sidebar.display_width() - 32.);
-        let mut panel =
+        let panel =
             div()
                 .w_full()
                 .flex_shrink_0()
@@ -714,18 +717,12 @@ impl Desktop {
                                 )),
                         ),
                 );
-        panel = panel.child(self.ai_panel(frames[plugins::AI_CLIENTS_GROUP], cx));
-        let mut cards = cards.into_iter();
-        let mut row_index = 0;
-        while let Some(first) = cards.next() {
-            let second = if wide { cards.next() } else { None };
-            // Expanded path/authentication forms get the entire row, rather
-            // than squeezing inputs and localized controls into half a card.
-            let stack = row_index == 1 && (frames[6].is_mounted() || frames[2].is_mounted());
-            panel = panel.child(settings_row(first, second, stack));
-            row_index += 1;
-        }
-        panel.child(about)
+        panel
+            .child(self.ai_panel(frames[plugins::AI_CLIENTS_GROUP], cx))
+            .child(settings_row([appearance, downloads], !wide))
+            .child(form_rows(storage, proxy))
+            .child(settings_row(utilities, !wide))
+            .child(about)
     }
 }
 
@@ -748,7 +745,10 @@ fn disclosure_frame(index: usize, open: bool, window: &mut Window, cx: &mut App)
                 .initial(Target::default().opacity(0.))
                 .exit(Target::default().opacity(0.))
                 .present(open)
-                .transition(crate::motion::tween(220)),
+                .transition(Transition::Tween(
+                    std::time::Duration::from_millis(220),
+                    Easing::EaseInOut,
+                )),
             window,
             cx,
         )
@@ -815,16 +815,20 @@ fn two_columns(available: f32) -> bool {
     available >= 760.
 }
 
-fn settings_row(first: AnyElement, second: Option<AnyElement>, stack: bool) -> Div {
+fn settings_row(cards: impl IntoIterator<Item = AnyElement>, stack: bool) -> Div {
     div()
         .w_full()
         .flex_shrink_0()
         .flex()
-        .items_stretch()
+        .items_start()
         .gap_3()
-        .when(stack, |row| row.flex_col())
-        .child(first)
-        .children(second)
+        .when(stack, |row| row.flex_col().items_stretch())
+        .children(cards)
+}
+
+// Keep the form controls in the same rows throughout both reveal directions.
+fn form_rows(storage: AnyElement, proxy: AnyElement) -> Div {
+    settings_row([storage, proxy], true)
 }
 
 fn settings_card(
@@ -835,6 +839,35 @@ fn settings_card(
     tone: impl Into<crate::motion::ThemeTone>,
 ) -> Stateful<Div> {
     let tone = tone.into();
+    if matches!(index, PROXY_GROUP | STORAGE_GROUP) {
+        let summary = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap_3()
+            .child(
+                div()
+                    .flex_basis(px(240.))
+                    .flex_grow(1.)
+                    .min_w_0()
+                    .child(header),
+            )
+            .child(
+                div()
+                    .flex_basis(px(320.))
+                    .flex_grow(1.)
+                    .min_w_0()
+                    .child(quick),
+            );
+        return card_surface(index, tone)
+            .w_full()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .p_3()
+            .child(summary)
+            .children(detail);
+    }
     card_surface(index, tone)
         .p_3()
         .flex()
@@ -876,7 +909,7 @@ pub(super) fn card_surface(
 
 #[cfg(test)]
 mod tests {
-    use super::{settings_card, settings_row, theme_switch, two_columns};
+    use super::{settings_card, theme_switch};
     use crate::preferences::Theme;
     use gpui::component::{
         Sizable,
@@ -1131,8 +1164,9 @@ mod tests {
 
     impl Render for Cards {
         fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let frame = super::disclosure_frame(6, self.open, window, cx);
             let first = settings_card(
-                0,
+                6,
                 div()
                     .flex()
                     .items_center()
@@ -1163,13 +1197,17 @@ mod tests {
                             .debug_selector(|| "choose".into())
                             .label(if self.zh { "选择" } else { "Choose folder" }),
                     ),
-                self.open
-                    .then(|| div().h(px(100.)).child("Cache settings").into_any_element()),
+                Some(super::settings_detail(
+                    6,
+                    frame,
+                    self.open,
+                    div().h(px(100.)).child("Cache settings").into_any_element(),
+                )),
                 self.dark,
             )
             .into_any_element();
             let second = settings_card(
-                1,
+                2,
                 div().child(if self.zh {
                     "代理与网络"
                 } else {
@@ -1188,16 +1226,12 @@ mod tests {
                 .p_4()
                 .flex()
                 .flex_col()
-                .child(settings_row(
-                    first,
-                    Some(second),
-                    self.open || !two_columns(window.viewport_size().width.as_f32() - 32.),
-                ))
+                .child(super::form_rows(first, second))
         }
     }
 
     #[gpui::test]
-    fn settings_cards_fit_localized_controls_and_reflow_without_losing_input(
+    fn form_cards_keep_their_columns_and_move_the_next_row_with_the_reveal(
         cx: &mut gpui::TestAppContext,
     ) {
         cx.update(gpui::init);
@@ -1221,14 +1255,11 @@ mod tests {
                     });
                     for open in [false, true] {
                         cx.update(|window, cx| window.draw(cx).clear(cx));
-                        let first = cx.debug_bounds("settings-card-0").unwrap();
-                        let second = cx.debug_bounds("settings-card-1").unwrap();
-                        if open || !two_columns(width - 32.) {
-                            assert!(second.origin.y >= first.bottom() + px(12.));
-                        } else {
-                            assert_eq!(first.origin.y, second.origin.y);
-                            assert!(second.origin.x >= first.right() + px(12.));
-                        }
+                        let first = cx.debug_bounds("settings-card-6").unwrap();
+                        let second = cx.debug_bounds("settings-card-2").unwrap();
+                        assert_eq!(first.left(), second.left());
+                        assert_eq!(first.size.width, second.size.width);
+                        assert_eq!(second.top(), first.bottom() + px(12.));
                         for (id, card) in
                             [("choose", first), ("expand", first), ("configure", second)]
                         {
@@ -1238,7 +1269,34 @@ mod tests {
                             assert!(button.bottom() <= card.bottom() - px(12.), "{id}");
                         }
                         let toggle = cx.debug_bounds("expand").unwrap();
+                        let quick = cx.debug_bounds("choose").unwrap();
+                        if width == 548. {
+                            assert!(quick.top() >= toggle.bottom());
+                        } else {
+                            assert!(quick.top() < toggle.bottom() && toggle.top() < quick.bottom());
+                        }
                         cx.simulate_click(toggle.center(), Modifiers::default());
+                        cx.update(|window, cx| window.draw(cx).clear(cx));
+                        assert_eq!(
+                            cx.debug_bounds("settings-card-2").unwrap().origin,
+                            second.origin
+                        );
+                        cx.background_executor
+                            .advance_clock(std::time::Duration::from_millis(100));
+                        cx.update(|window, cx| window.draw(cx).clear(cx));
+                        let middle = cx.debug_bounds("settings-card-2").unwrap();
+                        cx.background_executor
+                            .advance_clock(std::time::Duration::from_millis(150));
+                        cx.update(|window, cx| window.draw(cx).clear(cx));
+                        let end = cx.debug_bounds("settings-card-2").unwrap();
+                        assert_eq!(end.size, second.size);
+                        assert_eq!(middle.left(), second.left());
+                        assert_eq!(end.left(), second.left());
+                        if open {
+                            assert!(end.top() < middle.top() && middle.top() < second.top());
+                        } else {
+                            assert!(second.top() < middle.top() && middle.top() < end.top());
+                        }
                         cx.update(|_, cx| assert_eq!(view.read(cx).open, !open));
                     }
                     cx.update(|_, cx| {

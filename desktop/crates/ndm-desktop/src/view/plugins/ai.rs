@@ -162,6 +162,7 @@ impl Desktop {
         let open = self.settings_open.contains(&AI_CLIENTS_GROUP);
         let view = cx.entity().downgrade();
         settings::card_surface(AI_CLIENTS_GROUP, tone)
+            .flex_none()
             .flex()
             .flex_col()
             .p_3()
