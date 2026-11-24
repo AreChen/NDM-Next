@@ -24,6 +24,7 @@ pub mod plugins;
 mod scheduler;
 mod secrets;
 mod sftp;
+mod speed;
 mod store;
 mod task_progress;
 
@@ -41,8 +42,8 @@ pub use hls::{
     download_hls_with_media_tool, execute_hls, inspect_hls, inspect_hls_with_options,
 };
 pub use http::{
-    DownloadProgress, HttpOptions, ProgressPhase, ProgressSnapshot, ProxyOptions, SegmentSnapshot,
-    download_http, download_http_with_client, execute_http,
+    CHROME_USER_AGENT, DownloadProgress, HttpOptions, ProgressPhase, ProgressSnapshot,
+    ProxyOptions, SegmentSnapshot, download_http, download_http_with_client, execute_http,
 };
 #[cfg(windows)]
 pub use installation::shutdown_desktop_installation;
@@ -63,6 +64,7 @@ pub use model::{
 pub use ndm_plugin_sdk::PeerStats;
 pub use scheduler::{Scheduler, SchedulerEvent, SchedulerOptions, SharingStatus};
 pub use sftp::{SftpAuth, SftpOptions, download_sftp, execute_sftp};
+pub use speed::SpeedMeter;
 pub use store::{PendingSftpHost, Store, TaskCommand};
 pub use task_progress::recover_task_progress;
 

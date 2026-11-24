@@ -2,6 +2,7 @@
 use std::{env, fs, io, path::PathBuf};
 
 mod config;
+mod deepseek;
 mod skill;
 
 const SERVER: &str = "ndm-next";
@@ -14,6 +15,7 @@ struct Locations {
     pi: Option<PathBuf>,
     opencode: Option<PathBuf>,
     opencode_file: Option<PathBuf>,
+    deepseek: Option<PathBuf>,
 }
 
 pub struct Target {
@@ -44,6 +46,7 @@ impl Target {
             opencode: environment_path("OPENCODE_CONFIG_DIR")
                 .or_else(|| environment_path("XDG_CONFIG_HOME").map(|root| root.join("opencode"))),
             opencode_file: environment_path("OPENCODE_CONFIG"),
+            deepseek: environment_path("DSH_HOME"),
         };
         Ok(target)
     }
@@ -74,6 +77,7 @@ pub enum Harness {
     ClaudeCode,
     Pi,
     OpenCode,
+    DeepSeek,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -101,7 +105,13 @@ impl Status {
 }
 
 impl Harness {
-    pub const ALL: [Self; 4] = [Self::Codex, Self::ClaudeCode, Self::Pi, Self::OpenCode];
+    pub const ALL: [Self; 5] = [
+        Self::Codex,
+        Self::ClaudeCode,
+        Self::Pi,
+        Self::OpenCode,
+        Self::DeepSeek,
+    ];
 
     pub const fn name(self) -> &'static str {
         match self {
@@ -109,6 +119,7 @@ impl Harness {
             Self::ClaudeCode => "Claude Code",
             Self::Pi => "Pi",
             Self::OpenCode => "OpenCode",
+            Self::DeepSeek => "DeepSeek Harness",
         }
     }
 
@@ -118,6 +129,7 @@ impl Harness {
             Self::ClaudeCode => (&target.locations.claude, ".claude"),
             Self::Pi => (&target.locations.pi, ".pi/agent"),
             Self::OpenCode => (&target.locations.opencode, ".config/opencode"),
+            Self::DeepSeek => (&target.locations.deepseek, ".dsh"),
         };
         override_path
             .clone()
@@ -139,6 +151,7 @@ impl Harness {
                     .join(".claude.json"),
             ],
             Self::Pi => vec![directory.join("mcp.json")],
+            Self::DeepSeek => vec![directory.join("cordis.patch.yml")],
             Self::OpenCode => {
                 let mut files = vec![
                     directory.join("config.json"),

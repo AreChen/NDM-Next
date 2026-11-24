@@ -12,10 +12,7 @@ const EDGE_EXTENSION_URL: &str =
 const EXTENSION_GUIDE_URL: &str =
     "https://github.com/AreChen/NDM-Next/blob/main/docs/extension-install.md";
 const USER_AGENT_PRESETS: [(&str, &str); 3] = [
-    (
-        "Chrome · Windows",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
-    ),
+    ("Chrome · Windows", ndm_core::CHROME_USER_AGENT),
     (
         "Firefox · Windows",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:145.0) Gecko/20100101 Firefox/145.0",
@@ -290,7 +287,7 @@ impl Desktop {
                 cx.notify();
             }));
         let ua_input = self.user_agent_input.downgrade();
-        let default_label = self.text("默认", "Default");
+        let default_label = self.text("默认（Chrome · Windows）", "Default (Chrome · Windows)");
         let ua_detail = div()
             .flex()
             .flex_col()

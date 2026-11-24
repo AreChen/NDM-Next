@@ -170,11 +170,7 @@ fn known_file(name: &str, media: bool) -> bool {
             | "hls-checkpoint.sqlite-journal"
             | "hls-checkpoint.sqlite-wal"
             | "hls-checkpoint.sqlite-shm"
-    ) || name
-        .strip_prefix("segment-")
-        .and_then(|name| name.strip_suffix(".part"))
-        .and_then(|index| index.parse::<usize>().ok())
-        .is_some_and(|index| index < 16 && name == format!("segment-{index}.part"))
+    ) || crate::http::is_segment_filename(name)
         || crate::dash::owns_partial_name(name)
 }
 

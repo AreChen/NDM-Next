@@ -410,6 +410,7 @@ fn managed_skill_refreshes_legacy_installs_and_plugin_guides() {
     registry.import(&fixture(&target.profile).unwrap()).unwrap();
     Harness::ClaudeCode.install(&target).unwrap();
     Harness::OpenCode.install(&target).unwrap();
+    Harness::DeepSeek.install(&target).unwrap();
     sync_skills(&target).unwrap();
     let guides = root.join("references/plugins");
     let guide = guides.join("plugin-fixture.md");
@@ -429,7 +430,7 @@ fn managed_skill_refreshes_legacy_installs_and_plugin_guides() {
     sync_skills(&target).unwrap();
     let text = fs::read_to_string(&guide).unwrap();
     assert!(text.contains("0.2.0") && text.contains("Engine usage example"));
-    for other in [".claude/skills", ".config/opencode/skills"] {
+    for other in [".claude/skills", ".config/opencode/skills", ".dsh/skills"] {
         assert_eq!(
             fs::read_to_string(
                 target

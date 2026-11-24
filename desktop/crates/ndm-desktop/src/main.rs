@@ -18,7 +18,6 @@ mod protocol_auth;
 mod redownload;
 mod selection;
 mod sidebar;
-mod speed;
 #[cfg(windows)]
 mod startup;
 #[cfg(target_os = "macos")]

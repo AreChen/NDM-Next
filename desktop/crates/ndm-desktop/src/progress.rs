@@ -3,12 +3,12 @@ mod ui;
 use crate::{
     chrome, files,
     preferences::{Language, Preferences},
-    speed::SpeedMeter,
     view::format_bytes,
 };
 use gpui_kit::{component::Theme as ComponentTheme, prelude::*, *};
 use ndm_core::{
-    ProgressPhase, ProgressSnapshot, Scheduler, SchedulerEvent, Store, Task, TaskId, TaskState,
+    ProgressPhase, ProgressSnapshot, Scheduler, SchedulerEvent, SpeedMeter, Store, Task, TaskId,
+    TaskState,
 };
 use std::{
     collections::VecDeque,

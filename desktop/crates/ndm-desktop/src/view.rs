@@ -3,7 +3,6 @@ use crate::{
     preferences::{Language, Preferences, Theme},
     progress::ProgressWindow,
     protocol_auth::{AuthFields, apply as apply_protocol_auth},
-    speed::SpeedMeter,
     updates::{self, InstallWait, UpdateState},
 };
 use gpui_kit::{
@@ -18,7 +17,7 @@ use gpui_kit::{
 };
 use ndm_core::{
     DashCatalog, DashOptions, FtpSecurity, HlsCatalog, HlsOptions, NewTask, ProxyOptions,
-    Scheduler, SchedulerEvent, Store, Task, TaskId, TaskOptions, TaskState,
+    Scheduler, SchedulerEvent, SpeedMeter, Store, Task, TaskId, TaskOptions, TaskState,
     inspect_dash_with_options, inspect_hls_with_options,
 };
 use std::{
@@ -249,6 +248,7 @@ impl Desktop {
         });
         let user_agent_input = cx.new(|cx| {
             InputState::new(window, cx)
+                .placeholder(ndm_core::CHROME_USER_AGENT)
                 .default_value(preferences.user_agent.clone().unwrap_or_default())
         });
         let proxy_url_input = cx.new(|cx| {

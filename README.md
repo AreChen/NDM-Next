@@ -33,7 +33,7 @@ Get your installer from [**GitHub Releases →**](https://github.com/AreChen/NDM
 
 The app checks GitHub for updates. Click **Upgrade** to download a verified package. Windows installs when idle, macOS opens the DMG, and Linux opens the folder containing the archive.
 
-New profiles use 16 download connections and startup at login. Existing saved choices are preserved.
+New profiles allow up to 16 concurrent HTTP ranges per download and start at login. The downloader chooses range sizes using the file size and the time the server took to answer the initial probe. Existing settings are preserved.
 
 ## Screenshots
 
@@ -47,7 +47,7 @@ New profiles use 16 download connections and startup at login. Existing saved ch
 
 Install **BitTorrent** for `.torrent` files and magnet links, or **Media Downloader** for streaming video, audio, and playlists from supported sites. Both engines are available in the [desktop plugin market](assets/readme/plugin-market.webp).
 
-Use AI integration to queue and manage downloads from OpenAI Codex (CLI and desktop), Claude Code, Pi, and OpenCode through MCP and the companion Skill. [Plugin and AI setup guide](docs/plugins-and-ai.md)
+Use AI integration to queue and manage downloads from OpenAI Codex (CLI and desktop), Claude Code, Pi, OpenCode, and DeepSeek Harness through MCP and the companion Skill. [Plugin and AI setup guide](docs/plugins-and-ai.md)
 
 ## Browser extension
 

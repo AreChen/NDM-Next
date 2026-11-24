@@ -127,7 +127,7 @@ impl Render for ProgressWindow {
             .as_ref()
             .map(|snapshot| snapshot.segments.as_slice())
             .unwrap_or(&[]);
-        let connections = segments.iter().filter(|segment| segment.active).count();
+        let active_segments = segments.iter().filter(|segment| segment.active).count();
         let peers = self.snapshot.as_ref().and_then(|snapshot| snapshot.peers);
         let mut details = div().flex().flex_col().gap_2();
         if let Some(task) = &task {
@@ -185,7 +185,11 @@ impl Render for ProgressWindow {
                 .text_xs()
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(muted))
-                .child(self.text("连接详情", "CONNECTIONS")),
+                .child(if peers.is_some() {
+                    self.text("连接详情", "CONNECTIONS")
+                } else {
+                    self.text("分段详情", "SEGMENTS")
+                }),
         );
         if let Some(peers) = peers {
             if self.expanded {
@@ -223,7 +227,8 @@ impl Render for ProgressWindow {
                     .child(self.text("此任务暂无分段信息", "No segment details for this task")),
             );
         }
-        for (index, segment) in segments.iter().enumerate() {
+        let visible_segments = if self.expanded { segments } else { &[] };
+        for (index, segment) in visible_segments.iter().enumerate() {
             let bytes = segment
                 .total
                 .map(|total| {
@@ -366,10 +371,11 @@ impl Render for ProgressWindow {
         let elapsed = format_elapsed(self.snapshot.as_ref().map(|snapshot| snapshot.elapsed_ms));
         let mut chips = metric_group();
         if active {
-            let speed_label = if phase == ProgressPhase::Finalizing {
-                self.text("封装进度", "Remux progress")
-            } else {
-                self.text("下载速度", "Download speed")
+            let speed_label = match phase {
+                ProgressPhase::Downloading => self.text("下载速度", "Download speed"),
+                ProgressPhase::Merging => self.text("合并速度", "Merge speed"),
+                ProgressPhase::Saving => self.text("保存速度", "Save speed"),
+                ProgressPhase::Finalizing => self.text("封装进度", "Remux progress"),
             };
             chips = chips
                 .child(metric_chip(
@@ -394,13 +400,17 @@ impl Render for ProgressWindow {
                 ))
                 .child(metric_chip(
                     IconName::Globe,
-                    self.text("活动连接", "Active connections"),
+                    if peers.is_some() {
+                        self.text("活动连接", "Active connections")
+                    } else {
+                        self.text("活动分段", "Active segments")
+                    },
                     if let Some(peers) = peers {
                         peers.connected.to_string()
                     } else if segments.is_empty() {
                         "—".into()
                     } else {
-                        format!("{connections}/{}", segments.len())
+                        active_segments.to_string()
                     },
                     edge,
                     muted,

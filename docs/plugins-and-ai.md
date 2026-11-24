@@ -42,6 +42,7 @@ and offers repair when the NDM Next executable has moved.
 | Claude Code | `~/.claude.json` | `~/.claude/skills/ndm-next/` |
 | Pi with built-in MCP | `~/.pi/agent/mcp.json` | `~/.pi/agent/skills/ndm-next/` |
 | OpenCode | `~/.config/opencode/opencode.json(c)` | `~/.config/opencode/skills/ndm-next/` |
+| DeepSeek Harness | `~/.dsh/cordis.patch.yml` | `~/.dsh/skills/ndm-next/` |
 
 Codex CLI and the desktop app share MCP settings on the same Codex host.
 NDM Next can write this configuration even on a desktop-only installation.
@@ -49,6 +50,10 @@ Pi's built-in MCP is available from version 0.99.0. NDM Next works with both
 OpenCode's legacy MCP map and the V2 `mcp.servers` structure. These are the
 default locations. Absolute configuration paths inherited by NDM Next from
 the client's environment can override them.
+
+DeepSeek Harness loads NDM Next through its built-in stdio MCP client. Its
+home-level Cordis patch applies across profiles. Profiles with filesystem
+Skills discover the guide under the same `DSH_HOME`. [DeepSeek Harness MCP guide](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/guide/mcp-memory.md)
 
 NDM Next refreshes its installed Skill copies after a desktop upgrade,
 a plugin install, update or removal, and an AI access change. The plugin
@@ -70,7 +75,7 @@ A plugin defines how it uses its thread setting.
 
 Set the default User-Agent under **Settings → Download behavior → More
 settings**. Start with a Chrome, Firefox, or Safari preset and edit it as
-needed. Save a blank value to restore the default. A User-Agent captured
+needed. Saving a blank value restores the Chrome for Windows preset. A User-Agent captured
 by the browser extension or specified for an MCP item takes precedence.
 
 For a built-in HTTP(S) item, set `proxy_mode` to `direct` to bypass the app
@@ -125,11 +130,15 @@ YouTube、Bilibili、TikTok、Vimeo 等常见媒体网页会匹配 **流媒体�
 | Claude Code | `~/.claude.json` | `~/.claude/skills/ndm-next/` |
 | 支持内置 MCP 的 Pi | `~/.pi/agent/mcp.json` | `~/.pi/agent/skills/ndm-next/` |
 | OpenCode | `~/.config/opencode/opencode.json(c)` | `~/.config/opencode/skills/ndm-next/` |
+| DeepSeek Harness | `~/.dsh/cordis.patch.yml` | `~/.dsh/skills/ndm-next/` |
 
 同一 Codex 主机上的 CLI 和桌面版共用 MCP 配置，只有桌面版也可安装。
 Pi 需要 0.99.0 或更新版本使用内置 MCP。OpenCode 支持旧版 MCP 配置和 V2 的
 `mcp.servers` 结构。表中为默认位置，NDM Next 启动时继承的客户端绝对配置路径
 可覆盖默认值。
+
+DeepSeek Harness 通过自带的 stdio MCP 客户端连接 NDM Next。用户级 Cordis 配置对
+各个 profile 生效。启用了文件系统 Skill 的 profile 会在同一个 `DSH_HOME` 下发现使用指南。[DeepSeek Harness MCP 官方指南](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/guide/mcp-memory.zh.md)
 
 桌面升级、安装、更新或卸载插件以及更改 AI 接入后，应用会刷新各客户端中
 已安装的 NDM Next Skill。点击插件市场卡片的 **AI 已开** 可关闭单个引擎的
@@ -146,7 +155,7 @@ AI 客户端可发起下载、查询状态、暂停与恢复。省略保存位�
 连接，HLS 同时下载最多 4 个分片。插件可根据协议决定线程设置的用途。
 
 在 **设置 → 下载行为 → 更多设置** 可设置默认 User-Agent。可以选用
-Chrome、Firefox 或 Safari 预设，再按需编辑。留空保存会恢复默认。
+Chrome、Firefox 或 Safari 预设，再按需编辑。留空保存会恢复为 Windows 版 Chrome 的 UA。
 浏览器接管请求捕获的 User-Agent 和 MCP 单项指定的值优先于默认值。
 
 内置 HTTP(S) 任务可传入 `"proxy_mode":"direct"`，让该任务绕过 NDM Next

@@ -19,9 +19,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     DashOptions, DownloadLimits, DownloadProgress, Error, FtpOptions, HlsOptions, HttpOptions,
-    ProgressSnapshot, ProxyMode, ProxyOptions, Result, SftpOptions, Store, Task, TaskActivity,
-    TaskCommand, TaskId, TaskOptions, TaskState, execute_dash, execute_ftp, execute_hls,
-    execute_http, execute_sftp,
+    ProgressPhase, ProgressSnapshot, ProxyMode, ProxyOptions, Result, SftpOptions, SpeedMeter,
+    Store, Task, TaskActivity, TaskCommand, TaskId, TaskOptions, TaskState, execute_dash,
+    execute_ftp, execute_hls, execute_http, execute_sftp,
 };
 
 #[derive(Clone, Debug)]
@@ -609,7 +609,7 @@ fn plugin_id(task: &Task) -> Option<&str> {
 }
 
 struct ActivityMeter {
-    sampled: Instant,
+    speed: SpeedMeter,
     changed: Instant,
     counters: [u64; 5],
 }
@@ -617,8 +617,10 @@ struct ActivityMeter {
 impl ActivityMeter {
     fn new() -> Self {
         let now = Instant::now();
+        let mut speed = SpeedMeter::default();
+        speed.sample(now, 0);
         Self {
-            sampled: now,
+            speed,
             changed: now,
             counters: [0; 5],
         }
@@ -636,10 +638,13 @@ impl ActivityMeter {
         if self.counters != counters {
             self.changed = now;
         }
-        let elapsed = now.duration_since(self.sampled).as_millis();
-        let received = progress.transferred.saturating_sub(self.counters[0]);
-        let recent_bytes_per_second = (running && elapsed > 0)
-            .then(|| ((received as u128 * 1_000) / elapsed).min(u64::MAX as u128) as u64);
+        let recent_bytes_per_second = running.then(|| match progress.phase {
+            ProgressPhase::Downloading => self.speed.sample(now, progress.transferred),
+            _ => {
+                self.speed.reset();
+                0
+            }
+        });
         progress.activity = Some(TaskActivity {
             sampled_at_unix_ms: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -652,7 +657,6 @@ impl ActivityMeter {
                 .min(u64::MAX as u128) as u64,
             recent_bytes_per_second,
         });
-        self.sampled = now;
         self.counters = counters;
     }
 }

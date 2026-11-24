@@ -33,7 +33,7 @@
 
 应用通过 GitHub 检查更新。点击**升级**下载并校验安装包。Windows 在空闲时安装，macOS 打开 DMG，Linux 打开压缩包所在目录。
 
-新安装默认使用 16 个下载连接并开启开机自启，已有设置会保留。
+新安装默认允许每个 HTTP 下载最多并发请求 16 个分段，并开启开机自启。下载器根据文件大小和服务器首次响应的耗时选择分段大小。已有设置会保留。
 
 ## 界面截图
 
@@ -47,7 +47,7 @@
 
 在[桌面插件市场](assets/readme/plugin-market.webp)安装 **BitTorrent**，即可下载 `.torrent` 文件和磁力链接。安装 **Media Downloader**，即可下载受支持网站的流媒体视频、音频和播放列表。
 
-开启 AI 接入后，可通过 MCP 和配套 Skill 在 OpenAI Codex（CLI 与桌面版）、Claude Code、Pi 和 OpenCode 中创建和管理下载任务。[插件与 AI 接入指南](docs/plugins-and-ai.md)
+开启 AI 接入后，可通过 MCP 和配套 Skill 在 OpenAI Codex（CLI 与桌面版）、Claude Code、Pi、OpenCode 和 DeepSeek Harness 中创建和管理下载任务。[插件与 AI 接入指南](docs/plugins-and-ai.md)
 
 ## 浏览器扩展
 

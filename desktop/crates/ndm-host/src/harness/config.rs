@@ -11,7 +11,8 @@ use jsonc_parser::{
 use toml_edit::{Array, DocumentMut, Item, Table, TableLike, value};
 
 use super::{
-    Harness, MCP_ARGS, McpStatus, SERVER, Target, config_conflict, host_name, invalid_config,
+    Harness, MCP_ARGS, McpStatus, SERVER, Target, config_conflict, deepseek, host_name,
+    invalid_config,
 };
 
 const MAX_CONFIG_BYTES: u64 = 16 * 1024 * 1024;
@@ -20,6 +21,7 @@ const CODEX_SERVERS: &str = "mcp_servers";
 enum Document {
     Toml(DocumentMut),
     Json(CstRootNode),
+    Cordis(deepseek::PatchFile),
 }
 
 pub(super) struct Config {
@@ -40,6 +42,8 @@ impl Config {
         let contents = original.as_deref().unwrap_or("");
         let document = if client == Harness::Codex {
             Document::Toml(contents.parse().map_err(|_| invalid_config())?)
+        } else if client == Harness::DeepSeek {
+            Document::Cordis(deepseek::PatchFile::parse(contents)?)
         } else {
             let jsonc = client == Harness::OpenCode;
             let options = ParseOptions {
@@ -76,6 +80,7 @@ impl Config {
         match &self.document {
             Document::Toml(document) => codex_status(document, target),
             Document::Json(document) => json_status(document, target, client),
+            Document::Cordis(document) => document.status(target),
         }
     }
 
@@ -130,6 +135,7 @@ impl Config {
                     }
                 }
             }
+            Document::Cordis(document) => document.register(target)?,
         }
         Ok(())
     }
@@ -152,6 +158,7 @@ impl Config {
                     entry.remove();
                 }
             }
+            Document::Cordis(document) => document.unregister()?,
         }
         Ok(())
     }
@@ -160,6 +167,7 @@ impl Config {
         let contents = match &self.document {
             Document::Toml(document) => document.to_string(),
             Document::Json(document) => document.to_string(),
+            Document::Cordis(document) => document.contents(),
         };
         if self.original.as_deref() == Some(&contents) {
             return Ok(None);
@@ -260,7 +268,7 @@ fn json_status(document: &CstRootNode, target: &Target, client: Harness) -> io::
     }
 }
 
-fn registration_status(
+pub(super) fn registration_status(
     target: &Target,
     command: Option<&str>,
     args: Option<&[String]>,

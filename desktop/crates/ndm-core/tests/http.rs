@@ -62,6 +62,10 @@ enum Mode {
     MalformedRange,
     MalformedSegment,
     DropOnce,
+    ShortOnce,
+    OversizeOnce,
+    WaitForThirdRange,
+    LimitParallelRanges,
 }
 
 #[derive(Clone)]
@@ -71,6 +75,8 @@ struct Fixture {
     range_requests: Arc<AtomicUsize>,
     ranges: Arc<Mutex<Vec<String>>>,
     sent_bytes: Arc<AtomicUsize>,
+    gate: Arc<tokio::sync::Notify>,
+    rejections: Arc<AtomicUsize>,
     dropped: Arc<AtomicBool>,
     dropped_range: Arc<Mutex<Option<String>>>,
     slow: bool,
@@ -79,17 +85,27 @@ struct Fixture {
 async fn respond(State(fixture): State<Fixture>, headers: HeaderMap) -> Response<Body> {
     let (etag, data) = fixture.current.read().await.clone();
     let range = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
-    if let Some(range) = range {
-        fixture.range_requests.fetch_add(1, Ordering::SeqCst);
+    let number = if let Some(range) = range {
+        let previous = fixture.range_requests.fetch_add(1, Ordering::SeqCst);
         fixture.ranges.lock().unwrap().push(range.to_owned());
-    }
+        previous + 1
+    } else {
+        0
+    };
     let if_range_matches = headers
         .get(header::IF_RANGE)
         .and_then(|v| v.to_str().ok())
         .is_none_or(|v| v == etag);
     let usable_range = matches!(
         fixture.mode,
-        Mode::Ranges | Mode::MalformedRange | Mode::MalformedSegment | Mode::DropOnce
+        Mode::Ranges
+            | Mode::MalformedRange
+            | Mode::MalformedSegment
+            | Mode::DropOnce
+            | Mode::OversizeOnce
+            | Mode::ShortOnce
+            | Mode::WaitForThirdRange
+            | Mode::LimitParallelRanges
     ) && range.is_some()
         && if_range_matches;
     let (start, end) = if usable_range {
@@ -119,6 +135,50 @@ async fn respond(State(fixture): State<Fixture>, headers: HeaderMap) -> Response
             format!("bytes {start}-{end}/{}", data.len())
         };
         response = response.header(header::CONTENT_RANGE, content_range);
+    }
+    if matches!(fixture.mode, Mode::OversizeOnce) && range.is_none() {
+        return Response::builder()
+            .status(StatusCode::FORBIDDEN)
+            .body(Body::empty())
+            .unwrap();
+    }
+    if usable_range && range != Some("bytes=0-0") {
+        match fixture.mode {
+            Mode::OversizeOnce if !fixture.dropped.swap(true, Ordering::SeqCst) => {
+                use futures_util::StreamExt;
+                let body = futures_util::stream::iter([Ok::<_, std::io::Error>(Bytes::from(
+                    vec![0x7b; selected.len()],
+                ))])
+                .chain(futures_util::stream::once(async {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    Ok(Bytes::from_static(b"!"))
+                }));
+                return response.body(Body::from_stream(body)).unwrap();
+            }
+            Mode::ShortOnce if !fixture.dropped.swap(true, Ordering::SeqCst) => {
+                *fixture.dropped_range.lock().unwrap() = range.map(str::to_owned);
+                return response
+                    .body(Body::from(selected[..8192].to_vec()))
+                    .unwrap();
+            }
+            Mode::WaitForThirdRange | Mode::LimitParallelRanges if start == 0 => {
+                fixture.gate.notified().await;
+            }
+            Mode::WaitForThirdRange if number == 4 => fixture.gate.notify_one(),
+            Mode::LimitParallelRanges => {
+                let rejections = fixture.rejections.fetch_add(1, Ordering::SeqCst);
+                if rejections < 3 {
+                    if rejections == 2 {
+                        fixture.gate.notify_one();
+                    }
+                    return Response::builder()
+                        .status(StatusCode::TOO_MANY_REQUESTS)
+                        .body(Body::empty())
+                        .unwrap();
+                }
+            }
+            _ => {}
+        }
     }
     if !matches!(fixture.mode, Mode::IgnoreRangeUnknownLength) {
         response = response.header(header::CONTENT_LENGTH, selected.len());
@@ -175,6 +235,8 @@ async fn fixture(mode: Mode, data: Vec<u8>, slow: bool) -> (Fixture, String) {
         range_requests: Arc::new(AtomicUsize::new(0)),
         ranges: Arc::new(Mutex::new(Vec::new())),
         sent_bytes: Arc::new(AtomicUsize::new(0)),
+        gate: Arc::new(tokio::sync::Notify::new()),
+        rejections: Arc::new(AtomicUsize::new(0)),
         dropped: Arc::new(AtomicBool::new(false)),
         dropped_range: Arc::new(Mutex::new(None)),
         slow,
@@ -201,10 +263,135 @@ fn request(destination: &std::path::Path, url: String) -> NewTask {
     }
 }
 
+fn seed_range_manifest(
+    directory: &std::path::Path,
+    id: TaskId,
+    url: &str,
+    total: usize,
+    parts: usize,
+) -> std::path::PathBuf {
+    let cache = directory.join(format!(".ndm-next-{id}"));
+    std::fs::create_dir(&cache).unwrap();
+    let manifest = serde_json::json!({
+        "resource_url": url, "validator": "\"version-1\"",
+        "total": total, "connections": parts
+    });
+    std::fs::write(
+        cache.join("resume.bin"),
+        ndm_core::protect_user_data(&serde_json::to_vec(&manifest).unwrap()).unwrap(),
+    )
+    .unwrap();
+    cache
+}
+
 fn data(seed: usize) -> Vec<u8> {
     (0..524_288)
         .map(|i| ((i * 17 + seed) % 251) as u8)
         .collect()
+}
+
+#[tokio::test]
+async fn a_download_without_a_user_agent_uses_chrome_for_every_range() {
+    let dir = TempDir::new().unwrap();
+    let expected = data(9);
+    let (server, url) = fixture(Mode::Ranges, expected.clone(), false).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = Router::new().route(
+        "/file",
+        get(move |headers: HeaderMap| {
+            let url = url.clone();
+            async move {
+                let response = if headers
+                    .get(header::USER_AGENT)
+                    .is_some_and(|ua| ua == ndm_core::CHROME_USER_AGENT)
+                {
+                    Response::builder()
+                        .status(StatusCode::FOUND)
+                        .header(header::LOCATION, url)
+                } else {
+                    Response::builder().status(StatusCode::FORBIDDEN)
+                };
+                response.body(Body::empty()).unwrap()
+            }
+        }),
+    );
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let output = download_http(
+        &request(dir.path(), format!("http://{address}/file")),
+        TaskId::new_v4(),
+        &HttpOptions {
+            max_connections: 2,
+            ..Default::default()
+        },
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(std::fs::read(output).unwrap(), expected);
+    assert_eq!(server.range_requests.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn a_free_worker_picks_up_more_ranges_while_the_first_is_blocked() {
+    let dir = TempDir::new().unwrap();
+    let expected = data(22).repeat(16);
+    let (_, url) = fixture(Mode::WaitForThirdRange, expected.clone(), false).await;
+    // A saved eight-part layout keeps this concurrency test independent of the
+    // machine's probe latency and exercises manifests created by older versions.
+    let id = TaskId::new_v4();
+    seed_range_manifest(dir.path(), id, &url, expected.len(), 8);
+    let output = tokio::time::timeout(
+        Duration::from_secs(10),
+        download_http(
+            &request(dir.path(), url),
+            id,
+            &HttpOptions {
+                max_connections: 2,
+                ..Default::default()
+            },
+            CancellationToken::new(),
+        ),
+    )
+    .await
+    .expect("the first range waits for a third data request")
+    .unwrap();
+    assert_eq!(
+        Sha256::digest(std::fs::read(output).unwrap()),
+        Sha256::digest(expected)
+    );
+}
+
+#[tokio::test]
+async fn a_throttled_parallel_range_finishes_after_the_healthy_sibling() {
+    let dir = TempDir::new().unwrap();
+    let expected = data(23);
+    let (server, url) = fixture(Mode::LimitParallelRanges, expected.clone(), false).await;
+    let output = tokio::time::timeout(
+        Duration::from_secs(10),
+        download_http(
+            &request(dir.path(), url),
+            TaskId::new_v4(),
+            &HttpOptions {
+                max_connections: 2,
+                ..Default::default()
+            },
+            CancellationToken::new(),
+        ),
+    )
+    .await
+    .expect("rate limiting must not cancel the healthy sibling")
+    .unwrap();
+    assert_eq!(std::fs::read(output).unwrap(), expected);
+    assert_eq!(server.rejections.load(Ordering::SeqCst), 4);
+    let ranges = server.ranges.lock().unwrap();
+    assert_eq!(
+        ranges
+            .iter()
+            .filter(|range| *range == "bytes=0-262143")
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -320,6 +507,38 @@ async fn oversized_chunked_range_is_rejected_without_filling_disk() {
     let segment = dir.path().join(format!(".ndm-next-{id}/segment-0.part"));
     assert!(std::fs::metadata(segment).unwrap().len() <= 1024);
     assert!(!dir.path().join("file.bin").exists());
+}
+
+#[tokio::test]
+async fn oversized_body_rolls_back_only_untrusted_bytes_before_a_later_resume() {
+    let dir = TempDir::new().unwrap();
+    let expected = data(24);
+    let (server, url) = fixture(Mode::OversizeOnce, expected.clone(), false).await;
+    let id = TaskId::new_v4();
+    let cache = seed_range_manifest(dir.path(), id, &url, expected.len(), 1);
+    let prefix = &expected[..8192];
+    let part = cache.join("segment-0.part");
+    std::fs::write(&part, prefix).unwrap();
+    let req = request(dir.path(), url);
+    assert!(matches!(
+        download_http(&req, id, &HttpOptions::default(), CancellationToken::new()).await,
+        Err(Error::HttpStatus(403))
+    ));
+    assert_eq!(std::fs::read(&part).unwrap(), prefix);
+    let output = download_http(&req, id, &HttpOptions::default(), CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read(output).unwrap(), expected);
+    assert_eq!(
+        server
+            .ranges
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| *r == "bytes=8192-524287")
+            .count(),
+        2
+    );
 }
 
 #[tokio::test]
@@ -459,7 +678,7 @@ async fn changed_link_does_not_mix_old_partial_content_even_if_etag_matches() {
 }
 
 #[tokio::test]
-async fn paused_download_resumes_the_existing_segments() {
+async fn paused_download_keeps_its_layout_after_connection_settings_change() {
     let dir = TempDir::new().unwrap();
     let expected = data(6);
     let connections = HttpOptions::default().max_connections;
@@ -500,7 +719,11 @@ async fn paused_download_resumes_the_existing_segments() {
     assert!(partial_lengths.iter().any(|&n| n > 0 && n < segment_bytes));
     let old_count = server.ranges.lock().unwrap().len();
 
-    let output = download_http(&req, id, &HttpOptions::default(), CancellationToken::new())
+    let fewer_connections = HttpOptions {
+        max_connections: 2,
+        ..Default::default()
+    };
+    let output = download_http(&req, id, &fewer_connections, CancellationToken::new())
         .await
         .unwrap();
     assert_eq!(std::fs::read(output).unwrap(), expected);
@@ -1161,6 +1384,89 @@ async fn changing_redirect_destinations_cannot_mix_different_files_with_same_eta
 }
 
 #[tokio::test]
+async fn rate_limited_download_waits_for_retry_after() {
+    let dir = TempDir::new().unwrap();
+    let first_request = Arc::new(std::sync::OnceLock::new());
+    let requests = Arc::new(AtomicUsize::new(0));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = Router::new().route(
+        "/file",
+        get({
+            let requests = requests.clone();
+            move || {
+                let first_request = first_request.clone();
+                requests.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    let elapsed = first_request.get_or_init(std::time::Instant::now).elapsed();
+                    if elapsed < Duration::from_secs(1) {
+                        (
+                            StatusCode::TOO_MANY_REQUESTS,
+                            [(header::RETRY_AFTER, "1")],
+                            "",
+                        )
+                    } else {
+                        (
+                            StatusCode::OK,
+                            [(header::CONTENT_TYPE, "text/plain")],
+                            "recovered",
+                        )
+                    }
+                }
+            }
+        }),
+    );
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let output = download_http(
+        &request(dir.path(), format!("http://{address}/file")),
+        TaskId::new_v4(),
+        &HttpOptions::default(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(std::fs::read(output).unwrap(), b"recovered");
+    assert_eq!(requests.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn excessive_retry_after_preserves_http_status_without_an_early_request() {
+    let dir = TempDir::new().unwrap();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = Router::new().route(
+        "/file",
+        get({
+            let requests = requests.clone();
+            move || {
+                requests.fetch_add(1, Ordering::SeqCst);
+                async {
+                    (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        [(header::RETRY_AFTER, "3600")],
+                    )
+                }
+            }
+        }),
+    );
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        download_http(
+            &request(dir.path(), format!("http://{address}/file")),
+            TaskId::new_v4(),
+            &HttpOptions::default(),
+            CancellationToken::new(),
+        ),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(result, Err(Error::HttpStatus(503))));
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn temporary_server_errors_are_retried_without_creating_extra_files() {
     let dir = TempDir::new().unwrap();
     let requests = Arc::new(AtomicUsize::new(0));
@@ -1198,34 +1504,36 @@ async fn temporary_server_errors_are_retried_without_creating_extra_files() {
 }
 
 #[tokio::test]
-async fn interrupted_segment_is_retried_from_its_saved_offset() {
-    let dir = TempDir::new().unwrap();
-    let expected = data(15);
-    let (server, url) = fixture(Mode::DropOnce, expected.clone(), false).await;
-    let output = download_http(
-        &request(dir.path(), url),
-        TaskId::new_v4(),
-        &HttpOptions::default(),
-        CancellationToken::new(),
-    )
-    .await
-    .unwrap();
-    assert!(
-        std::fs::read(output).unwrap() == expected,
-        "retry must preserve all bytes"
-    );
-    assert!(server.range_requests.load(Ordering::SeqCst) >= 6);
-    let failed_range = server.dropped_range.lock().unwrap().clone().unwrap();
-    let (start, end) = failed_range
-        .strip_prefix("bytes=")
-        .unwrap()
-        .split_once('-')
+async fn disconnected_or_short_segment_is_retried_from_its_saved_offset() {
+    for mode in [Mode::DropOnce, Mode::ShortOnce] {
+        let dir = TempDir::new().unwrap();
+        let expected = data(15);
+        let (server, url) = fixture(mode, expected.clone(), false).await;
+        let output = download_http(
+            &request(dir.path(), url),
+            TaskId::new_v4(),
+            &HttpOptions::default(),
+            CancellationToken::new(),
+        )
+        .await
         .unwrap();
-    let expected_retry = format!("bytes={}-{end}", start.parse::<u64>().unwrap() + 8192);
-    assert!(
-        server.ranges.lock().unwrap().contains(&expected_retry),
-        "retry should start after the saved bytes"
-    );
+        assert!(
+            std::fs::read(output).unwrap() == expected,
+            "retry must preserve all bytes"
+        );
+        assert!(server.range_requests.load(Ordering::SeqCst) >= 6);
+        let failed_range = server.dropped_range.lock().unwrap().clone().unwrap();
+        let (start, end) = failed_range
+            .strip_prefix("bytes=")
+            .unwrap()
+            .split_once('-')
+            .unwrap();
+        let expected_retry = format!("bytes={}-{end}", start.parse::<u64>().unwrap() + 8192);
+        assert!(
+            server.ranges.lock().unwrap().contains(&expected_retry),
+            "retry should start after the saved bytes"
+        );
+    }
 }
 
 #[tokio::test]

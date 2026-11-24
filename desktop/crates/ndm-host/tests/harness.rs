@@ -36,6 +36,7 @@ fn all_clients_register_and_remove_their_own_mcp_and_skill_without_a_cli() {
         ".claude/skills",
         ".pi/agent/skills",
         ".config/opencode/skills",
+        ".dsh/skills",
     ];
     for client in Harness::ALL {
         assert_eq!(client.status(&target).unwrap(), Status::default());
@@ -90,6 +91,8 @@ fn all_clients_register_and_remove_their_own_mcp_and_skill_without_a_cli() {
     let opencode = fs::read_to_string(&opencode_file).unwrap();
     assert!(opencode.contains("// Keep OpenCode preferences"));
     assert!(opencode.contains("\"type\": \"local\""));
+    let dsh = fs::read_to_string(target.home.join(".dsh/cordis.patch.yml")).unwrap();
+    assert!(dsh.contains("@deepseek-ai/dsh-mcp-client"));
 
     for (client, skill_root) in Harness::ALL.into_iter().zip(skill_roots) {
         client.remove(&target).unwrap();
@@ -227,6 +230,78 @@ fn failed_skill_install_restores_the_original_client_config() {
 }
 
 #[test]
+fn deepseek_preserves_other_patches_and_repairs_the_host_registration() {
+    let directory = tempfile::tempdir().unwrap();
+    // ':' is reserved in Windows file names. '#' after a space needs quoting in YAML.
+    let segment = if cfg!(windows) {
+        "an app #1"
+    } else {
+        "version: two #1"
+    };
+    let mut target = target(&directory.path().join(segment));
+    let path = target.home.join(".dsh/cordis.patch.yml");
+    let existing = "# upstream plugin options\n- id: existing\n  disabled: !!js \"!process.env.ENABLE_PLUGIN\"\n";
+    write(&path, existing);
+    Harness::DeepSeek.install(&target).unwrap();
+    let before = fs::read_to_string(&path).unwrap();
+    assert!(before.contains(existing));
+    Harness::DeepSeek.install(&target).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), before);
+    let moved = directory
+        .path()
+        .join(target.executable.file_name().unwrap());
+    fs::rename(&target.executable, &moved).unwrap();
+    target.executable = moved;
+    assert_eq!(
+        Harness::DeepSeek.status(&target).unwrap().mcp,
+        McpStatus::NeedsRepair
+    );
+    Harness::DeepSeek.install(&target).unwrap();
+    assert!(Harness::DeepSeek.status(&target).unwrap().installed());
+    let after = fs::read_to_string(&path).unwrap();
+    assert!(after.contains(existing));
+    Harness::DeepSeek.remove(&target).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), existing);
+    Harness::DeepSeek.remove(&target).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), existing);
+}
+
+#[test]
+fn deepseek_removes_only_the_managed_row_from_an_annotated_patch() {
+    let directory = tempfile::tempdir().unwrap();
+    let target = target(directory.path());
+    let path = target.home.join(".dsh/cordis.patch.yml");
+    let row = json!({
+        "id": "mcp-ndm-next", "name": "@deepseek-ai/dsh-mcp-client",
+        "config": {"serverName": "ndm-next", "transport": "stdio",
+            "command": target.executable, "args": ["--mcp", "--data-dir", target.profile]}
+    });
+    for extra in [None, Some(json!({"name":"other", "id":"keep-this"}))] {
+        let rows: Vec<_> = std::iter::once(row.clone()).chain(extra.clone()).collect();
+        write(
+            &path,
+            &json!([{"insert":rows, "notes":"keep this note"}]).to_string(),
+        );
+        Harness::DeepSeek.remove(&target).unwrap();
+        let file = fs::read_to_string(&path)
+            .unwrap()
+            .parse::<yaml_edit::Document>()
+            .unwrap();
+        let patch = file.as_sequence().unwrap().get(0).unwrap();
+        let patch = patch.as_mapping().unwrap();
+        assert_eq!(
+            patch.get("notes").unwrap().as_scalar().unwrap().as_string(),
+            "keep this note"
+        );
+        let entries = patch.get_sequence("insert").unwrap();
+        assert_eq!(entries.len(), usize::from(extra.is_some()));
+        if extra.is_some() {
+            assert!(entries.to_string().contains("keep-this"));
+        }
+    }
+}
+
+#[test]
 fn a_foreign_server_or_invalid_config_is_left_with_its_original_contents() {
     let root = tempfile::tempdir().unwrap();
     let target = target(root.path());
@@ -242,6 +317,42 @@ fn a_foreign_server_or_invalid_config_is_left_with_its_original_contents() {
             ".config/opencode/opencode.jsonc",
             "{\"mcp\": ",
             io::ErrorKind::InvalidData,
+        ),
+        (
+            Harness::DeepSeek,
+            ".dsh/cordis.patch.yml",
+            "- insert:\n    - id: custom\n      name: '@deepseek-ai/dsh-mcp-client'\n      config: { serverName: ndm-next, transport: stdio, command: other }\n",
+            io::ErrorKind::AlreadyExists,
+        ),
+        (
+            Harness::DeepSeek,
+            ".dsh/cordis.patch.yml",
+            "insert: {\n",
+            io::ErrorKind::InvalidData,
+        ),
+        (
+            Harness::DeepSeek,
+            ".dsh/cordis.patch.yml",
+            "- insert:\n    - id: tools\n      group: true\n      config:\n        - name: '@deepseek-ai/dsh-mcp-client'\n          config: {serverName: ndm-next}\n",
+            io::ErrorKind::AlreadyExists,
+        ),
+        (
+            Harness::DeepSeek,
+            ".dsh/cordis.patch.yml",
+            "- id: tools\n  config:\n    - name: '@deepseek-ai/dsh-mcp-manager'\n      config: {servers: {ndm-next: {command: other}}}\n",
+            io::ErrorKind::AlreadyExists,
+        ),
+        (
+            Harness::DeepSeek,
+            ".dsh/cordis.patch.yml",
+            "- id: custom\n  config: {serverName: ndm-next, transport: stdio, command: other}\n",
+            io::ErrorKind::AlreadyExists,
+        ),
+        (
+            Harness::DeepSeek,
+            ".dsh/cordis.patch.yml",
+            "- id: custom\n  config: {serverName: &name ndm-next}\n- insert:\n    - name: '@deepseek-ai/dsh-mcp-client'\n      config: {serverName: *name, transport: stdio, command: other}\n",
+            io::ErrorKind::AlreadyExists,
         ),
     ] {
         let path = target.home.join(file);
@@ -302,5 +413,35 @@ fn native_clients_discover_the_ndm_next_registration() {
             client.name(),
         );
         client.remove(&target).unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "requires DeepSeek Harness on PATH and uses an isolated DSH_HOME"]
+fn deepseek_composes_the_ndm_next_client_across_profiles() {
+    use std::{env, process::Command};
+
+    let directory = tempfile::tempdir().unwrap();
+    let target = target(directory.path());
+    Harness::DeepSeek.install(&target).unwrap();
+    for profile in ["web", "headless"] {
+        let output = Command::new("dsh")
+            .args(["--profile", profile, "--dump-config"])
+            .current_dir(&target.home)
+            .env_clear()
+            .env("PATH", env::var_os("PATH").unwrap_or_default())
+            .env("HOME", &target.home)
+            .env("DSH_HOME", target.home.join(".dsh"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "dsh rejected the {profile} configuration"
+        );
+        let config = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            config.contains("mcp-ndm-next") && config.contains(target.executable.to_str().unwrap())
+        );
     }
 }
