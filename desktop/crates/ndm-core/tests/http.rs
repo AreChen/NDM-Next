@@ -104,8 +104,8 @@ async fn digest_bound_ranges_handle_rotating_urls_and_reject_corrupt_bytes() {
         let dir = TempDir::new().unwrap();
         let expected = Arc::new(data(3));
         let repr = format!("sha-256=:{}:", STANDARD.encode(Sha256::digest(&*expected)));
-        let peak = Arc::new(AtomicUsize::new(0));
-        let active = Arc::new(AtomicUsize::new(0));
+        let arrivals = Arc::new(AtomicUsize::new(0));
+        let first_pair = Arc::new(tokio::sync::Barrier::new(2));
         let tickets = Arc::new(AtomicUsize::new(0));
         let app = Router::new()
             .route(
@@ -123,11 +123,13 @@ async fn digest_bound_ranges_handle_rotating_urls_and_reject_corrupt_bytes() {
             .route(
                 "/blob",
                 get({
-                    let peak = peak.clone();
+                    let arrivals = arrivals.clone();
                     let expected = expected.clone();
                     move |headers: HeaderMap| {
-                        let (peak, active, expected, repr) =
-                            (peak.clone(), active.clone(), expected.clone(), repr.clone());
+                        let arrivals = arrivals.clone();
+                        let first_pair = first_pair.clone();
+                        let expected = expected.clone();
+                        let repr = repr.clone();
                         async move {
                             let range = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
                             assert!(!headers.contains_key(header::IF_RANGE));
@@ -141,10 +143,11 @@ async fn digest_bound_ranges_handle_rotating_urls_and_reject_corrupt_bytes() {
                                     .unwrap();
                             }
                             if let Some(range) = range {
-                                let count = active.fetch_add(1, Ordering::SeqCst) + 1;
-                                peak.fetch_max(count, Ordering::SeqCst);
-                                tokio::time::sleep(Duration::from_millis(35)).await;
-                                active.fetch_sub(1, Ordering::SeqCst);
+                                // Neither of the first two range handlers can respond until
+                                // both have arrived, independently of runner scheduling.
+                                if arrivals.fetch_add(1, Ordering::SeqCst) < 2 {
+                                    first_pair.wait().await;
+                                }
                                 if fallback {
                                     return Response::builder()
                                         .status(416)
@@ -215,18 +218,22 @@ async fn digest_bound_ranges_handle_rotating_urls_and_reject_corrupt_bytes() {
         store.prepare(id, &req).unwrap();
         store.commit(id).unwrap();
         let progress = DownloadProgress::default();
-        let result = execute_http(
-            &store,
-            id,
-            &HttpOptions {
-                max_connections: 4,
-                ..Default::default()
-            },
-            CancellationToken::new(),
-            progress.clone(),
+        let result = tokio::time::timeout(
+            Duration::from_secs(15),
+            execute_http(
+                &store,
+                id,
+                &HttpOptions {
+                    max_connections: 4,
+                    ..Default::default()
+                },
+                CancellationToken::new(),
+                progress.clone(),
+            ),
         )
-        .await;
-        assert!(peak.load(Ordering::SeqCst) > 1);
+        .await
+        .expect("two segment requests must overlap");
+        assert!(arrivals.load(Ordering::SeqCst) >= 2);
         if !fallback {
             let reused = if corrupt { 0 } else { expected.len() / 4 };
             assert_eq!(
