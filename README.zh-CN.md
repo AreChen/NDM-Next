@@ -33,6 +33,8 @@
 | macOS 12+ · Intel | `OnesDM-*-macos-x64.dmg` | 将 **OnesDM** 拖入 **Applications**。 |
 | Linux · x86-64 | `OnesDM-*-linux-x64.tar.gz` | 安装 [Linux 运行依赖](desktop/packaging/linux/README.md)，解压并运行 `ndm-desktop`。 |
 
+**从 NDM Next 0.6.8 升级**　仓库更名后，0.6.8 的应用内更新器会跳过新地址的安装包。请从 [OnesDM 0.7.0 发布页](https://github.com/AreChen/onesdm/releases/tag/desktop-v0.7.0) 下载对应平台的安装包，等待下载完成或暂停任务后完全退出旧版，再按上表直接安装并启动 OnesDM。保留原用户数据即可继续使用下载记录、设置和已安装插件。已装 0.6.9 的用户可在应用内升级。
+
 应用通过 GitHub 检查更新。点击**升级**下载并校验安装包。Windows 在空闲时安装，macOS 打开 DMG，Linux 打开压缩包所在目录。
 
 新安装默认允许每个 HTTP 下载最多并发请求 16 个分段，并开启开机自启。下载器根据文件大小和服务器首次响应的耗时选择分段大小。已有设置会保留。

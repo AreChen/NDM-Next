@@ -1,10 +1,14 @@
 ## English
 
+**Upgrade notice** NDM Next is now OnesDM. The 0.6.8 updater skips packages from the renamed repository. Keep your existing profile and install the [OnesDM 0.7.0 package for your platform](https://github.com/AreChen/onesdm/releases/tag/desktop-v0.7.0) directly.
+
 - Manage each installed plugin’s AI access with a switch inside its settings. AI integration uses switches for the global setting and client installations. Partial installations retain repair and removal controls.
 - Ask your AI client to change NDM Next’s download directory, bandwidth cap, User-Agent, route, recovery, cache retention, update checks, language, theme or motion. The MCP tools read settings and report the values saved by the desktop. The updated Skill includes examples.
 - ModelScope model-page resolve links now use the repository file listing to verify parallel downloads against the published SHA-256. Rotating CDN signatures can change between ranges. If a segmented transfer falls back, task diagnostics keep the first triggering range, status, retry count and validation issue.
 
 ## 中文
+
+**升级提示**　NDM Next 已更名为 OnesDM。0.6.8 的更新器会跳过新仓库地址下的安装包。请保留原用户数据，直接安装[适用于你平台的 OnesDM 0.7.0](https://github.com/AreChen/onesdm/releases/tag/desktop-v0.7.0)。
 
 - 插件的 AI 接入开关已移至各插件的设置列表。AI 集成页的总开关和客户端安装开关统一为滑动开关；安装异常时仍可修复或移除。
 - 现在可以用 AI 聊天配置主程序的下载目录、限速、UA、网络路由、恢复、缓存保留、更新检查、语言、主题和动效。MCP 返回桌面端实际保存的值，配套 Skill 已加入示例。

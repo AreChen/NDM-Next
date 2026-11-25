@@ -33,6 +33,8 @@ Get your installer from [**GitHub Releases →**](https://github.com/AreChen/one
 | macOS 12+ · Intel | `OnesDM-*-macos-x64.dmg` | Drag **OnesDM** to **Applications**. |
 | Linux · x86-64 | `OnesDM-*-linux-x64.tar.gz` | Install the [Linux dependencies](desktop/packaging/linux/README.md), extract the archive, and run `ndm-desktop`. |
 
+**Upgrading from NDM Next 0.6.8** After the repository rename, the 0.6.8 updater skips packages at the new address. Download the package for your platform from the [OnesDM 0.7.0 release](https://github.com/AreChen/onesdm/releases/tag/desktop-v0.7.0). Finish or pause your downloads, quit NDM Next completely, then install and open OnesDM as shown above. Keep your existing profile to retain your download history, settings and installed plugins. Users on 0.6.9 can upgrade in the app.
+
 The app checks GitHub for updates. Click **Upgrade** to download a verified package. Windows installs when idle, macOS opens the DMG, and Linux opens the folder containing the archive.
 
 New profiles allow up to 16 concurrent HTTP ranges per download and start at login. The downloader chooses range sizes using the file size and the time the server took to answer the initial probe. Existing settings are preserved.
