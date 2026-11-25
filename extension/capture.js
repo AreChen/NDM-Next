@@ -30,7 +30,11 @@ function captureRequest(details, {media = false} = {}) {
       return null;
     }
   }
-  return {requestId:details.requestId,url:details.url,tabId:details.tabId,frameId:details.frameId ?? 0,documentId:details.documentId,headers};
+  // A top-level navigation marked "none" came from browser UI, without an
+  // initiating site. An opaque initiator ("null") does not qualify.
+  const directNavigation = details.type === 'main_frame' && details.tabId >= 0 && details.initiator === undefined
+    && details.requestHeaders.some(header => String(header.name).toLowerCase() === 'sec-fetch-site' && header.value === 'none');
+  return {requestId:details.requestId,url:details.url,tabId:details.tabId,frameId:details.frameId ?? 0,documentId:details.documentId,initiator:details.initiator,directNavigation,headers};
 }
 
 function findCapture(captures,url,now=Date.now()) {
