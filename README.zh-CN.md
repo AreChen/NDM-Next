@@ -1,17 +1,17 @@
 <div align="center">
-  <img src="assets/onesdm.svg" width="96" alt="">
-  <h1>OnesDM</h1>
+  <img src="assets/readme/hero.webp" width="1200" alt="多股银色线束穿过银环，汇成一条下载流。">
+  <h1><img src="assets/onesdm.svg" width="36" alt=""> OnesDM</h1>
   <p>Ones Download Manager · PlayOnes · AI-Native Download Manager</p>
   <p><strong>Any Agent. All Downloads.</strong></p>
   <p>使用 Rust 和 GPUI 构建，支持 Windows、macOS 和 Linux，提供内存安全的下载核心、可扩展的下载引擎与可选的 AI 接入。</p>
   <p>通过<a href="#插件与-ai">桌面插件市场</a>安装下载引擎，即可下载种子、磁力链接和流媒体。</p>
   <p>
-    <a href="https://github.com/AreChen/NDM-Next/releases/latest"><img src="https://img.shields.io/github/v/release/AreChen/NDM-Next?label=download&amp;color=7c61ff" alt="最新版本"></a>
+    <a href="https://github.com/AreChen/onesdm/releases/latest"><img src="https://img.shields.io/github/v/release/AreChen/onesdm?label=download&amp;color=7c61ff" alt="最新版本"></a>
     <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-168aad" alt="支持 Windows、macOS 和 Linux">
-    <a href="https://github.com/AreChen/NDM-Next/actions/workflows/release.yml"><img src="https://github.com/AreChen/NDM-Next/actions/workflows/release.yml/badge.svg" alt="桌面端发布构建"></a>
-    <a href="LICENSE"><img src="https://img.shields.io/github/license/AreChen/NDM-Next?color=34b8a3" alt="MIT 许可证"></a>
+    <a href="https://github.com/AreChen/onesdm/actions/workflows/release.yml"><img src="https://github.com/AreChen/onesdm/actions/workflows/release.yml/badge.svg" alt="桌面端发布构建"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/github/license/AreChen/onesdm?color=34b8a3" alt="MIT 许可证"></a>
   </p>
-  <p><a href="https://github.com/AreChen/NDM-Next/releases/latest"><strong>下载应用</strong></a> · <a href="#功能">功能</a> · <a href="#界面截图">界面截图</a> · <a href="#浏览器扩展">浏览器扩展</a> · <a href="README.md">English</a></p>
+  <p><a href="https://github.com/AreChen/onesdm/releases/latest"><strong>下载应用</strong></a> · <a href="#功能">功能</a> · <a href="#界面截图">界面截图</a> · <a href="#浏览器扩展">浏览器扩展</a> · <a href="README.md">English</a></p>
 </div>
 
 ## 功能
@@ -24,7 +24,7 @@
 
 ## 下载
 
-前往 [**GitHub Releases 获取安装包 →**](https://github.com/AreChen/NDM-Next/releases/latest)。
+前往 [**GitHub Releases 获取安装包 →**](https://github.com/AreChen/onesdm/releases/latest)。
 
 | 平台 | 安装包 | 安装方式 |
 | :--- | :--- | :--- |
@@ -51,7 +51,7 @@
 
 ## 插件与 AI
 
-<img src="assets/readme/plugins-ai.webp" width="1200" alt="OnesDM 插件市场和 AI 接入设置">
+<img src="assets/readme/plugins-ai.webp" width="1200" alt="三个可插拔模块分别代表 BitTorrent、流媒体下载和 AI 接入。">
 
 在[桌面插件市场](assets/readme/plugin-market.webp)安装 **BitTorrent**，即可下载 `.torrent` 文件和磁力链接。安装 **Media Downloader**，即可下载受支持网站的流媒体视频、音频和播放列表。
 

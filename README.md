@@ -1,17 +1,17 @@
 <div align="center">
-  <img src="assets/onesdm.svg" width="96" alt="">
-  <h1>OnesDM</h1>
+  <img src="assets/readme/hero.webp" width="1200" alt="Parallel silver strands pass through a ring and converge into a single download stream.">
+  <h1><img src="assets/onesdm.svg" width="36" alt=""> OnesDM</h1>
   <p>Ones Download Manager · PlayOnes · AI-Native Download Manager</p>
   <p><strong>Any Agent. All Downloads.</strong></p>
   <p>Built with Rust and GPUI for Windows, macOS, and Linux, with a memory-safe core, pluggable download engines, and optional AI integration.</p>
   <p>Download torrents, magnet links, and streaming media with optional engines from the <a href="#plugins-and-ai">desktop plugin market</a>.</p>
   <p>
-    <a href="https://github.com/AreChen/NDM-Next/releases/latest"><img src="https://img.shields.io/github/v/release/AreChen/NDM-Next?label=download&amp;color=7c61ff" alt="Latest release"></a>
+    <a href="https://github.com/AreChen/onesdm/releases/latest"><img src="https://img.shields.io/github/v/release/AreChen/onesdm?label=download&amp;color=7c61ff" alt="Latest release"></a>
     <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-168aad" alt="Windows, macOS, and Linux">
-    <a href="https://github.com/AreChen/NDM-Next/actions/workflows/release.yml"><img src="https://github.com/AreChen/NDM-Next/actions/workflows/release.yml/badge.svg" alt="Desktop release build"></a>
-    <a href="LICENSE"><img src="https://img.shields.io/github/license/AreChen/NDM-Next?color=34b8a3" alt="MIT license"></a>
+    <a href="https://github.com/AreChen/onesdm/actions/workflows/release.yml"><img src="https://github.com/AreChen/onesdm/actions/workflows/release.yml/badge.svg" alt="Desktop release build"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/github/license/AreChen/onesdm?color=34b8a3" alt="MIT license"></a>
   </p>
-  <p><a href="https://github.com/AreChen/NDM-Next/releases/latest"><strong>Download</strong></a> · <a href="#features">Features</a> · <a href="#screenshots">Screenshots</a> · <a href="#browser-extension">Browser extension</a> · <a href="README.zh-CN.md">简体中文</a></p>
+  <p><a href="https://github.com/AreChen/onesdm/releases/latest"><strong>Download</strong></a> · <a href="#features">Features</a> · <a href="#screenshots">Screenshots</a> · <a href="#browser-extension">Browser extension</a> · <a href="README.zh-CN.md">简体中文</a></p>
 </div>
 
 ## Features
@@ -24,7 +24,7 @@
 
 ## Download
 
-Get your installer from [**GitHub Releases →**](https://github.com/AreChen/NDM-Next/releases/latest).
+Get your installer from [**GitHub Releases →**](https://github.com/AreChen/onesdm/releases/latest).
 
 | Platform | Package | Install |
 | :--- | :--- | :--- |
@@ -51,7 +51,7 @@ NDM Next 0.6.x interface.
 
 ## Plugins and AI
 
-<img src="assets/readme/plugins-ai.webp" width="1200" alt="OnesDM plugin market and AI integration settings">
+<img src="assets/readme/plugins-ai.webp" width="1200" alt="Three plug-in modules representing BitTorrent, streaming media, and AI integration.">
 
 Install **BitTorrent** for `.torrent` files and magnet links, or **Media Downloader** for streaming video, audio, and playlists from supported sites. Both engines are available in the [desktop plugin market](assets/readme/plugin-market.webp).
 
