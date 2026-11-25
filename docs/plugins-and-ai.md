@@ -1,5 +1,7 @@
 # Plugins and AI clients
 
+OnesDM Skill uses the ID `onesdm`. OnesDM MCP registers as `onesdm-mcp`. Existing managed client registrations migrate on refresh.
+
 Open **Plugin market** to browse, install, update, or uninstall plugins.
 Search by name or keyword in English or Chinese, and narrow the cards by
 category or **Installed only**. The display language follows **Settings → Language**.
@@ -117,6 +119,8 @@ name becomes visible while the download is running.
 - [OnesDM Skill](../desktop/crates/ndm-host/skills/SKILL.md)
 
 # 插件与 AI 客户端
+
+OnesDM Skill 的 ID 为 `onesdm`，OnesDM MCP 的 ID 为 `onesdm-mcp`。应用刷新集成时迁移已有的受管配置。
 
 打开 **插件市场** 浏览、安装、更新或卸载插件。输入中英文名称或关键词，
 可按分类筛选，也可以选择 **仅已安装**。卡片与分类跟随应用语言。市场会校验安装包的

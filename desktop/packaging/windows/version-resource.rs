@@ -27,7 +27,7 @@ BEGIN
   BEGIN
     BLOCK "040904b0"
     BEGIN
-      VALUE "CompanyName", "OnesDM contributors\0"
+      VALUE "CompanyName", "PlayOnes\0"
       VALUE "FileDescription", "{description}\0"
       VALUE "FileVersion", "{version}\0"
       VALUE "ProductName", "OnesDM\0"

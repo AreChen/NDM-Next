@@ -61,7 +61,7 @@ Var UpdateMode
 SetCompressor /SOLID lzma
 VIProductVersion "${NDM_VERSION_QUAD}"
 VIAddVersionKey "ProductName" "OnesDM"
-VIAddVersionKey "CompanyName" "OnesDM contributors"
+VIAddVersionKey "CompanyName" "PlayOnes"
 VIAddVersionKey "FileDescription" "OnesDM installer"
 VIAddVersionKey "FileVersion" "${NDM_VERSION}"
 VIAddVersionKey "ProductVersion" "${NDM_VERSION}"

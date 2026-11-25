@@ -65,7 +65,7 @@ test('send notices expire and restore the compact button; disabling clears pendi
   assert.equal(t.timers.size,1);
   assert([...t.timers.values()][0].delay<=1500);
   t.expire();await t.flush();assert.equal(button.classList.contains('notice'),false);
-  assert.equal(button.textContent,'↓ NDM');
+  assert.equal(button.textContent,'↓ ODM');
   t.reject();await button.events.click({preventDefault(){},stopPropagation(){}});
   assert.equal(t.timers.size,1);t.disable();await t.flush();assert.equal(t.timers.size,0);
 });

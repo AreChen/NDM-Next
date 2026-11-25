@@ -137,7 +137,7 @@
       entry ||= addChip(player, item.id);
       const {pill, button, close} = entry;
       if (!button.disabled && !entry.noticeTimer) {
-        button.textContent = '↓ NDM';
+        button.textContent = '↓ ODM';
         button.title = mediaMessage('download', language) + ' · ' + mediaSizeLabel(item, language);
         button.setAttribute('aria-label', 'OnesDM · ' + button.title);
       }
