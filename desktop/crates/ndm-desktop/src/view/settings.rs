@@ -122,8 +122,33 @@ impl Desktop {
         let (index, icon, title, summary) = group;
         let tone = crate::motion::ThemeTone::current(cx);
         let open = self.settings_open.contains(&index);
-        let has_detail = detail.is_some();
-        let header = div()
+        let header = self.settings_header(
+            (index, icon, title),
+            self.display_text(summary),
+            detail.is_some(),
+            cx,
+        );
+        settings_card(
+            index,
+            header,
+            quick,
+            detail.map(|detail| settings_detail(index, frame, open, detail)),
+            tone,
+        )
+        .into_any_element()
+    }
+
+    fn settings_header(
+        &self,
+        group: (usize, IconName, &'static str),
+        summary: SharedString,
+        disclosure: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let (index, icon, title) = group;
+        let tone = crate::motion::ThemeTone::current(cx);
+        let open = self.settings_open.contains(&index);
+        div()
             .flex()
             .items_center()
             .gap_3()
@@ -157,10 +182,10 @@ impl Desktop {
                             .text_xs()
                             .text_color(rgb(tone.rgb(0x95a5c0, 0x71809a)))
                             .truncate()
-                            .child(self.display_text(summary)),
+                            .child(summary),
                     ),
             )
-            .when(has_detail, |header| {
+            .when(disclosure, |header| {
                 header.child(
                     crate::chrome::icon_button(
                         ("settings-section", index),
@@ -179,15 +204,7 @@ impl Desktop {
                         this.toggle_settings_group(index, window, cx);
                     })),
                 )
-            });
-        settings_card(
-            index,
-            header,
-            quick,
-            detail.map(|detail| settings_detail(index, frame, open, detail)),
-            tone,
-        )
-        .into_any_element()
+            })
     }
 
     pub(super) fn settings_panel(
@@ -556,80 +573,53 @@ impl Desktop {
             frames[1],
             cx,
         );
-        let storage_quick = div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .child(Icon::new(IconName::Folder).small())
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_xs()
-                    .truncate()
-                    .child(self.preferences.download_dir.to_string_lossy().into_owned()),
-            )
-            .child(
-                Button::new("storage-edit")
-                    .small()
-                    .label(self.display_text(self.text("管理", "Manage")))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.toggle_settings_group(STORAGE_GROUP, window, cx);
-                    })),
+        let form = |index, icon, title, summary, body, cx: &mut Context<Self>| {
+            let header = self.settings_header((index, icon, title), summary, true, cx);
+            let card = card_surface(index, tone).p_3().child(header);
+            let surface = div()
+                .w_full()
+                .p_3()
+                .rounded_lg()
+                .border_1()
+                .border_color(rgb(tone.rgb(0x354260, 0xdce1f0)))
+                .bg(rgb(tone.rgb(0x151c2c, 0xf8f9fd)))
+                .child(body);
+            let detail = settings_detail(
+                index,
+                frames[index],
+                self.settings_open.contains(&index),
+                surface.into_any_element(),
             );
-        let storage = self.settings_group(
-            (
-                STORAGE_GROUP,
-                IconName::Folder,
-                self.text("存储与缓存", "Storage and cache"),
-                self.text(
-                    "下载目录、缓存位置与自动清理",
-                    "Download folder, cache and cleanup",
-                ),
-            ),
-            storage_quick,
-            Some(self.storage_settings(dark, cx)),
-            frames[STORAGE_GROUP],
+            (card.into_any_element(), detail)
+        };
+        let storage = form(
+            STORAGE_GROUP,
+            IconName::Folder,
+            self.text("存储与缓存", "Storage and cache"),
+            self.preferences
+                .download_dir
+                .to_string_lossy()
+                .into_owned()
+                .into(),
+            self.storage_settings(dark, cx),
             cx,
         );
-        let proxy_quick = div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .child(div().flex_1().min_w_0().text_xs().child(
-                if self.preferences.default_proxy().is_some() {
-                    self.text(
-                        "新任务默认使用已配置代理",
-                        "Configured proxy for new downloads",
-                    )
-                } else {
-                    self.text(
-                        "默认使用系统网络 · 可按任务启用代理",
-                        "System network · optional per-task proxy",
-                    )
-                },
-            ))
-            .child(
-                Button::new("proxy-edit")
-                    .small()
-                    .label(self.display_text(self.text("配置", "Configure")))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.toggle_settings_group(PROXY_GROUP, window, cx);
-                    })),
-            );
-        let proxy = self.settings_group(
-            (
-                PROXY_GROUP,
-                IconName::Globe,
-                self.text("代理与网络", "Proxy and network"),
+        let proxy = form(
+            PROXY_GROUP,
+            IconName::Globe,
+            self.text("代理与网络", "Proxy and network"),
+            self.display_text(if self.preferences.default_proxy().is_some() {
                 self.text(
-                    "按需启用，独立保存认证信息",
-                    "Optional proxy and authentication",
-                ),
-            ),
-            proxy_quick,
-            Some(proxy.into_any_element()),
-            frames[PROXY_GROUP],
+                    "新任务默认使用已配置代理",
+                    "Configured proxy for new downloads",
+                )
+            } else {
+                self.text(
+                    "默认使用系统网络 · 可按任务启用代理",
+                    "System network · optional per-task proxy",
+                )
+            }),
+            proxy.into_any_element(),
             cx,
         );
         let mut utilities = Vec::new();
@@ -720,7 +710,7 @@ impl Desktop {
         panel
             .child(self.ai_panel(frames[plugins::AI_CLIENTS_GROUP], cx))
             .child(settings_row([appearance, downloads], !wide))
-            .child(form_rows(storage, proxy))
+            .child(form_rows(storage, proxy, wide))
             .child(settings_row(utilities, !wide))
             .child(about)
     }
@@ -820,15 +810,29 @@ fn settings_row(cards: impl IntoIterator<Item = AnyElement>, stack: bool) -> Div
         .w_full()
         .flex_shrink_0()
         .flex()
-        .items_start()
+        .items_stretch()
         .gap_3()
-        .when(stack, |row| row.flex_col().items_stretch())
+        .when(stack, |row| row.flex_col())
         .children(cards)
 }
 
-// Keep the form controls in the same rows throughout both reveal directions.
-fn form_rows(storage: AnyElement, proxy: AnyElement) -> Div {
-    settings_row([storage, proxy], true)
+// Keep each form at content width. Only its measured reveal moves the rows below.
+fn form_rows(
+    (storage, storage_detail): (AnyElement, AnyElement),
+    (proxy, proxy_detail): (AnyElement, AnyElement),
+    wide: bool,
+) -> Div {
+    let rows = div().w_full().flex_shrink_0().flex().flex_col();
+    if wide {
+        rows.child(settings_row([storage, proxy], false))
+            .child(storage_detail)
+            .child(proxy_detail)
+    } else {
+        rows.child(storage)
+            .child(storage_detail)
+            .child(div().pt_3().child(proxy))
+            .child(proxy_detail)
+    }
 }
 
 fn settings_card(
@@ -839,35 +843,6 @@ fn settings_card(
     tone: impl Into<crate::motion::ThemeTone>,
 ) -> Stateful<Div> {
     let tone = tone.into();
-    if matches!(index, PROXY_GROUP | STORAGE_GROUP) {
-        let summary = div()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap_3()
-            .child(
-                div()
-                    .flex_basis(px(240.))
-                    .flex_grow(1.)
-                    .min_w_0()
-                    .child(header),
-            )
-            .child(
-                div()
-                    .flex_basis(px(320.))
-                    .flex_grow(1.)
-                    .min_w_0()
-                    .child(quick),
-            );
-        return card_surface(index, tone)
-            .w_full()
-            .flex_none()
-            .flex()
-            .flex_col()
-            .p_3()
-            .child(summary)
-            .children(detail);
-    }
     card_surface(index, tone)
         .p_3()
         .flex()
@@ -1197,12 +1172,7 @@ mod tests {
                             .debug_selector(|| "choose".into())
                             .label(if self.zh { "选择" } else { "Choose folder" }),
                     ),
-                Some(super::settings_detail(
-                    6,
-                    frame,
-                    self.open,
-                    div().h(px(100.)).child("Cache settings").into_any_element(),
-                )),
+                None,
                 self.dark,
             )
             .into_any_element();
@@ -1221,12 +1191,28 @@ mod tests {
                 self.dark,
             )
             .into_any_element();
+            let detail = super::settings_detail(
+                6,
+                frame,
+                self.open,
+                div()
+                    .w_full()
+                    .h(px(100.))
+                    .debug_selector(|| "storage-body".into())
+                    .child("Cache settings")
+                    .into_any_element(),
+            );
             div()
                 .size_full()
                 .p_4()
                 .flex()
                 .flex_col()
-                .child(super::form_rows(first, second))
+                .child(super::form_rows(
+                    (first, detail),
+                    (second, div().into_any_element()),
+                    super::two_columns(window.viewport_size().width.as_f32() - 32.),
+                ))
+                .child(div().h(px(1.)).debug_selector(|| "following-row".into()))
         }
     }
 
@@ -1241,7 +1227,7 @@ mod tests {
             dark: true,
             zh: true,
         });
-        for width in [548., 788., 1288.] {
+        for width in [548., 791., 792., 840., 1288.] {
             cx.simulate_resize(size(px(width), px(500.)));
             for dark in [true, false] {
                 for zh in [true, false] {
@@ -1257,9 +1243,28 @@ mod tests {
                         cx.update(|window, cx| window.draw(cx).clear(cx));
                         let first = cx.debug_bounds("settings-card-6").unwrap();
                         let second = cx.debug_bounds("settings-card-2").unwrap();
-                        assert_eq!(first.left(), second.left());
+                        let wide = width >= 792.;
+                        let following = cx.debug_bounds("following-row").unwrap().top();
                         assert_eq!(first.size.width, second.size.width);
-                        assert_eq!(second.top(), first.bottom() + px(12.));
+                        if wide {
+                            assert_eq!(second.left(), first.right() + px(12.));
+                            assert_eq!(first.top(), second.top());
+                            assert_eq!(first.bottom(), second.bottom());
+                        } else {
+                            assert_eq!(first.left(), second.left());
+                            if !open {
+                                assert_eq!(second.top(), first.bottom() + px(12.));
+                            }
+                        }
+                        if open {
+                            let body = cx.debug_bounds("storage-body").unwrap();
+                            assert_eq!(body.left(), first.left());
+                            assert_eq!(body.right(), second.right());
+                            assert_eq!(body.top(), first.bottom() + px(12.));
+                            if !wide {
+                                assert_eq!(second.top(), body.bottom() + px(12.));
+                            }
+                        }
                         for (id, card) in
                             [("choose", first), ("expand", first), ("configure", second)]
                         {
@@ -1269,33 +1274,25 @@ mod tests {
                             assert!(button.bottom() <= card.bottom() - px(12.), "{id}");
                         }
                         let toggle = cx.debug_bounds("expand").unwrap();
-                        let quick = cx.debug_bounds("choose").unwrap();
-                        if width == 548. {
-                            assert!(quick.top() >= toggle.bottom());
-                        } else {
-                            assert!(quick.top() < toggle.bottom() && toggle.top() < quick.bottom());
-                        }
                         cx.simulate_click(toggle.center(), Modifiers::default());
                         cx.update(|window, cx| window.draw(cx).clear(cx));
-                        assert_eq!(
-                            cx.debug_bounds("settings-card-2").unwrap().origin,
-                            second.origin
-                        );
+                        assert_eq!(cx.debug_bounds("following-row").unwrap().top(), following);
                         cx.background_executor
                             .advance_clock(std::time::Duration::from_millis(100));
                         cx.update(|window, cx| window.draw(cx).clear(cx));
-                        let middle = cx.debug_bounds("settings-card-2").unwrap();
+                        let middle = cx.debug_bounds("following-row").unwrap().top();
                         cx.background_executor
                             .advance_clock(std::time::Duration::from_millis(150));
                         cx.update(|window, cx| window.draw(cx).clear(cx));
-                        let end = cx.debug_bounds("settings-card-2").unwrap();
-                        assert_eq!(end.size, second.size);
-                        assert_eq!(middle.left(), second.left());
-                        assert_eq!(end.left(), second.left());
+                        let end = cx.debug_bounds("following-row").unwrap().top();
+                        assert_eq!(cx.debug_bounds("settings-card-6").unwrap(), first);
+                        if wide {
+                            assert_eq!(cx.debug_bounds("settings-card-2").unwrap(), second);
+                        }
                         if open {
-                            assert!(end.top() < middle.top() && middle.top() < second.top());
+                            assert!(end < middle && middle < following);
                         } else {
-                            assert!(second.top() < middle.top() && middle.top() < end.top());
+                            assert!(following < middle && middle < end);
                         }
                         cx.update(|_, cx| assert_eq!(view.read(cx).open, !open));
                     }
