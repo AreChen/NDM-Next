@@ -6,12 +6,12 @@
   <p>Built with Rust and GPUI for Windows, macOS, and Linux, with a memory-safe core, pluggable download engines, and optional AI integration.</p>
   <p>Download torrents, magnet links, and streaming media with optional engines from the <a href="#plugins-and-ai">desktop plugin market</a>.</p>
   <p>
-    <a href="https://github.com/AreChen/onesdm/releases/latest"><img src="https://img.shields.io/github/v/release/AreChen/onesdm?label=download&amp;color=7c61ff" alt="Latest release"></a>
+    <a href="https://github.com/AreChen/OnesDM/releases/latest"><img src="https://img.shields.io/github/v/release/AreChen/OnesDM?label=download&amp;color=7c61ff" alt="Latest release"></a>
     <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-168aad" alt="Windows, macOS, and Linux">
-    <a href="https://github.com/AreChen/onesdm/actions/workflows/release.yml"><img src="https://github.com/AreChen/onesdm/actions/workflows/release.yml/badge.svg" alt="Desktop release build"></a>
-    <a href="LICENSE"><img src="https://img.shields.io/github/license/AreChen/onesdm?color=34b8a3" alt="MIT license"></a>
+    <a href="https://github.com/AreChen/OnesDM/actions/workflows/release.yml"><img src="https://github.com/AreChen/OnesDM/actions/workflows/release.yml/badge.svg" alt="Desktop release build"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/github/license/AreChen/OnesDM?color=34b8a3" alt="MIT license"></a>
   </p>
-  <p><a href="https://github.com/AreChen/onesdm/releases/latest"><strong>Download</strong></a> · <a href="#features">Features</a> · <a href="#screenshots">Screenshots</a> · <a href="#browser-extension">Browser extension</a> · <a href="README.zh-CN.md">简体中文</a></p>
+  <p><a href="https://github.com/AreChen/OnesDM/releases/latest"><strong>Download</strong></a> · <a href="#features">Features</a> · <a href="#screenshots">Screenshots</a> · <a href="#browser-extension">Browser extension</a> · <a href="README.zh-CN.md">简体中文</a></p>
 </div>
 
 ## Features
@@ -24,7 +24,7 @@
 
 ## Download
 
-Get your installer from [**GitHub Releases →**](https://github.com/AreChen/onesdm/releases/latest).
+Get your installer from [**GitHub Releases →**](https://github.com/AreChen/OnesDM/releases/latest).
 
 | Platform | Package | Install |
 | :--- | :--- | :--- |
@@ -33,7 +33,7 @@ Get your installer from [**GitHub Releases →**](https://github.com/AreChen/one
 | macOS 12+ · Intel | `OnesDM-*-macos-x64.dmg` | Drag **OnesDM** to **Applications**. |
 | Linux · x86-64 | `OnesDM-*-linux-x64.tar.gz` | Install the [Linux dependencies](desktop/packaging/linux/README.md), extract the archive, and run `ndm-desktop`. |
 
-**Upgrading from NDM Next 0.6.8** After the repository rename, the 0.6.8 updater skips packages at the new address. Download the package for your platform from the [OnesDM 0.7.0 release](https://github.com/AreChen/onesdm/releases/tag/desktop-v0.7.0). Finish or pause your downloads, quit NDM Next completely, then install and open OnesDM as shown above. Keep your existing profile to retain your download history, settings and installed plugins. Users on 0.6.9 can upgrade in the app.
+**Upgrading from 0.6.8, 0.6.9 or 0.7.0** These versions skip packages at the current GitHub address. Finish or pause your downloads, quit the app completely, and install 0.7.1 or later once using the instructions above. Keep your existing profile to retain your download history, settings and plugins. From 0.7.1 onward, the app recognizes updates even if the repository name changes case again. [Download OnesDM](https://github.com/AreChen/OnesDM/releases/latest)
 
 The app checks GitHub for updates. Click **Upgrade** to download a verified package. Windows installs when idle, macOS opens the DMG, and Linux opens the folder containing the archive.
 

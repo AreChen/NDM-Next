@@ -12,6 +12,7 @@ use tokio::io::AsyncReadExt;
 pub(crate) mod macos;
 
 const RELEASES_API: &str = "https://api.github.com/repositories/1456128731/releases?per_page=100";
+const REPOSITORY: &str = "AreChen/OnesDM";
 const MAX_RESPONSE: usize = 2 * 1024 * 1024;
 const MAX_INSTALLER: u64 = 256 * 1024 * 1024;
 
@@ -145,6 +146,16 @@ fn asset_name(version: &Version) -> String {
         format!("NDM-Next-Setup-{version}-x64.exe")
     }
 }
+fn official_asset_url(url: &str, version: &Version, name: &str) -> bool {
+    // GitHub canonicalizes repository casing, but tags and filenames are case-sensitive.
+    let suffix = format!("/releases/download/desktop-v{version}/{name}");
+    url.strip_prefix("https://github.com/")
+        .and_then(|path| path.strip_suffix(&suffix))
+        .is_some_and(|repo| {
+            repo.eq_ignore_ascii_case(REPOSITORY) || repo.eq_ignore_ascii_case("AreChen/NDM-Next")
+        })
+}
+
 fn find_update(data: &[u8], current: &Version) -> Result<Option<UpdateRelease>, serde_json::Error> {
     let releases: Vec<Release> = serde_json::from_slice(data)?;
     Ok(releases
@@ -158,17 +169,13 @@ fn find_update(data: &[u8], current: &Version) -> Result<Option<UpdateRelease>, 
                 return None;
             }
             let name = asset_name(&version);
-            let official_asset = |url: &str| {
-                ["NDM-Next", "onesdm"].iter().any(|repo|
-                    url == format!("https://github.com/AreChen/{repo}/releases/download/desktop-v{version}/{name}"))
-            };
             let mut matching = release
                 .assets
                 .into_iter()
                 .filter(|asset| asset.name == name);
             let asset = matching.next()?;
             if matching.next().is_some()
-                || !official_asset(&asset.browser_download_url)
+                || !official_asset_url(&asset.browser_download_url, &version, &name)
                 || asset.size == 0
                 || asset.size > MAX_INSTALLER
             {
@@ -185,7 +192,7 @@ fn find_update(data: &[u8], current: &Version) -> Result<Option<UpdateRelease>, 
         .max_by(|a, b| a.version.cmp(&b.version)))
 }
 pub(crate) fn release_url(version: &Version) -> String {
-    format!("https://github.com/AreChen/NDM-Next/releases/tag/desktop-v{version}")
+    format!("https://github.com/{REPOSITORY}/releases/tag/desktop-v{version}")
 }
 fn trusted_download_url(url: &reqwest::Url) -> bool {
     url.scheme() == "https"

@@ -6,12 +6,12 @@
   <p>使用 Rust 和 GPUI 构建，支持 Windows、macOS 和 Linux，提供内存安全的下载核心、可扩展的下载引擎与可选的 AI 接入。</p>
   <p>通过<a href="#插件与-ai">桌面插件市场</a>安装下载引擎，即可下载种子、磁力链接和流媒体。</p>
   <p>
-    <a href="https://github.com/AreChen/onesdm/releases/latest"><img src="https://img.shields.io/github/v/release/AreChen/onesdm?label=download&amp;color=7c61ff" alt="最新版本"></a>
+    <a href="https://github.com/AreChen/OnesDM/releases/latest"><img src="https://img.shields.io/github/v/release/AreChen/OnesDM?label=download&amp;color=7c61ff" alt="最新版本"></a>
     <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-168aad" alt="支持 Windows、macOS 和 Linux">
-    <a href="https://github.com/AreChen/onesdm/actions/workflows/release.yml"><img src="https://github.com/AreChen/onesdm/actions/workflows/release.yml/badge.svg" alt="桌面端发布构建"></a>
-    <a href="LICENSE"><img src="https://img.shields.io/github/license/AreChen/onesdm?color=34b8a3" alt="MIT 许可证"></a>
+    <a href="https://github.com/AreChen/OnesDM/actions/workflows/release.yml"><img src="https://github.com/AreChen/OnesDM/actions/workflows/release.yml/badge.svg" alt="桌面端发布构建"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/github/license/AreChen/OnesDM?color=34b8a3" alt="MIT 许可证"></a>
   </p>
-  <p><a href="https://github.com/AreChen/onesdm/releases/latest"><strong>下载应用</strong></a> · <a href="#功能">功能</a> · <a href="#界面截图">界面截图</a> · <a href="#浏览器扩展">浏览器扩展</a> · <a href="README.md">English</a></p>
+  <p><a href="https://github.com/AreChen/OnesDM/releases/latest"><strong>下载应用</strong></a> · <a href="#功能">功能</a> · <a href="#界面截图">界面截图</a> · <a href="#浏览器扩展">浏览器扩展</a> · <a href="README.md">English</a></p>
 </div>
 
 ## 功能
@@ -24,7 +24,7 @@
 
 ## 下载
 
-前往 [**GitHub Releases 获取安装包 →**](https://github.com/AreChen/onesdm/releases/latest)。
+前往 [**GitHub Releases 获取安装包 →**](https://github.com/AreChen/OnesDM/releases/latest)。
 
 | 平台 | 安装包 | 安装方式 |
 | :--- | :--- | :--- |
@@ -33,7 +33,7 @@
 | macOS 12+ · Intel | `OnesDM-*-macos-x64.dmg` | 将 **OnesDM** 拖入 **Applications**。 |
 | Linux · x86-64 | `OnesDM-*-linux-x64.tar.gz` | 安装 [Linux 运行依赖](desktop/packaging/linux/README.md)，解压并运行 `ndm-desktop`。 |
 
-**从 NDM Next 0.6.8 升级**　仓库更名后，0.6.8 的应用内更新器会跳过新地址的安装包。请从 [OnesDM 0.7.0 发布页](https://github.com/AreChen/onesdm/releases/tag/desktop-v0.7.0) 下载对应平台的安装包，等待下载完成或暂停任务后完全退出旧版，再按上表直接安装并启动 OnesDM。保留原用户数据即可继续使用下载记录、设置和已安装插件。已装 0.6.9 的用户可在应用内升级。
+**从 0.6.8、0.6.9 或 0.7.0 升级**　这些版本的更新器会跳过当前 GitHub 地址下的安装包。请先暂停或完成下载，完全退出旧版，再按上表手动安装一次 0.7.1 或更新版本。保留原用户数据即可继续使用下载记录、设置和插件。从 0.7.1 起，即使仓库名再次调整大小写，应用也能识别后续更新。[下载 OnesDM](https://github.com/AreChen/OnesDM/releases/latest)
 
 应用通过 GitHub 检查更新。点击**升级**下载并校验安装包。Windows 在空闲时安装，macOS 打开 DMG，Linux 打开压缩包所在目录。
 

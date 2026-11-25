@@ -17,16 +17,49 @@ fn select(releases: Value) -> Option<UpdateRelease> {
 }
 
 #[test]
-fn bridge_accepts_branded_packages_before_and_after_the_repository_rename() {
-    for repo in ["NDM-Next", "onesdm", "other"] {
-        let mut data = release("0.7.0");
-        let asset = &mut data["assets"][0];
-        let name = asset["name"].as_str().unwrap();
-        assert!(name.starts_with("OnesDM"));
-        asset["browser_download_url"] = json!(format!(
-            "https://github.com/AreChen/{repo}/releases/download/desktop-v0.7.0/{name}"
-        ));
-        assert_eq!(select(json!([data])).is_some(), repo != "other");
+fn discovers_the_next_release_across_repository_case_changes() {
+    let current = Version::new(0, 7, 1);
+    let next = Version::new(0, 7, 2);
+    let name = asset_name(&next);
+    for repo in [
+        "AreChen/OnesDM",
+        "AreChen/onesdm",
+        "ARECHEN/OnEsDm",
+        "AreChen/NDM-Next",
+        "arechen/ndm-next",
+    ] {
+        let url = format!("https://github.com/{repo}/releases/download/desktop-v{next}/{name}");
+        let mut data = release(&next.to_string());
+        data["assets"][0]["browser_download_url"] = json!(url);
+        let feed = serde_json::to_vec(&[data]).unwrap();
+        let selected = find_update(&feed, &current).unwrap().unwrap();
+        assert_eq!(selected.version, next);
+        assert_eq!(selected.url, url);
+        assert_eq!(selected.name, name);
+    }
+    assert_eq!(
+        release_url(&current),
+        "https://github.com/AreChen/OnesDM/releases/tag/desktop-v0.7.1"
+    );
+}
+
+#[test]
+fn case_folding_is_limited_to_the_official_repository() {
+    let mut data = release("0.7.1");
+    let name = asset_name(&Version::new(0, 7, 1));
+    let base = "https://github.com/AreChen/OnesDM/releases/download";
+    let url = format!("{base}/desktop-v0.7.1/{name}");
+    for invalid in [
+        url.replace("AreChen", "another-owner"),
+        url.replace("OnesDM/releases", "OnesDM-fork/releases"),
+        url.replace("/releases/", "/Releases/"),
+        url.replace("desktop-v", "Desktop-v"),
+        url.replace("desktop-v0.7.1", "desktop-v0.7.2"),
+        format!("{base}/desktop-v0.7.1/{}", name.to_ascii_lowercase()),
+        format!("{url}?download=1"),
+    ] {
+        data["assets"][0]["browser_download_url"] = json!(invalid);
+        assert!(select(json!([data])).is_none(), "accepted {invalid}");
     }
 }
 

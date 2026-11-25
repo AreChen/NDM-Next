@@ -2,7 +2,7 @@
 
 Ones Download Manager (OnesDM, ODM) is the AI-native download manager from PlayOnes. Any Agent. All Downloads.
 
-**Upgrading from NDM Next 0.6.8** Download the OnesDM 0.7.0 package for your platform from the release assets. Finish or pause your downloads and quit NDM Next completely. On Windows, run `OnesDM.exe` over the existing installation. On macOS, copy `OnesDM.app` to Applications and open it. On Linux, extract the archive into a new folder and run `ndm-desktop` there. The new version uses your existing profile, including download records, settings and installed plugins. Users on 0.6.9 can upgrade in the app.
+**Upgrade notice** The updaters in 0.6.8, 0.6.9 and 0.7.0 skip releases at the current GitHub address. To receive future updates in the app, install OnesDM 0.7.1 or later manually once. Keep your existing profile to preserve download records, settings and plugins. [Download and installation instructions](https://github.com/AreChen/OnesDM/releases/tag/desktop-v0.7.1)
 
 - The desktop, native installer and OnesDM Extension use the new silver-ring icon. Windows setup is published as `OnesDM.exe`.
 - In Settings → Appearance and language, expand the details to choose Classic violet, Silver ring, Ocean, Forest or Sunset coral, or set two custom hex colors. Palettes work with system, light and dark modes.
@@ -13,7 +13,7 @@ Ones Download Manager (OnesDM, ODM) is the AI-native download manager from PlayO
 
 PlayOnes 的 AI 原生高性能下载器更名为 OnesDM，英文全称 Ones Download Manager，简称 ODM。品牌口号为 Any Agent. All Downloads.
 
-**从 NDM Next 0.6.8 升级**　请从本次发布的附件下载对应平台的 OnesDM 0.7.0 安装包。等待下载完成或暂停任务后完全退出旧版。Windows 直接运行 `OnesDM.exe` 覆盖安装。macOS 将 `OnesDM.app` 拖入「应用程序」并打开。Linux 将压缩包解压到新目录，运行其中的 `ndm-desktop`。新版沿用原用户数据，包括下载记录、设置和已安装插件。已装 0.6.9 的用户可在应用内升级。
+**升级提示**　0.6.8、0.6.9 和 0.7.0 的更新器会跳过当前 GitHub 地址下的版本。请手动安装一次 OnesDM 0.7.1 或更新版本，即可在应用内接收后续更新。保留原用户数据即可继续使用下载记录、设置和插件。[下载与安装说明](https://github.com/AreChen/OnesDM/releases/tag/desktop-v0.7.1)
 
 - 桌面、安装包与 OnesDM Extension 采用银环图标，Windows 安装包名为 `OnesDM.exe`。
 - 展开「设置 → 外观与语言」，可选经典紫、银环黑白、海蓝、森林绿、落日珊瑚，也可输入两种十六进制颜色自定义配色。所有配色均可搭配跟随系统、亮色或暗色。
