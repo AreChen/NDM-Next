@@ -193,6 +193,28 @@ impl Server {
                 &[],
             ),
             tool(
+                "ndm_get_settings",
+                "Read current desktop preferences, download limits and whether a saved proxy is available. Credentials are never returned.",
+                json!({}),
+                &[],
+            ),
+            tool(
+                "ndm_set_settings",
+                "Change only the desktop-wide preferences the user requested. Returns the saved settings. Existing transfers retain their options. For concurrency use ndm_set_download_limits.",
+                json!({
+                    "speed_limit_kib_s":{"type":"integer","minimum":0,"maximum":1000000,"description":"KiB/s; zero is unlimited"},
+                    "user_agent":{"type":"string","maxLength":1024,"description":"Empty restores the default Chrome UA"},
+                    "download_directory":{"type":"string","description":"Absolute folder for new tasks. Empty restores the system downloads folder."},
+                    "cache_retention_days":{"type":"integer","minimum":0,"maximum":3650,"description":"Zero disables automatic cleanup"},
+                    "auto_resume":{"type":"boolean"},"auto_update":{"type":"boolean","description":"Automatically check for updates"},"ui_animations":{"type":"boolean"},
+                    "theme":{"type":"string","enum":["system","light","dark"]},"language":{"type":"string","enum":["zh-CN","en"]},
+                    "download_route":{"type":"string","enum":["inherit","system_route","tun_direct","direct"]},
+                    "tun_direct_exit":{"type":"string","description":"Local DIRECT HTTP port or Linux/macOS interface name. Empty clears the exit."},
+                    "use_saved_proxy":{"type":"boolean","description":"Enable an already configured application proxy for new downloads"}
+                }),
+                &[],
+            ),
+            tool(
                 "ndm_get_download_limits",
                 "Read the application-wide task limit and default thread count.",
                 json!({}),
@@ -304,6 +326,21 @@ impl Server {
                     "tun_direct_exit":exit.map(|e| e.route()),
                     "interface_binding_supported":cfg!(any(target_os="linux",target_os="macos"))}),
                 )
+            }
+            "ndm_get_settings" => {
+                let args: ndm_core::SettingsPatch = parse_arguments(args)?;
+                if args != Default::default() {
+                    return Err("Reading settings takes no arguments.");
+                }
+                self.desktop_settings(None)
+            }
+            "ndm_set_settings" => {
+                let patch: ndm_core::SettingsPatch = parse_arguments(args)?;
+                if patch == Default::default() {
+                    return Err("Specify at least one desktop preference.");
+                }
+                patch.validate()?;
+                self.desktop_settings(Some(patch))
             }
             "ndm_get_download_limits" => {
                 let limits = self
@@ -497,6 +534,53 @@ impl Server {
         }))
     }
 
+    fn desktop_settings(
+        &self,
+        patch: Option<ndm_core::SettingsPatch>,
+    ) -> Result<Value, &'static str> {
+        self.ensure_desktop()?;
+        if let Some(folder) = patch
+            .as_ref()
+            .and_then(|p| p.download_directory.as_ref())
+            .filter(|s| !s.is_empty())
+        {
+            std::fs::create_dir_all(folder)
+                .and_then(|()| tempfile::tempfile_in(folder))
+                .map_err(|_| "Download directory is not writable.")?;
+        }
+        let id = self
+            .store
+            .request_settings(patch.as_ref())
+            .map_err(|_| "Could not submit settings request.")?;
+        self.wake();
+        let start = Instant::now();
+        let result = loop {
+            match self.store.settings_reply(id) {
+                Ok(Some(reply)) if reply.get("error").is_some() => {
+                    break Err(match reply["error"].as_str() {
+                        Some("proxy") => "Configure a saved proxy in NDM Next first.",
+                        Some("tun") => "Set a TUN direct exit before selecting that route.",
+                        Some("disabled") => "AI integration is disabled.",
+                        Some("busy") => {
+                            "Storage settings are busy. Retry after the operation finishes."
+                        }
+                        _ => "NDM Next could not apply the preferences.",
+                    });
+                }
+                Ok(Some(reply)) => break Ok(reply),
+                Err(_) => break Err("Could not read desktop settings reply."),
+                _ if start.elapsed() >= Duration::from_secs(15) => {
+                    break Err(
+                        "Desktop did not acknowledge the request. Read settings before retrying.",
+                    );
+                }
+                _ => std::thread::sleep(Duration::from_millis(50)),
+            }
+        };
+        let _ = self.store.forget_settings_request(id);
+        result
+    }
+
     fn ensure_desktop(&self) -> Result<(), &'static str> {
         if ndm_core::wait_for_desktop_ready(&self.profile, Duration::ZERO).unwrap_or(false) {
             return Ok(());
@@ -616,7 +700,10 @@ fn task_json(task: &Task) -> Value {
             ndm_core::http_filename_hint(&reqwest::Url::parse(&task.request.url).ok()?)
                 .map(Into::into)
         });
-    let http = task.progress.as_ref().and_then(|progress| progress.http);
+    let http = task
+        .progress
+        .as_ref()
+        .and_then(|progress| progress.http.as_ref());
     let error = (task.state == TaskState::Failed).then(|| {
         let code = http.and_then(|details| details.failure).unwrap_or_else(|| {
             task.error

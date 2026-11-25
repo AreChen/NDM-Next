@@ -105,28 +105,47 @@ fn modelscope_listing(source: &Url) -> Option<(Url, String)> {
         return None;
     }
     let parts: Vec<_> = source.path_segments()?.collect();
-    let ["api", "v1", "models", owner, repo, "repo"] = parts.as_slice() else {
-        return None;
-    };
-    if [owner, repo].iter().any(|s| {
-        s.is_empty()
-            || !s
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
-    }) {
-        return None;
-    }
-    let mut path = None;
-    let mut revision = None;
-    for (key, value) in source.query_pairs() {
-        match key.as_ref() {
-            "FilePath" if path.is_none() => path = Some(value.into_owned()),
-            "Revision" if revision.is_none() => revision = Some(value.into_owned()),
-            "FilePath" | "Revision" => return None,
-            _ => {}
+    let (owner, repo, path, revision) = match parts.as_slice() {
+        ["api", "v1", "models", owner, repo, "repo"] => {
+            let mut path = None;
+            let mut revision = None;
+            for (key, value) in source.query_pairs() {
+                match key.as_ref() {
+                    "FilePath" if path.is_none() => path = Some(value.into_owned()),
+                    "Revision" if revision.is_none() => revision = Some(value.into_owned()),
+                    "FilePath" | "Revision" => return None,
+                    _ => {}
+                }
+            }
+            (
+                *owner,
+                *repo,
+                path?,
+                revision.unwrap_or_else(|| "master".into()),
+            )
         }
+        ["models", owner, repo, "resolve", revision, tail @ ..] if !tail.is_empty() => {
+            let decode = |s: &str| {
+                percent_encoding::percent_decode_str(s)
+                    .decode_utf8()
+                    .ok()
+                    .map(|s| s.into_owned())
+            };
+            (*owner, *repo, decode(&tail.join("/"))?, decode(revision)?)
+        }
+        _ => return None,
+    };
+    if revision.is_empty()
+        || revision.chars().any(char::is_control)
+        || [owner, repo].iter().any(|s| {
+            s.is_empty()
+                || !s
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+        })
+    {
+        return None;
     }
-    let path = path?;
     if path.is_empty()
         || path.len() > 4096
         || path.chars().any(char::is_control)
@@ -135,13 +154,13 @@ fn modelscope_listing(source: &Url) -> Option<(Url, String)> {
         return None;
     }
     let mut listing = source.clone();
-    listing.path_segments_mut().ok()?.push("files");
+    listing.set_path(&format!("/api/v1/models/{owner}/{repo}/repo/files"));
     listing.set_query(None);
     listing.set_fragment(None);
     listing
         .query_pairs_mut()
         .append_pair("Root", path.rsplit_once('/').map_or("", |p| p.0))
-        .append_pair("Revision", revision.as_deref().unwrap_or("master"))
+        .append_pair("Revision", &revision)
         .append_pair("Recursive", "false");
     Some((listing, path))
 }
@@ -264,6 +283,11 @@ mod tests {
         assert_eq!(
             listing.as_str(),
             "https://www.modelscope.cn/api/v1/models/Org/Repo/repo/files?Root=models&Revision=dev%2Fv2&Recursive=false"
+        );
+        let resolve = Url::parse("https://www.modelscope.cn/models/Org/Repo/resolve/dev%2Fv2/models/vae.bin?token=secret").unwrap();
+        assert_eq!(
+            modelscope_listing(&resolve),
+            Some((listing.clone(), path.clone()))
         );
         let digest = "01".repeat(32);
         let listing = json!({"Code":200,"Data":{"Files":[{"Path":"other/vae.bin","Type":"blob","Size":4,"Sha256":"02".repeat(32)},{"Path":"models/vae.bin","Type":"blob","Size":4,"Sha256":digest}]}});

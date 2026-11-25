@@ -404,7 +404,11 @@ impl Render for ProgressWindow {
                         self.text("活动连接", "Active connections")
                     } else {
                         use ndm_core::HttpRangeMode::*;
-                        match self.snapshot.as_ref().and_then(|p| p.http?.range_mode) {
+                        match self
+                            .snapshot
+                            .as_ref()
+                            .and_then(|p| p.http.as_ref()?.range_mode)
+                        {
                             Some(ConnectionLimit) => self.text(
                                 "活动分段（任务连接数上限为 1）",
                                 "Active segments (task limit is 1)",

@@ -10,6 +10,7 @@ use std::{
     time::Duration,
 };
 
+use crate::diagnostics::{SegmentFailure, SegmentIssue};
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use reqwest::{
     Client, Response, StatusCode,
@@ -240,7 +241,7 @@ impl DownloadProgress {
                 })
                 .collect(),
             peers: *self.0.peers.read().unwrap(),
-            http: *self.0.http.read().unwrap(),
+            http: self.0.http.read().unwrap().clone(),
             activity: None,
         }
     }
@@ -438,11 +439,12 @@ struct HttpTrace<'a> {
     routing: &'a Routing,
     details: HttpDiagnostics,
     linked_sha256: Option<Sha256Bytes>,
+    retries: u32,
 }
 
 impl HttpTrace<'_> {
     fn record(&self) {
-        *self.progress.0.http.write().unwrap() = Some(self.details);
+        *self.progress.0.http.write().unwrap() = Some(self.details.clone());
     }
 
     fn stage(&mut self, stage: HttpStage) {
@@ -461,25 +463,34 @@ impl HttpTrace<'_> {
         self.details.redirect_count = 0;
         self.details.effective_proxy = None;
         self.stage(stage);
-        send_observed(client, builder, cancel, |url, response, redirects| {
-            let status = response.map(Response::status);
-            if stage == HttpStage::RangeProbe
-                && let Some(response) = response.filter(|r| r.status().is_redirection())
-                && let Some(digest) = repository::hf_lfs_digest(url, response.headers())
-            {
-                self.linked_sha256 = Some(digest);
-            }
-            self.details.stage = if status.is_some_and(|status| status.is_redirection()) {
-                HttpStage::Redirect
-            } else {
-                stage
-            };
-            self.details.http_status = status.map(|status| status.as_u16());
-            self.details.redirect_count = redirects;
-            self.details.effective_proxy = self.routing.for_url(url);
-            self.record();
-        })
-        .await
+        let mut retries = 0;
+        let result = send_observed(
+            client,
+            builder,
+            cancel,
+            &mut retries,
+            |url, response, redirects| {
+                let status = response.map(Response::status);
+                if stage == HttpStage::RangeProbe
+                    && let Some(response) = response.filter(|r| r.status().is_redirection())
+                    && let Some(digest) = repository::hf_lfs_digest(url, response.headers())
+                {
+                    self.linked_sha256 = Some(digest);
+                }
+                self.details.stage = if status.is_some_and(|status| status.is_redirection()) {
+                    HttpStage::Redirect
+                } else {
+                    stage
+                };
+                self.details.http_status = status.map(|status| status.as_u16());
+                self.details.redirect_count = redirects;
+                self.details.effective_proxy = self.routing.for_url(url);
+                self.record();
+            },
+        )
+        .await;
+        self.retries += retries;
+        result
     }
 }
 
@@ -499,18 +510,6 @@ struct ResumeManifest {
 enum RangeValidator {
     Etag(String),
     Digest { sha256: Sha256Bytes },
-}
-
-impl RangeValidator {
-    fn accepts(&self, response: &Response, resource_url: &str) -> bool {
-        match self {
-            Self::Etag(etag) => {
-                response.url().as_str() == resource_url
-                    && strong_etag(response.headers()).as_ref() == Some(etag)
-            }
-            Self::Digest { .. } => true, // Every assembled byte is checked before publication.
-        }
-    }
 }
 
 impl ResumeManifest {
@@ -608,6 +607,7 @@ async fn download_http_with_progress(
         routing: &routing,
         details: HttpDiagnostics::default(),
         linked_sha256: None,
+        retries: 0,
     };
     trace.record();
     let client = match context.client {
@@ -1108,13 +1108,14 @@ pub(crate) async fn send(
     builder: reqwest::RequestBuilder,
     cancel: &CancellationToken,
 ) -> Result<Response> {
-    send_observed(client, builder, cancel, |_, _, _| {}).await
+    send_observed(client, builder, cancel, &mut 0, |_, _, _| {}).await
 }
 
 async fn send_observed(
     client: &Client,
     builder: reqwest::RequestBuilder,
     cancel: &CancellationToken,
+    retries: &mut u32,
     mut observe: impl FnMut(&reqwest::Url, Option<&Response>, u8),
 ) -> Result<Response> {
     let mut request = builder.build().map_err(network)?;
@@ -1122,7 +1123,7 @@ async fn send_observed(
         let previous = request.url().clone();
         let mut next_request = request.try_clone().ok_or(Error::InvalidHttpResponse)?;
         observe(&previous, None, redirects);
-        let response = send_with_retries(client, &request, cancel).await?;
+        let response = send_with_retries(client, &request, cancel, retries).await?;
         observe(response.url(), Some(&response), redirects);
         if !matches!(
             response.status(),
@@ -1168,8 +1169,12 @@ async fn send_with_retries(
     client: &Client,
     request: &reqwest::Request,
     cancel: &CancellationToken,
+    retries: &mut u32,
 ) -> Result<Response> {
     for attempt in 0..3 {
+        if attempt > 0 {
+            *retries += 1;
+        }
         let outgoing = request.try_clone().ok_or(Error::InvalidHttpResponse)?;
         let response = tokio::select! {
             biased;
@@ -1268,9 +1273,46 @@ impl RangeSource<'_> {
                 segment_trace.details.stage = HttpStage::Segment;
                 segment_trace.details.http_status = None;
                 transfers.push(async move {
+                    segment_trace.retries = 0;
+                    let mut issue = SegmentFailure {
+                        index,
+                        start: range.start,
+                        end: range.end - 1,
+                        expected_total: self.manifest.total,
+                        response_range: None,
+                        content_length: None,
+                        strong_etag: false,
+                        etag_matches: None,
+                        final_url_matches: None,
+                        effective_proxy: None,
+                        retries: 0,
+                        redirects: 0,
+                        http_status: None,
+                        stage: HttpStage::Segment,
+                        issue: SegmentIssue::Request,
+                        error: DownloadFailure::DownloadFailed,
+                    };
                     let result = self
-                        .fetch(part, range, &segments[index], &mut segment_trace)
+                        .fetch(
+                            part,
+                            range,
+                            &segments[index],
+                            &mut segment_trace,
+                            &mut issue,
+                        )
                         .await;
+                    if !matches!(result, Ok(RangeOutcome::Complete)) {
+                        issue.retries = segment_trace.retries;
+                        issue.http_status = segment_trace.details.http_status;
+                        issue.redirects = segment_trace.details.redirect_count;
+                        issue.stage = segment_trace.details.stage;
+                        issue.effective_proxy = segment_trace.details.effective_proxy;
+                        issue.error = result
+                            .as_ref()
+                            .err()
+                            .map_or(DownloadFailure::HttpStatus, DownloadFailure::from_error);
+                        segment_trace.details.segment_failure = Some(Box::new(issue));
+                    }
                     (index, result, segment_trace.details)
                 });
             }
@@ -1328,6 +1370,7 @@ impl RangeSource<'_> {
         range: std::ops::Range<u64>,
         segment: &Arc<SegmentState>,
         trace: &mut HttpTrace<'_>,
+        issue: &mut SegmentFailure,
     ) -> Result<RangeOutcome> {
         let progress = trace.progress;
         let length = range.end - range.start;
@@ -1347,6 +1390,7 @@ impl RangeSource<'_> {
             present = 0;
         }
         if present != segment.downloaded.load(Ordering::Relaxed) {
+            issue.issue = SegmentIssue::LocalOffset;
             return Err(Error::InvalidHttpResponse);
         }
         if present == length {
@@ -1360,6 +1404,15 @@ impl RangeSource<'_> {
                 return Ok(RangeOutcome::Complete);
             }
             let range_start = range.start + present;
+            issue.start = range_start;
+            issue.response_range = None;
+            issue.content_length = None;
+            issue.strong_etag = false;
+            issue.etag_matches = None;
+            issue.final_url_matches = None;
+            if attempt > 0 {
+                trace.retries += 1;
+            }
             let mut request = self
                 .client
                 .get(self.url)
@@ -1371,29 +1424,48 @@ impl RangeSource<'_> {
             let response = trace
                 .send(HttpStage::Segment, self.client, request, self.cancel)
                 .await?;
+            issue.response_range = response
+                .headers()
+                .get(header::CONTENT_RANGE)
+                .and_then(|v| v.to_str().ok())
+                .and_then(parse_content_range);
+            issue.content_length = response
+                .headers()
+                .get(header::CONTENT_LENGTH)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse().ok());
+            let etag = strong_etag(response.headers());
+            issue.strong_etag = etag.is_some();
+            if let RangeValidator::Etag(expected) = &self.manifest.validator {
+                issue.etag_matches = Some(etag.as_ref() == Some(expected));
+                issue.final_url_matches =
+                    Some(response.url().as_str() == self.manifest.resource_url);
+            }
             if response.status() == StatusCode::TOO_MANY_REQUESTS
                 && !response.headers().contains_key(header::RETRY_AFTER)
             {
+                issue.issue = SegmentIssue::HttpStatus;
                 return Ok(RangeOutcome::RateLimited);
             }
-            if !matches!(
-                response.status(),
-                StatusCode::PARTIAL_CONTENT | StatusCode::OK | StatusCode::RANGE_NOT_SATISFIABLE
-            ) {
-                return Err(Error::HttpStatus(response.status().as_u16()));
+            if response.status() != StatusCode::PARTIAL_CONTENT {
+                if response.status() != StatusCode::OK {
+                    issue.issue = SegmentIssue::HttpStatus;
+                    return Err(Error::HttpStatus(response.status().as_u16()));
+                }
+                issue.issue = SegmentIssue::RangeIgnored;
+                return Err(Error::InvalidHttpResponse);
             }
-            if response.status() != StatusCode::PARTIAL_CONTENT
-                || !self
-                    .manifest
-                    .validator
-                    .accepts(&response, &self.manifest.resource_url)
-                || response
-                    .headers()
-                    .get(header::CONTENT_RANGE)
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(parse_content_range)
-                    != Some((range_start, end, self.manifest.total))
-            {
+            let mismatch = if issue.final_url_matches == Some(false) {
+                Some(SegmentIssue::ResourceChanged)
+            } else if issue.etag_matches == Some(false) {
+                Some(SegmentIssue::EtagMismatch)
+            } else if issue.response_range != Some((range_start, end, self.manifest.total)) {
+                Some(SegmentIssue::ContentRangeMismatch)
+            } else {
+                None
+            };
+            if let Some(reason) = mismatch {
+                issue.issue = reason;
                 trace.stage(HttpStage::IntegrityCheck);
                 return Err(Error::InvalidHttpResponse);
             }
@@ -1431,10 +1503,12 @@ impl RangeSource<'_> {
                     }
                 }
                 Ok(_) => {
+                    issue.issue = SegmentIssue::ShortBody;
                     trace.stage(HttpStage::IntegrityCheck);
                     return Err(Error::InvalidHttpResponse);
                 }
                 Err(Error::InvalidHttpResponse) => {
+                    issue.issue = SegmentIssue::OversizedBody;
                     // The body exceeded its declared range. Its earlier chunks
                     // must not become a trusted prefix on the next resume.
                     file.set_len(present).await?;

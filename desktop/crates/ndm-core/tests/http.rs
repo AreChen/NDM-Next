@@ -242,6 +242,17 @@ async fn digest_bound_ranges_handle_rotating_urls_and_reject_corrupt_bytes() {
                 HttpRangeMode::VerifiedSha256
             })
         );
+        if fallback {
+            let evidence = progress
+                .snapshot()
+                .http
+                .unwrap()
+                .segment_failure
+                .expect("retain failed range after the full transfer");
+            assert_eq!(evidence.http_status, Some(416));
+            assert!(evidence.index < 4 && evidence.start <= evidence.end);
+            assert_eq!(evidence.expected_total, expected.len() as u64);
+        }
         if corrupt {
             assert!(matches!(result, Err(Error::ChecksumMismatch)));
             assert_eq!(progress.snapshot().downloaded, 0);
@@ -271,6 +282,86 @@ fn receiving_ranges(progress: &DownloadProgress) -> usize {
         .iter()
         .filter(|segment| segment.active && segment.downloaded > 0)
         .count()
+}
+
+#[tokio::test]
+#[ignore = "downloads public ModelScope GGUF files; optional NDM_TEST_TUN_DIRECT_PORT for local listener comparison"]
+async fn public_modelscope_resolve_keeps_verified_ranges() {
+    let (mode, exit) = match std::env::var("NDM_TEST_TUN_DIRECT_PORT") {
+        Ok(port) => (
+            ProxyMode::TunDirect,
+            Some(ndm_core::TunEgress::parse(&port).unwrap()),
+        ),
+        Err(_) => (ProxyMode::Inherit, None),
+    };
+    for (file, threads, hash) in [
+        (
+            "Q2_K",
+            2,
+            "8fcd5410874d03ffa430464a8bffdcbf6f53d4ea076544e7850ac3baaa1edc41",
+        ),
+        (
+            "Q4_0",
+            2,
+            "5ada59352f1e9e899d3cfc860874820bfa51aa5de1ccea346eae5c2bce017815",
+        ),
+        (
+            "Q4_0",
+            16,
+            "5ada59352f1e9e899d3cfc860874820bfa51aa5de1ccea346eae5c2bce017815",
+        ),
+    ] {
+        let dir = TempDir::new().unwrap();
+        let store = Store::open(&dir.path().join("tasks.db")).unwrap();
+        let id = TaskId::new_v4();
+        let req = request(
+            dir.path(),
+            format!(
+                "https://www.modelscope.cn/models/second-state/SmolLM-360M-Instruct-GGUF/resolve/master/SmolLM-360M-Instruct-{file}.gguf"
+            ),
+        );
+        store.prepare(id, &req).unwrap();
+        store.commit(id).unwrap();
+        let progress = DownloadProgress::default();
+        let options = HttpOptions {
+            max_connections: threads,
+            proxy_mode: mode,
+            tun_egress: exit.clone(),
+            ..Default::default()
+        };
+        let transfer = execute_http(
+            &store,
+            id,
+            &options,
+            CancellationToken::new(),
+            progress.clone(),
+        );
+        tokio::pin!(transfer);
+        let mut peak = 0;
+        let path=tokio::time::timeout(Duration::from_secs(240),async {
+                loop {
+                    tokio::select!{
+                        result=&mut transfer=>break result,
+                        _=tokio::time::sleep(Duration::from_millis(20))=>{peak=peak.max(receiving_ranges(&progress));}
+                    }
+                }
+            }).await.unwrap().unwrap();
+        let snap = progress.snapshot();
+        assert_eq!(
+            snap.http.as_ref().unwrap().range_mode,
+            Some(ndm_core::HttpRangeMode::VerifiedSha256),
+            "{:?}",
+            snap.http
+        );
+        assert!(snap.segments.len() >= threads);
+        let mut digest = Sha256::new();
+        std::io::copy(&mut std::fs::File::open(path).unwrap(), &mut digest).unwrap();
+        assert_eq!(hex::encode(digest.finalize()), hash);
+        println!(
+            "{mode:?} {file} {threads} threads: {peak} concurrently receiving, {} verified segments",
+            snap.segments.len()
+        );
+    }
 }
 
 #[tokio::test]

@@ -22,6 +22,10 @@ const RESOURCES: &[(&str, &str)] = &[
         include_str!("../../skills/references/downloads.md"),
     ),
     (
+        "settings.md",
+        include_str!("../../skills/references/settings.md"),
+    ),
+    (
         "diagnostics.md",
         include_str!("../../skills/references/diagnostics.md"),
     ),

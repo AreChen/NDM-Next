@@ -484,6 +484,64 @@ fn batch_and_plugin_window_options_and_tun_routes_are_persisted() {
     desktop.join().unwrap();
 }
 
+#[cfg(unix)]
+#[test]
+fn settings_tools_validate_and_wait_for_the_desktop_reply() {
+    use std::{io::Read, os::unix::net::UnixListener};
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("tasks.db")).unwrap();
+    store.set_ai_enabled(true).unwrap();
+    let socket =
+        UnixListener::bind(ndm_core::unix_instance::socket_path(dir.path()).unwrap()).unwrap();
+    let desktop = std::thread::spawn(move || {
+        for patch_expected in [true, false] {
+            for command in *b"RW" {
+                let (mut stream, _) = socket.accept().unwrap();
+                let mut byte = [0];
+                stream.read_exact(&mut byte).unwrap();
+                assert_eq!(byte, [command]);
+                if command == b'W' {
+                    let req = store.pending_settings().unwrap();
+                    assert_eq!(req.len(), 1);
+                    assert_eq!(
+                        req[0].1.as_ref().map(|p| p.speed_limit_kib_s),
+                        patch_expected.then_some(Some(512))
+                    );
+                    store
+                        .answer_settings(req[0].0, &json!({"speed_limit_kib_s":512}))
+                        .unwrap();
+                }
+                stream.write_all(&[1]).unwrap();
+            }
+        }
+    });
+    let mut mcp = Server::start(dir.path());
+    mcp.call("initialize", json!({}));
+    for args in [
+        json!({"speed_limit_kib_s":1000001}),
+        json!({"proxy_password":"secret"}),
+        json!({}),
+    ] {
+        assert_eq!(
+            mcp.call(
+                "tools/call",
+                json!({"name":"ndm_set_settings","arguments":args})
+            )["isError"],
+            true
+        );
+    }
+    for (name, args) in [
+        ("ndm_set_settings", json!({"speed_limit_kib_s":512})),
+        ("ndm_get_settings", json!({})),
+    ] {
+        assert_eq!(
+            mcp.call("tools/call", json!({"name":name,"arguments":args}))["structuredContent"]["speed_limit_kib_s"],
+            512
+        );
+    }
+    desktop.join().unwrap();
+}
+
 #[test]
 fn managed_skill_refreshes_legacy_installs_and_plugin_guides() {
     let root = tempfile::tempdir().unwrap();

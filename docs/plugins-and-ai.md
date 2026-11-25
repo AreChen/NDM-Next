@@ -89,6 +89,8 @@ settings**. Start with a Chrome, Firefox, or Safari preset and edit it as
 needed. Saving a blank value restores the Chrome for Windows preset. A User-Agent captured
 by the browser extension or specified for an MCP item takes precedence.
 
+Use `ndm_get_settings` and `ndm_set_settings` to read and change desktop preferences through chat. The desktop returns the saved values. The managed Skill includes examples for bandwidth, download folders, startup recovery, TUN routing, appearance and language. Use the switch in each installed plugin’s Settings to control its AI access.
+
 MCP downloads run quietly by default. Follow progress in the main list or with `ndm_task_status`. Set `show_progress: true` on the batch or item for a separate window. Plugin download tools accept it too. Call `ndm_progress_window` with a task ID and `visible: true` or `false` to open or close that window while the task continues.
 
 For built-in HTTP(S), including HLS and DASH, select the default route in **Settings → Proxy and network**, or override it in **New download** or the MCP item's `proxy_mode`. Omit it or use `inherit` for the app default. `system_route` and legacy `direct` skip HTTP proxies and use normal OS routing, including an active TUN. `tun_direct` uses the configured exit for all transfer connections and fails if it is unavailable. Set `user_agent` for an individual UA override.
@@ -182,6 +184,8 @@ AI 客户端可发起下载、查询状态、暂停与恢复。省略保存位�
 在 **设置 → 下载行为 → 更多设置** 可设置默认 User-Agent。可以选用
 Chrome、Firefox 或 Safari 预设，再按需编辑。留空保存会恢复为 Windows 版 Chrome 的 UA。
 浏览器接管请求捕获的 User-Agent 和 MCP 单项指定的值优先于默认值。
+
+可以在聊天中使用 `ndm_get_settings` 和 `ndm_set_settings` 读取或修改主程序设置。桌面端返回保存后的值。Skill 提供限速、下载目录、恢复、路由、外观与语言的配置示例。每个已安装插件的设置列表中可单独切换 AI 接入。
 
 AI 下载默认静默，进度可在主列表或 `ndm_task_status` 查看。批次或单项设置 `show_progress: true` 可弹出独立进度窗，插件专用工具也支持该参数。调用 `ndm_progress_window`，传入任务 ID 和 `visible: true` 或 `false` 可打开或关闭独立窗，任务继续运行。
 

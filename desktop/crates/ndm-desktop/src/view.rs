@@ -27,6 +27,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod ai_settings;
 mod media;
 mod plugins;
 mod settings;
@@ -369,6 +370,7 @@ impl Desktop {
                         crate::instance::Command::Refresh => {
                             let _ = view.update_in(cx, |this, window, cx| {
                                 this.sync_download_limits(window, cx);
+                                this.process_ai_settings(window, cx);
                                 this.discover_new_tasks(cx);
                             });
                         }
@@ -2520,6 +2522,33 @@ mod tray_tests {
                         assert!(this.seen_tasks.contains(&original));
                         assert_eq!(this.tasks.capacity(), 0);
                         assert_eq!(this.matching_tasks.capacity(), 0);
+                        store.set_ai_enabled(true).unwrap();
+                        let patch = ndm_core::SettingsPatch {
+                            speed_limit_kib_s: Some(512),
+                            ui_animations: Some(false),
+                            ..Default::default()
+                        };
+                        let id = store.request_settings(Some(&patch)).unwrap();
+                        this.process_ai_settings(window, cx);
+                        let saved = store.settings_reply(id).unwrap().unwrap();
+                        assert_eq!(saved["speed_limit_kib_s"], 512);
+                        assert_eq!(saved["ui_animations"], false);
+                        assert_eq!(this.speed_input.read(cx).value(), "512");
+                        assert_eq!(
+                            Preferences::load(&this.preferences_path)
+                                .unwrap()
+                                .max_kib_per_second,
+                            512
+                        );
+                        let invalid = ndm_core::SettingsPatch {
+                            speed_limit_kib_s: Some(256),
+                            download_route: Some(ndm_core::ProxyMode::TunDirect),
+                            ..Default::default()
+                        };
+                        let id = store.request_settings(Some(&invalid)).unwrap();
+                        this.process_ai_settings(window, cx);
+                        assert_eq!(store.settings_reply(id).unwrap().unwrap()["error"], "tun");
+                        assert_eq!(this.preferences.max_kib_per_second, 512);
                     });
                     window.draw(cx).clear(cx);
                 })

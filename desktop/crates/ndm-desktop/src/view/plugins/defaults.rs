@@ -17,7 +17,7 @@ impl Desktop {
             .market
             .installed
             .iter()
-            .find(|plugin| plugin.manifest.id == id && !plugin.manifest.options.is_empty())
+            .find(|plugin| plugin.manifest.id == id)
             .cloned()
         {
             let fields = option_fields(
@@ -126,6 +126,15 @@ impl Desktop {
             .to_owned();
         let busy = self.integration.market.busy;
         let blocked = busy || matches!(self.update_state, UpdateState::Installing);
+        let id = editor.plugin.manifest.id.clone();
+        let ai_enabled = self
+            .integration
+            .market
+            .installed
+            .iter()
+            .find(|p| p.manifest.id == id)
+            .is_some_and(|p| p.ai_enabled);
+        let has_options = !editor.fields.is_empty();
         let controls = self.plugin_option_controls(&editor.fields, OptionForm::Defaults, cx);
         let back_label = self.text("返回市场", "Back to market");
         let back_padding = px(8.);
@@ -181,7 +190,13 @@ impl Desktop {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
-                    .child(
+                    .flex().flex_col().gap_2()
+                    .child(crate::view::settings::card_surface(1,tone).flex_none().p_3().flex().items_center().justify_between()
+                        .child(self.text("AI 接入","AI access"))
+                        .child(crate::motion::Switch::new("plugin-ai-access").checked(ai_enabled).disabled(blocked)
+                            .tooltip(self.text("允许 AI 使用此插件","Allow AI to use this plugin"))
+                            .on_click(cx.listener(move |this, enabled, _, cx| this.package_action(PackageAction::AiAccess{id:id.clone(),enabled:*enabled},cx)))))
+                    .when(has_options, |panel| panel.child(
                         crate::view::settings::card_surface(0, tone)
                             .flex()
                             .flex_col()
@@ -200,9 +215,9 @@ impl Desktop {
                                     )),
                             )
                             .child(controls),
-                    ),
+                    )),
             )
-            .child(
+            .when(has_options, |panel| panel.child(
                 div()
                     .flex()
                     .items_center()
@@ -237,7 +252,7 @@ impl Desktop {
                             .label(self.text("保存设置", "Save settings"))
                             .on_click(cx.listener(|this, _, _, cx| this.save_plugin_defaults(cx))),
                     ),
-            )
+            ))
             .into_any_element()
     }
 }

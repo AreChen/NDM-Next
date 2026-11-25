@@ -13,6 +13,7 @@ Use the local `ndm-next` MCP server for downloads. For plugin development, start
 | --- | --- |
 | Download a direct file or repository model, queue a batch, or set a task's destination, connections, proxy or UA | [Download recipes · 下载与批量任务](references/downloads.md) |
 | Choose an engine for a webpage, playlist, magnet or local torrent, or use a plugin option | Call `ndm_list_engines` with the source. Open the matching [installed plugin guide · 已安装插件](references/plugins/index.md). |
+| Configure the main application through chat | Read `ndm_get_settings`, apply the requested changes with `ndm_set_settings`, and use the returned settings to verify them. [Settings recipes · 主程序设置](references/settings.md) |
 | Find, pause or resume a task, explain one active range, or diagnose a failure | [Task status and diagnostics · 状态与排查](references/diagnostics.md) |
 | Create a plugin, add a website or post-processor, reuse yt-dlp, or expose an engine to MCP | [SDK quickstart · 插件开发与验收](references/sdk/quickstart.md) · [SDK protocol and manifest](../../ndm-plugin-sdk/README.md) |
 

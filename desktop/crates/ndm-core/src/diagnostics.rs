@@ -123,17 +123,53 @@ pub enum HttpStage {
 
 /// Shared with the MCP process. It contains status and counters, never URLs,
 /// request headers, server bodies, or proxy addresses and credentials.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HttpDiagnostics {
     pub stage: HttpStage,
     pub http_status: Option<u16>,
     pub range_probe_status: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segment_failure: Option<Box<SegmentFailure>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub range_mode: Option<HttpRangeMode>,
     pub redirect_count: u8,
     pub effective_proxy: Option<ProxyRoute>,
     pub failure: Option<DownloadFailure>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SegmentIssue {
+    Request,
+    HttpStatus,
+    RangeIgnored,
+    ResourceChanged,
+    EtagMismatch,
+    ContentRangeMismatch,
+    ShortBody,
+    OversizedBody,
+    LocalOffset,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SegmentFailure {
+    pub index: usize,
+    pub start: u64,
+    pub end: u64,
+    pub expected_total: u64,
+    pub response_range: Option<(u64, u64, u64)>,
+    pub content_length: Option<u64>,
+    pub strong_etag: bool,
+    pub etag_matches: Option<bool>,
+    pub final_url_matches: Option<bool>,
+    pub effective_proxy: Option<ProxyRoute>,
+    pub retries: u32,
+    pub redirects: u8,
+    pub http_status: Option<u16>,
+    pub stage: HttpStage,
+    pub issue: SegmentIssue,
+    pub error: DownloadFailure,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

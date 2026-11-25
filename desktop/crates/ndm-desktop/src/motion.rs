@@ -376,6 +376,7 @@ impl gpui_kit::RenderOnce for SegmentedControl {
 
 #[derive(gpui_kit::IntoElement)]
 pub(crate) struct Switch {
+    disabled: bool,
     id: &'static str,
     checked: bool,
     label: gpui_kit::SharedString,
@@ -387,12 +388,17 @@ type SwitchChange = dyn Fn(&bool, &mut Window, &mut App);
 impl Switch {
     pub fn new(id: &'static str) -> Self {
         Self {
+            disabled: false,
             id,
             checked: false,
             label: "".into(),
             tooltip: None,
             on_change: None,
         }
+    }
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
     }
     pub fn small(self) -> Self {
         self
@@ -460,7 +466,13 @@ impl gpui_kit::RenderOnce for Switch {
             );
         gpui_kit::base::Switch::new(self.id)
             .checked(self.checked)
-            .accessibility_label(self.label.clone())
+            .disabled(self.disabled)
+            .accessibility_label(if self.label.is_empty() {
+                self.tooltip.clone().unwrap_or_default()
+            } else {
+                self.label.clone()
+            })
+            .when(self.disabled, |s| s.opacity(0.5))
             .flex()
             .items_center()
             .gap_2()
@@ -481,7 +493,9 @@ impl gpui_kit::RenderOnce for Switch {
                     track.tooltip(move |_, cx| cx.new(|_| Tooltip::new(tooltip.clone())).into())
                 },
             ))
-            .child(div().text_xs().child(self.label))
+            .when(!self.label.is_empty(), |s| {
+                s.child(div().text_xs().child(self.label))
+            })
     }
 }
 

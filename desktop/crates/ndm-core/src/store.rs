@@ -10,6 +10,8 @@ use crate::{
     Task, TaskId, TaskOptions, TaskPolicy, TaskState, secrets,
 };
 
+pub(crate) mod settings;
+
 pub struct Store {
     path: PathBuf,
 }
@@ -181,6 +183,10 @@ impl Store {
             );
             CREATE TABLE IF NOT EXISTS ai_integration (
                 singleton INTEGER PRIMARY KEY CHECK(singleton = 1), enabled INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS settings_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, patch BLOB NOT NULL,
+                response BLOB, expires INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS task_commands (
                 sequence INTEGER PRIMARY KEY AUTOINCREMENT,

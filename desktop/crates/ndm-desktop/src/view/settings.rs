@@ -49,6 +49,13 @@ impl Desktop {
         }
         self.clear_notice();
         self.preferences.language = language;
+        self.refresh_language(window, cx);
+        self.save_preferences(cx);
+        cx.notify();
+    }
+
+    pub(super) fn refresh_language(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let language = self.preferences.language;
         self.language_motion = (!cx.reduce_motion()).then(|| gpui_motion_kit::ValueState::new(0.));
         self.language_progress = if self.language_motion.is_some() {
             0.
@@ -74,7 +81,6 @@ impl Desktop {
                 });
             }
         }
-        self.save_preferences(cx);
         cx.notify();
     }
 

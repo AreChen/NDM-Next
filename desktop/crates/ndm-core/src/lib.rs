@@ -34,7 +34,7 @@ pub use dash::{
 };
 pub use diagnostics::{
     DownloadFailure, HttpDiagnostics, HttpRangeMode, HttpStage, ProxyMode, ProxyRoute,
-    TaskActivity, TunEgress, validate_user_agent,
+    SegmentFailure, SegmentIssue, TaskActivity, TunEgress, validate_user_agent,
 };
 pub use ftp::{FtpOptions, FtpSecurity, download_ftp, execute_ftp};
 pub use hls::{
@@ -66,6 +66,7 @@ pub use ndm_plugin_sdk::PeerStats;
 pub use scheduler::{Scheduler, SchedulerEvent, SchedulerOptions, SharingStatus};
 pub use sftp::{SftpAuth, SftpOptions, download_sftp, execute_sftp};
 pub use speed::SpeedMeter;
+pub use store::settings::SettingsPatch;
 pub use store::{PendingSftpHost, Store, TaskCommand};
 pub use task_progress::recover_task_progress;
 

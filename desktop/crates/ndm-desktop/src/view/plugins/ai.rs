@@ -216,7 +216,7 @@ impl Desktop {
                     .child(
                         crate::motion::Switch::new("enable-ai-integration")
                             .checked(self.integration.ai.enabled)
-                            .label(self.text("AI 接入", "AI access"))
+                            .tooltip(self.text("AI 接入", "AI access"))
                             .on_click(move |enabled, _, cx| {
                                 let _ = view.update(cx, |this, cx| {
                                     if this.store.set_ai_enabled(*enabled).is_ok() {
@@ -308,15 +308,6 @@ impl Desktop {
                 _ => self.text("待安装", "Available to install"),
             }
         };
-        let (action, label) = if installed {
-            (Action::Remove, self.text("卸载", "Uninstall"))
-        } else if partial {
-            (Action::Install, self.text("修复", "Repair"))
-        } else if status.is_some() {
-            (Action::Install, self.text("安装", "Install"))
-        } else {
-            (Action::Inspect, self.text("检查", "Check"))
-        };
         let name = if client == Harness::Codex {
             self.text(
                 "OpenAI Codex · CLI 与桌面版",
@@ -351,42 +342,38 @@ impl Desktop {
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(name),
                     )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(if installed && !state.busy {
-                                tone.rgb(0x8be0c6, 0x226958)
-                            } else {
-                                tone.rgb(0xc2c8e3, 0x455272)
-                            }))
-                            .child(description),
-                    ),
+                    .when(partial || matches!(state.result, Some(Err(_))), |row| {
+                        row.child(div().text_xs().child(description))
+                    }),
             )
             .when(partial, |row| {
                 row.child(
-                    Button::new(("remove-ai-client", client as usize))
-                        .small()
-                        .ghost()
-                        .disabled(state.busy)
-                        .label(self.text("移除", "Remove"))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.ai_client_action(client, Action::Remove, cx)
-                        })),
+                    crate::chrome::icon_button(
+                        ("remove-ai-client", client as usize),
+                        AssetIcon::Trash,
+                        self.text("移除部分安装的集成", "Remove partial integration"),
+                    )
+                    .disabled(state.busy)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.ai_client_action(client, Action::Remove, cx)
+                    })),
                 )
             })
             .child(
-                Button::new(("configure-ai-client", client as usize))
-                    .small()
-                    .primary()
-                    .flex_shrink_0()
+                crate::motion::Switch::new(client.name())
+                    .checked(installed)
                     .disabled(state.busy)
-                    .loading(state.busy)
-                    .label(label)
-                    .on_click(
-                        cx.listener(move |this, _, _, cx| {
-                            this.ai_client_action(client, action, cx)
-                        }),
-                    ),
+                    .tooltip(format!("{} · {}", name, description))
+                    .on_click(cx.listener(move |this, checked, _, cx| {
+                        let action = if status.is_none() {
+                            Action::Inspect
+                        } else if *checked {
+                            Action::Install
+                        } else {
+                            Action::Remove
+                        };
+                        this.ai_client_action(client, action, cx)
+                    })),
             )
     }
 }

@@ -608,57 +608,22 @@ impl Desktop {
                                     .child(category_label.to_owned()),
                             ),
                     )
-                    .when_some(installed_plugin, |header, plugin| {
-                        let id = plugin.manifest.id.clone();
-                        let ai_enabled = plugin.ai_enabled;
-                        header
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_shrink_0()
-                                    .items_center()
-                                    .gap_1()
-                                    .py_0p5()
-                                    .px_2()
-                                    .rounded_full()
-                                    .bg(rgb(tone.rgb(0x203b3a, 0xdff4ee)))
-                                    .text_color(rgb(tone.rgb(0x8be0c6, 0x226958)))
-                                    .text_xs()
-                                    .child(Icon::new(IconName::CircleCheck).with_size(px(12.)))
-                                    .child(self.text("已安装", "Installed")),
-                            )
-                            .child(
-                                Button::new(("plugin-ai-access", index))
-                                    .small()
-                                    .ghost()
-                                    .flex_shrink_0()
-                                    .disabled(busy)
-                                    .label(if ai_enabled {
-                                        self.text("AI 已开", "AI on")
-                                    } else {
-                                        self.text("AI 已关", "AI off")
-                                    })
-                                    .tooltip(if ai_enabled {
-                                        self.text(
-                                            "禁用此插件的 AI 接入",
-                                            "Disable AI use for this plugin",
-                                        )
-                                    } else {
-                                        self.text(
-                                            "启用此插件的 AI 接入",
-                                            "Enable AI use for this plugin",
-                                        )
-                                    })
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.package_action(
-                                            PackageAction::AiAccess {
-                                                id: id.clone(),
-                                                enabled: !ai_enabled,
-                                            },
-                                            cx,
-                                        );
-                                    })),
-                            )
+                    .when(installed_plugin.is_some(), |header| {
+                        header.child(
+                            div()
+                                .flex()
+                                .flex_shrink_0()
+                                .items_center()
+                                .gap_1()
+                                .py_0p5()
+                                .px_2()
+                                .rounded_full()
+                                .bg(rgb(tone.rgb(0x203b3a, 0xdff4ee)))
+                                .text_color(rgb(tone.rgb(0x8be0c6, 0x226958)))
+                                .text_xs()
+                                .child(Icon::new(IconName::CircleCheck).with_size(px(12.)))
+                                .child(self.text("已安装", "Installed")),
+                        )
                     }),
             )
             .child(
@@ -702,19 +667,17 @@ impl Desktop {
             let settings_id = installed.id.clone();
             let id = installed.id.clone();
             return actions
-                .when(!installed.options.is_empty(), |actions| {
-                    actions.child(
-                        Button::new(("plugin-settings", index))
-                            .small()
-                            .ghost()
-                            .disabled(busy)
-                            .icon(IconName::Settings2)
-                            .label(self.text("设置", "Settings"))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.open_plugin_defaults(&settings_id, window, cx);
-                            })),
-                    )
-                })
+                .child(
+                    Button::new(("plugin-settings", index))
+                        .small()
+                        .ghost()
+                        .disabled(busy)
+                        .icon(IconName::Settings2)
+                        .label(self.text("设置", "Settings"))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.open_plugin_defaults(&settings_id, window, cx);
+                        })),
+                )
                 .when_some(
                     candidate
                         .filter(|plugin| plugin.version > installed.version)
