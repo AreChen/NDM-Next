@@ -58,4 +58,4 @@
 
 在清单设置 `"skill":"AI-GUIDE.md"`，并把这份 UTF-8 Markdown 放进 ZIP。说明匹配哪些来源、何时需要显式选择、最小的工具调用、常见选项、输出和限制。示例要使用清单声明的键。可以给出一个成功例子和一个需换用其他引擎的例子。用户开启插件的 AI 接入后，宿主会把该指南放进[当前安装的插件索引](../plugins/index.md)。
 
-发布前至少实际走一次导入、来源匹配、下载、停止并恢复，以及 MCP 工具发现。多文件输出还要检查重名和部分选择。市场条目使用本地化名称与描述，分平台列出 ZIP 与 SHA-256。[市场上架格式](https://github.com/AreChen/NDM-Next-Plugin-Market#listing-and-translations)
+发布前至少实际走一次导入、来源匹配、下载、停止并恢复，以及 MCP 工具发现。多文件输出还要检查重名和部分选择。市场条目使用本地化名称与描述，分平台列出 ZIP 与 SHA-256。[市场上架格式](https://github.com/AreChen/onesdm-plugin-market#listing-and-translations)

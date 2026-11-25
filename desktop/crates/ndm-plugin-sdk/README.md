@@ -1,8 +1,8 @@
 # OnesDM download engine SDK
 
-NDM launches the installed engine executable with `--ndm-engine` for one
+OnesDM launches the installed engine executable with `--ndm-engine` for one
 operation, with the engine's installation directory as its current directory.
-The engine communicates with NDM over stdin and stdout. Each message is one
+The engine communicates with OnesDM over stdin and stdout. Each message is one
 UTF-8 JSON object followed by a newline. The message limit is 4 MiB, excluding
 the newline. Reserve stdout for protocol messages.
 
@@ -12,19 +12,19 @@ interface.
 
 | Direction | Message | Meaning |
 | --- | --- | --- |
-| NDM to engine | `{"type":"hello","version":1}` | Negotiate the protocol version. |
-| Engine to NDM | `{"type":"ready","version":1}` | Accept that version. Wait for a request before starting work or launching subprocesses. |
-| NDM to engine | `{"type":"download","request":{…}}` | Start work for the given task ID. |
-| NDM to engine | `{"type":"inspect","request":{…}}` | Resolve a file list in a disposable workspace. Only resolve metadata. |
-| Engine to NDM | `{"type":"inspected","source":{"revision":"…","files":[{"id":0,"path":"video.mp4","size":42}]}}` | Return file IDs, display paths, and sizes in bytes for an immutable source revision. |
-| NDM to engine | `{"type":"share","request":{…},"output":"/saved/output"}` | Verify and share available pieces from the published file or directory. Open output with read-only access. |
-| Engine to NDM | `{"type":"progress","progress":{"downloaded":42,"total":null,"transferred":42}}` | Report byte counts. Use `null` for the total if it is unknown. |
-| Engine to NDM | `{"type":"task_update","update":{"kind":"title","title":"Example video"}}` | Report the resolved title once it is available. |
-| Engine to NDM | `{"type":"task_update","update":{"kind":"finalizing"}}` | Report local media processing. The next byte progress message returns the task to downloading. |
-| NDM to engine | `{"type":"stop"}` | Stop work and persist a checkpoint if the engine can resume. |
-| Engine to NDM | `{"type":"stopped"}` | Confirm that work has stopped and any checkpoint is ready to use. |
-| Engine to NDM | `{"type":"completed","files":["video.mp4"]}` | Report finished regular files under the task workspace, with each file closed and ready to deliver. Use slash-separated relative paths. |
-| Engine to NDM | `{"type":"failed","reason":"network"}` | Return a failure category. |
+| OnesDM to engine | `{"type":"hello","version":1}` | Negotiate the protocol version. |
+| Engine to OnesDM | `{"type":"ready","version":1}` | Accept that version. Wait for a request before starting work or launching subprocesses. |
+| OnesDM to engine | `{"type":"download","request":{…}}` | Start work for the given task ID. |
+| OnesDM to engine | `{"type":"inspect","request":{…}}` | Resolve a file list in a disposable workspace. Only resolve metadata. |
+| Engine to OnesDM | `{"type":"inspected","source":{"revision":"…","files":[{"id":0,"path":"video.mp4","size":42}]}}` | Return file IDs, display paths, and sizes in bytes for an immutable source revision. |
+| OnesDM to engine | `{"type":"share","request":{…},"output":"/saved/output"}` | Verify and share available pieces from the published file or directory. Open output with read-only access. |
+| Engine to OnesDM | `{"type":"progress","progress":{"downloaded":42,"total":null,"transferred":42}}` | Report byte counts. Use `null` for the total if it is unknown. |
+| Engine to OnesDM | `{"type":"task_update","update":{"kind":"title","title":"Example video"}}` | Report the resolved title once it is available. |
+| Engine to OnesDM | `{"type":"task_update","update":{"kind":"finalizing"}}` | Report local media processing. The next byte progress message returns the task to downloading. |
+| OnesDM to engine | `{"type":"stop"}` | Stop work and persist a checkpoint if the engine can resume. |
+| Engine to OnesDM | `{"type":"stopped"}` | Confirm that work has stopped and any checkpoint is ready to use. |
+| Engine to OnesDM | `{"type":"completed","files":["video.mp4"]}` | Report finished regular files under the task workspace, with each file closed and ready to deliver. Use slash-separated relative paths. |
+| Engine to OnesDM | `{"type":"failed","reason":"network"}` | Return a failure category. |
 
 The request carries the task ID, absolute workspace path, source and
 plugin-specific options. A URL source is `{"kind":"url","url":"…","headers":{}}`.
@@ -38,7 +38,7 @@ failure categories only when `hello` includes `"task_updates":true`. The Rust
 `Worker::update_task` and `serve` helpers handle this for older hosts.
 
 An engine should respond to `stop` while a transfer is active. Once it sends
-a terminal message, NDM reclaims the worker and its child processes. Finish
+a terminal message, OnesDM reclaims the worker and its child processes. Finish
 subprocess work and flush any data needed for completion or resume before that
 message. Give subprocesses their own redirected streams so the engine owns
 the protocol pipes. If the control input closes, stop the transfer, clean up
@@ -94,7 +94,7 @@ manifest are both checked before installation.
   receives a complete proxy URL.
 - `tools` can expose named MCP download actions. Each has a stable `id`,
   localized `name` and `description`, and optional preset `defaults` for
-  the options. NDM registers them while AI integration is enabled.
+  the options. OnesDM registers them while AI integration is enabled.
 
 ### Reusing an installed executable
 
@@ -127,7 +127,7 @@ their revision. Remove consumers before uninstalling their provider.
 ## Languages and marketplace listings
 
 Use a localized object wherever the manifest accepts a display string. Supply
-a non-empty `en` string and add `zh` for Simplified Chinese. NDM displays
+a non-empty `en` string and add `zh` for Simplified Chinese. OnesDM displays
 English when the Chinese string is omitted or empty. Keep IDs, option keys,
 choice values and category IDs stable across languages.
 
@@ -145,9 +145,9 @@ MCP uses the English tool metadata and stable tool IDs.
 When submitting a plugin to the market, give its listing a localized `name`
 and `description`, choose a stable `category` ID from `sources.json`, and
 optionally include search `keywords` such as protocol abbreviations and
-translations. NDM displays listing text and category labels in the selected
+translations. OnesDM displays listing text and category labels in the selected
 language and searches both languages. An imported ZIP with no listing uses
-its manifest text on the card. [Marketplace listing format](https://github.com/AreChen/NDM-Next-Plugin-Market#listing-and-translations)
+its manifest text on the card. [Marketplace listing format](https://github.com/AreChen/onesdm-plugin-market#listing-and-translations)
 
 ### 中文
 
@@ -159,7 +159,7 @@ its manifest text on the card. [Marketplace listing format](https://github.com/A
 提交市场时，在目录中填写中英文名称与描述，选用 `sources.json` 中的分类
 ID，也可添加中英文关键词和协议简称。市场卡片和分类随应用语言切换，
 搜索同时匹配两种语言。没有市场条目的本地导入插件使用包内清单的文本。
-[插件市场上架格式](https://github.com/AreChen/NDM-Next-Plugin-Market#listing-and-translations)
+[插件市场上架格式](https://github.com/AreChen/onesdm-plugin-market#listing-and-translations)
 
 ## JavaScript panels
 
@@ -170,7 +170,7 @@ localized `label`. The script can order fields and hide optional ones.
 
 GPUI renders the native controls from that object. The script runs when the
 form is prepared, with bounded execution time and memory and no filesystem
-or network APIs. NDM uses the manifest controls if the script fails.
+or network APIs. OnesDM uses the manifest controls if the script fails.
 
 ## Rust template and contract tests
 
@@ -201,7 +201,7 @@ can point to the app's FFmpeg directory when available.
   its `revision` and sorted `file_ids` against the actual metadata before
   starting the transfer. Publish only the selected files.
 - Declare `capabilities.share_completed` to expose start and stop sharing on
-  a completed task. NDM can retain the engine-owned `state/` directory after
+  a completed task. OnesDM can retain the engine-owned `state/` directory after
   publishing, and cache cleanup may reclaim it while the task is idle. Use it
   for metadata required to verify the source again. The `output` argument is the
   published file or folder and may have been renamed to avoid a collision.
@@ -212,7 +212,7 @@ can point to the app's FFmpeg directory when available.
 - When `hello` includes both `task_updates` and `peer_stats`, the engine may
   send `kind: "peer_stats"` task updates with `connected`, `seeders`, `connecting`,
   `queued`, `known`, `uploaded`, and `upload_bytes_per_second`. Upload totals are
-  bytes since the worker started. NDM accumulates them across stops and restarts.
+  bytes since the worker started. OnesDM accumulates them across stops and restarts.
   Send the first sharing statistics after the verified data is ready to serve.
 
 In Rust, use `Engine` and `serve_engine` for optional operations.

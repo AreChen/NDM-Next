@@ -114,7 +114,7 @@ such as `missing_validator`, `range_ignored`, `connection_limit` or `rate_limite
 Repository file paths can supply a name when a task is queued. A server attachment
 name becomes visible while the download is running.
 
-- [Plugin market catalog](https://github.com/AreChen/NDM-Next-Plugin-Market)
+- [Plugin market catalog](https://github.com/AreChen/onesdm-plugin-market)
 - [Download engine SDK](../desktop/crates/ndm-plugin-sdk/README.md)
 - [OnesDM Skill](../desktop/crates/ndm-host/skills/SKILL.md)
 
@@ -178,7 +178,7 @@ DeepSeek Harness 通过自带的 stdio MCP 客户端连接 OnesDM。用户级 Co
 完整 SDK 协议、Rust worker 示例和配套 JSON 清单。按指南可以构建、打包、导入、测试插件，
 复用其他插件的工具，并将插件自己的使用指南随包交付。
 
-AI 客户端可发起下载、查询状态、暂停与恢复。省略保存位置时使用 NDM
+AI 客户端可发起下载、查询状态、暂停与恢复。省略保存位置时使用 OnesDM
 默认下载目录，也可传入绝对路径。单批任务可以设置并发任务数和每项
 下载线程数，并且仍受全局任务上限与引擎上限约束。明确要求修改全局
 设置时，新值会应用到排队和后续任务。内置 HTTP 最多使用 16 个分段
