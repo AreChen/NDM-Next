@@ -288,7 +288,7 @@ fn migrate(client: Harness, target: &Target, path: &std::path::Path) -> io::Resu
     }
     skill::write(path, &target.profile)?;
     if old_status != McpStatus::Missing {
-        config.rename_legacy(client)?;
+        config.rename_legacy(client, target)?;
         config.save()?;
     }
     skill::remove(&legacy_path)

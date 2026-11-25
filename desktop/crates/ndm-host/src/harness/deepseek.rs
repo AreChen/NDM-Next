@@ -154,10 +154,11 @@ impl PatchFile {
         )
     }
 
-    pub(super) fn rename_legacy(&self) -> io::Result<()> {
+    pub(super) fn rename_legacy(&self, executable: &str) -> io::Result<()> {
         let entry = self.entry(LEGACY)?.ok_or_else(config_conflict)?;
         entry.row.set("id", entry_id(SERVER));
         entry.config.set("serverName", SERVER);
+        entry.config.set("command", executable);
         Ok(())
     }
 

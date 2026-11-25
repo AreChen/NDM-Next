@@ -167,7 +167,7 @@ fn all_clients_register_and_remove_their_own_mcp_and_skill_without_a_cli() {
 #[test]
 fn existing_managed_integrations_migrate_once_and_keep_their_settings() {
     let root = tempfile::tempdir().unwrap();
-    let target = target(root.path());
+    let mut target = target(root.path());
     for (client, folder, config) in [
         (Harness::Codex, ".agents/skills", ".codex/config.toml"),
         (Harness::ClaudeCode, ".claude/skills", ".claude.json"),
@@ -194,6 +194,14 @@ fn existing_managed_integrations_migrate_once_and_keep_their_settings() {
         )
         .unwrap();
         fs::write(old.join("personal.md"), "my notes").unwrap();
+        // Linux archives and relocated macOS bundles give the host a new path.
+        let moved = root
+            .path()
+            .join(client.name())
+            .join(target.executable.file_name().unwrap());
+        fs::create_dir_all(moved.parent().unwrap()).unwrap();
+        fs::rename(&target.executable, &moved).unwrap();
+        target.executable = moved;
         for _ in 0..2 {
             ndm_host::harness::sync_skills(&target).unwrap();
         }

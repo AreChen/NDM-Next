@@ -168,20 +168,35 @@ impl Config {
         Ok(())
     }
 
-    pub(super) fn rename_legacy(&mut self, client: Harness) -> io::Result<()> {
+    pub(super) fn rename_legacy(&mut self, client: Harness, target: &Target) -> io::Result<()> {
+        let executable = target.executable.to_str().ok_or_else(invalid_config)?;
         match &mut self.document {
             Document::Toml(doc) => {
                 let table = doc
                     .get_mut(CODEX_SERVERS)
                     .and_then(Item::as_table_like_mut)
                     .ok_or_else(invalid_config)?;
-                let original = table.remove(LEGACY).ok_or_else(invalid_config)?;
+                let mut original = table.remove(LEGACY).ok_or_else(invalid_config)?;
+                original
+                    .as_table_like_mut()
+                    .ok_or_else(invalid_config)?
+                    .insert("command", value(executable));
                 table.insert(SERVER, original);
             }
             Document::Json(doc) => {
                 let (servers, _) = json_servers(doc, client, false, LEGACY)?;
                 let entry = property(&servers.ok_or_else(invalid_config)?, LEGACY)?
                     .ok_or_else(invalid_config)?;
+                let object = entry.object_value().ok_or_else(invalid_config)?;
+                if client == Harness::OpenCode {
+                    let command = std::iter::once(executable)
+                        .chain(target.launch_arguments()?)
+                        .map(Into::into)
+                        .collect();
+                    set_json(&object, "command", CstInputValue::Array(command));
+                } else {
+                    set_json(&object, "command", executable.into());
+                }
                 match entry.name() {
                     Some(jsonc_parser::cst::ObjectPropName::String(name)) => {
                         name.set_raw_value(format!("\"{SERVER}\""))
@@ -189,7 +204,7 @@ impl Config {
                     _ => return Err(invalid_config()),
                 }
             }
-            Document::Cordis(doc) => doc.rename_legacy()?,
+            Document::Cordis(doc) => doc.rename_legacy(executable)?,
         }
         Ok(())
     }
