@@ -11,7 +11,7 @@ use tokio::io::AsyncReadExt;
 #[cfg(target_os = "macos")]
 pub(crate) mod macos;
 
-const RELEASES_API: &str = "https://api.github.com/repos/AreChen/NDM-Next/releases?per_page=100";
+const RELEASES_API: &str = "https://api.github.com/repositories/1456128731/releases?per_page=100";
 const MAX_RESPONSE: usize = 2 * 1024 * 1024;
 const MAX_INSTALLER: u64 = 256 * 1024 * 1024;
 
@@ -123,20 +123,24 @@ fn parse_digest(value: &str) -> Option<[u8; 32]> {
     Some(digest)
 }
 fn asset_name(version: &Version) -> String {
+    let branded = version >= &Version::new(0, 7, 0);
+    let prefix = if branded { "OnesDM" } else { "NDM-Next" };
     if cfg!(target_os = "macos") {
         let arch = if cfg!(target_arch = "aarch64") {
             "arm64"
         } else {
             "x64"
         };
-        format!("NDM-Next-{version}-macos-{arch}.dmg")
+        format!("{prefix}-{version}-macos-{arch}.dmg")
     } else if cfg!(target_os = "linux") {
         let arch = if cfg!(target_arch = "aarch64") {
             "arm64"
         } else {
             "x64"
         };
-        format!("NDM-Next-{version}-linux-{arch}.tar.gz")
+        format!("{prefix}-{version}-linux-{arch}.tar.gz")
+    } else if branded {
+        "OnesDM.exe".to_owned()
     } else {
         format!("NDM-Next-Setup-{version}-x64.exe")
     }
@@ -154,16 +158,17 @@ fn find_update(data: &[u8], current: &Version) -> Result<Option<UpdateRelease>, 
                 return None;
             }
             let name = asset_name(&version);
-            let url = format!(
-                "https://github.com/AreChen/NDM-Next/releases/download/desktop-v{version}/{name}"
-            );
+            let official_asset = |url: &str| {
+                ["NDM-Next", "onesdm"].iter().any(|repo|
+                    url == format!("https://github.com/AreChen/{repo}/releases/download/desktop-v{version}/{name}"))
+            };
             let mut matching = release
                 .assets
                 .into_iter()
                 .filter(|asset| asset.name == name);
             let asset = matching.next()?;
             if matching.next().is_some()
-                || asset.browser_download_url != url
+                || !official_asset(&asset.browser_download_url)
                 || asset.size == 0
                 || asset.size > MAX_INSTALLER
             {
@@ -172,7 +177,7 @@ fn find_update(data: &[u8], current: &Version) -> Result<Option<UpdateRelease>, 
             Some(UpdateRelease {
                 version,
                 name,
-                url,
+                url: asset.browser_download_url,
                 bytes: asset.size,
                 sha256: parse_digest(asset.digest.as_deref()?)?,
             })

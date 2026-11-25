@@ -271,7 +271,12 @@ fn stage_image(
     let mounted =
         attached.is_ok() || fs::metadata(&mount).is_ok_and(|meta| meta.dev() != original_device);
     let result = attached.and_then(|()| {
-        let app = mount.join(BUNDLE_NAME);
+        let app = mount.join("OnesDM.app");
+        let app = if app.try_exists()? {
+            app
+        } else {
+            mount.join("NDM Next.app")
+        };
         if !fs::symlink_metadata(&app)?.is_dir() {
             return Err(invalid_bundle());
         }

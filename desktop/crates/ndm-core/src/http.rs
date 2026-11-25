@@ -733,11 +733,10 @@ async fn download_http_with_progress(
     let assembled = work_dir.join("assembled.part");
     if let Some((total, validator)) = ranged {
         let resource_url = if digest.is_some() {
-            source.as_str()
+            source.as_str().to_owned()
         } else {
-            probe.url().as_str()
-        }
-        .to_owned();
+            range_resource_key(trace.details.redirect_count > 0, probe.url())
+        };
         drop(probe);
         progress.set_total(Some(total));
         let connections = options.max_connections.clamp(1, MAX_CONNECTIONS);
@@ -1222,6 +1221,75 @@ fn network(error: reqwest::Error) -> Error {
     Error::Network(error.without_url())
 }
 
+// A strong ETag identifies a representation within one resource. Strip only
+// recognized CDN signing fields after a redirect. Preserve the origin, path
+// and raw resource selectors (including encoding, order and duplicates).
+fn range_resource_key(redirected: bool, final_url: &reqwest::Url) -> String {
+    let raw = final_url.as_str();
+    let Some((base, query)) = raw.split_once('?') else {
+        return raw.to_owned();
+    };
+    if !redirected {
+        return raw.to_owned();
+    }
+    let (query, fragment) = query
+        .split_once('#')
+        .map_or((query, None), |(q, f)| (q, Some(f)));
+    let key = |field: &str| {
+        field
+            .split('=')
+            .next()
+            .unwrap_or(field)
+            .to_ascii_lowercase()
+    };
+    let signature = |k: &str| {
+        matches!(
+            k,
+            "sig"
+                | "signature"
+                | "sign"
+                | "token"
+                | "jwt"
+                | "auth_key"
+                | "x-amz-signature"
+                | "x-goog-signature"
+        )
+    };
+    if !query.split('&').any(|field| signature(&key(field))) {
+        return raw.to_owned();
+    }
+    let selectors: Vec<_> = query
+        .split('&')
+        .filter(|field| {
+            let k = key(field);
+            !signature(&k)
+                && !matches!(
+                    k.as_str(),
+                    "expires"
+                        | "policy"
+                        | "key-pair-id"
+                        | "se"
+                        | "st"
+                        | "x-amz-date"
+                        | "x-amz-credential"
+                        | "x-amz-security-token"
+                        | "x-goog-date"
+                        | "x-goog-credential"
+                )
+        })
+        .collect();
+    let mut result = format!("signed:{base}");
+    if !selectors.is_empty() {
+        result.push('?');
+        result.push_str(&selectors.join("&"));
+    }
+    if let Some(fragment) = fragment {
+        result.push('#');
+        result.push_str(fragment);
+    }
+    result
+}
+
 fn strong_etag(headers: &HeaderMap) -> Option<String> {
     let etag = headers.get(header::ETAG)?.to_str().ok()?;
     (etag.starts_with('"') && etag.ends_with('"') && etag.len() >= 2).then(|| etag.to_owned())
@@ -1438,8 +1506,10 @@ impl RangeSource<'_> {
             issue.strong_etag = etag.is_some();
             if let RangeValidator::Etag(expected) = &self.manifest.validator {
                 issue.etag_matches = Some(etag.as_ref() == Some(expected));
-                issue.final_url_matches =
-                    Some(response.url().as_str() == self.manifest.resource_url);
+                issue.final_url_matches = Some(
+                    range_resource_key(trace.details.redirect_count > 0, response.url())
+                        == self.manifest.resource_url,
+                );
             }
             if response.status() == StatusCode::TOO_MANY_REQUESTS
                 && !response.headers().contains_key(header::RETRY_AFTER)

@@ -17,6 +17,20 @@ fn select(releases: Value) -> Option<UpdateRelease> {
 }
 
 #[test]
+fn bridge_accepts_branded_packages_before_and_after_the_repository_rename() {
+    for repo in ["NDM-Next", "onesdm", "other"] {
+        let mut data = release("0.7.0");
+        let asset = &mut data["assets"][0];
+        let name = asset["name"].as_str().unwrap();
+        assert!(name.starts_with("OnesDM"));
+        asset["browser_download_url"] = json!(format!(
+            "https://github.com/AreChen/{repo}/releases/download/desktop-v0.7.0/{name}"
+        ));
+        assert_eq!(select(json!([data])).is_some(), repo != "other");
+    }
+}
+
+#[test]
 fn automatic_checks_remain_infrequent_across_restarts_and_failures() {
     assert!(automatic_check_due(None, 1_000));
     assert!(!automatic_check_due(Some(1_000), 1_001));

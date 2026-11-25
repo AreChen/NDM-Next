@@ -1832,6 +1832,127 @@ async fn authenticated_proxy_is_used_for_http_downloads_without_exposing_credent
 }
 
 #[tokio::test]
+async fn rotating_cdn_signatures_keep_ranges_only_for_the_same_representation() {
+    use ndm_core::{HttpRangeMode, SegmentIssue};
+    for (change, failure) in [
+        ("none", None),
+        ("etag", Some(SegmentIssue::EtagMismatch)),
+        ("range", Some(SegmentIssue::ContentRangeMismatch)),
+        ("total", Some(SegmentIssue::ContentRangeMismatch)),
+        ("path", Some(SegmentIssue::ResourceChanged)),
+        ("selector", Some(SegmentIssue::ResourceChanged)),
+    ] {
+        let dir = TempDir::new().unwrap();
+        let expected = data(19);
+        let body = Bytes::copy_from_slice(&expected);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = calls.clone();
+        let app = Router::new()
+            .route(
+                "/original",
+                get(move |headers: HeaderMap| {
+                    let seq = counter.fetch_add(1, Ordering::SeqCst);
+                    let segment = headers.contains_key(header::IF_RANGE);
+                    let path = if segment && change == "path" {
+                        "other"
+                    } else {
+                        "model"
+                    };
+                    let id = if segment && change == "selector" {
+                        2
+                    } else {
+                        1
+                    };
+                    async move {
+                        (
+                            StatusCode::FOUND,
+                            [(
+                                header::LOCATION,
+                                format!("/cdn/{path}?id={id}&signature={seq}"),
+                            )],
+                        )
+                    }
+                }),
+            )
+            .route(
+                "/cdn/{file}",
+                get(move |headers: HeaderMap| {
+                    let body = body.clone();
+                    async move {
+                        let Some(range) = headers.get(header::RANGE) else {
+                            return Response::new(Body::from(body));
+                        };
+                        let segment = headers.contains_key(header::IF_RANGE);
+                        if segment {
+                            assert_eq!(headers[header::IF_RANGE], "\"stable\"");
+                        }
+                        let (start, end) = range.to_str().unwrap()[6..].split_once('-').unwrap();
+                        let start: usize = start.parse().unwrap();
+                        let end: usize = end.parse().unwrap();
+                        let total = body.len() + usize::from(segment && change == "total");
+                        let first = start + usize::from(segment && change == "range");
+                        Response::builder()
+                            .status(StatusCode::PARTIAL_CONTENT)
+                            .header(
+                                header::ETAG,
+                                if segment && change == "etag" {
+                                    "\"new\""
+                                } else {
+                                    "\"stable\""
+                                },
+                            )
+                            .header(
+                                header::CONTENT_RANGE,
+                                format!("bytes {first}-{end}/{total}"),
+                            )
+                            .body(Body::from(body.slice(start..=end)))
+                            .unwrap()
+                    }
+                }),
+            );
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let store = Store::open(&dir.path().join("tasks.db")).unwrap();
+        let id = TaskId::new_v4();
+        store
+            .prepare(
+                id,
+                &request(dir.path(), format!("http://{address}/original")),
+            )
+            .unwrap();
+        store.commit(id).unwrap();
+        let progress = DownloadProgress::default();
+        execute_http(
+            &store,
+            id,
+            &HttpOptions {
+                max_connections: 16,
+                ..Default::default()
+            },
+            CancellationToken::new(),
+            progress.clone(),
+        )
+        .await
+        .unwrap();
+        let snapshot = progress.snapshot();
+        let http = snapshot.http.unwrap();
+        assert_eq!(http.segment_failure.map(|f| f.issue), failure, "{change}");
+        if failure.is_none() {
+            assert!(snapshot.segments.len() > 1);
+            assert!(calls.load(Ordering::SeqCst) > 2);
+            assert_eq!(http.range_mode, Some(HttpRangeMode::StrongEtag));
+        } else {
+            assert_eq!(http.range_mode, Some(HttpRangeMode::SegmentFallback));
+        }
+        assert_eq!(
+            std::fs::read(dir.path().join("file.bin")).unwrap(),
+            expected
+        );
+    }
+}
+
+#[tokio::test]
 async fn changing_redirect_destinations_cannot_mix_different_files_with_same_etag() {
     let dir = TempDir::new().unwrap();
     let expected = data(12);
