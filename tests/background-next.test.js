@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const fs = require('node:fs');
 
-function setup({capture=true,method='GET',url='https://files.test/file.zip',finalUrl=url,finalCapture,size=2097152,mime='application/zip',referrer='https://page.test/',config={},prepareOk=true,backendAbsent=false,sharedSession={},delayInitialSettings=false}={}) {
+function setup({capture=true,method='GET',url='https://files.test/file.zip',finalUrl=url,finalCapture,size=2097152,mime='application/zip',referrer='https://page.test/',initiator,requestType,fetchSite,config={},prepareOk=true,backendAbsent=false,sharedSession={},delayInitialSettings=false}={}) {
   const listeners={}, calls=[], saved={backend:'next',transferPolicy:'immediate',...config};
   let preparedTask;
   if (backendAbsent) delete saved.backend;
@@ -43,8 +43,10 @@ function setup({capture=true,method='GET',url='https://files.test/file.zip',fina
     return result;
   },run:async()=>{
     await new Promise(resolve=>setTimeout(resolve,0));
-    if(capture)listeners.headers({requestId:'abc',method,url,tabId:1,requestHeaders:[{name:'Cookie',value:'session=private'}]});
-    if(finalCapture)listeners.headers({requestId:'redirect',method,url:finalUrl,tabId:1,requestHeaders:finalCapture==='unsafe'?[{name:'X-Private',value:'secret'}]:[{name:'Cookie',value:'session=private'}]});
+    const requestHeaders=[{name:'Cookie',value:'session=private'}];
+    if(fetchSite)requestHeaders.push({name:'Sec-Fetch-Site',value:fetchSite});
+    if(capture)listeners.headers({requestId:'abc',method,url,tabId:1,initiator,type:requestType,requestHeaders});
+    if(finalCapture)listeners.headers({requestId:'abc',method,url:finalUrl,tabId:1,initiator,type:requestType,requestHeaders:finalCapture==='unsafe'?[{name:'X-Private',value:'secret'}]:requestHeaders});
     return listeners.download({id:5,url,finalUrl,referrer,totalBytes:size,mime});
   }};
 }
@@ -96,6 +98,35 @@ test('redirect handoff respects unsafe target requests, blocked sites, and known
 test('signed download links follow the configured immediate handoff',async()=>{
   const t=setup({url:'https://files.test/file.zip?X-Amz-Signature=signed'});
   await t.run();assert.deepEqual(t.calls,['prepare','cancel','commit','erase']);
+});
+test('a no-referrer redirect uses its observed initiator for the domain blacklist',async()=>{
+  const redirect={url:'https://files.test/file.zip',finalUrl:'https://cdn.test/object',finalCapture:'safe',referrer:'',initiator:'https://page.test'};
+  const allowed=setup({...redirect,config:{blockedDomains:['unrelated.test']}});
+  await allowed.run();
+  assert.deepEqual(allowed.calls,['prepare','cancel','commit','erase']);
+  assert.equal(allowed.task().source_url,null);
+  for (const domain of ['page.test','files.test','cdn.test']) {
+    const blocked=setup({...redirect,config:{blockedDomains:[domain]}});
+    await blocked.run();
+    assert.deepEqual(blocked.calls,[]);
+  }
+});
+test('a browser-initiated direct navigation still checks both download domains',async()=>{
+  const redirect={url:'https://files.test/file.zip',finalUrl:'https://cdn.test/object',finalCapture:'safe',referrer:'',requestType:'main_frame',fetchSite:'none'};
+  const allowed=setup({...redirect,config:{blockedDomains:['unrelated.test']}});
+  await allowed.run();
+  assert.deepEqual(allowed.calls,['prepare','cancel','commit','erase']);
+  for (const options of [
+    {config:{blockedDomains:['files.test']}},
+    {config:{blockedDomains:['cdn.test']}},
+    {initiator:'null'},
+    {requestType:'sub_frame'},
+    {fetchSite:'cross-site'},
+  ]) {
+    const blocked=setup({...redirect,config:{blockedDomains:['unrelated.test']},...options});
+    await blocked.run();
+    assert.deepEqual(blocked.calls,[]);
+  }
 });
 test('a download that wakes the extension is captured while settings load',async()=>{
   const t=setup({delayInitialSettings:true});
