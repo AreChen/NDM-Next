@@ -61,7 +61,7 @@ try {
     $versionQuad = "$version.0"
     $binaryDirectory = Join-Path $metadata.target_directory 'release'
     $notices = Join-Path $distribution 'THIRD-PARTY-LICENSES.html'
-    $output = Join-Path $distribution "NDM-Next-Setup-$version-x64.exe"
+    $output = Join-Path $distribution "OnesDM.exe"
 
     $compiler = & rustc +1.100.0 -vV
     if ($LASTEXITCODE -ne 0 -or ($compiler -notcontains 'host: x86_64-pc-windows-msvc')) {
@@ -72,7 +72,7 @@ try {
 
     foreach ($binary in @('ndm-desktop.exe', 'ndm-host.exe')) {
         $details = (Get-Item -LiteralPath (Join-Path $binaryDirectory $binary)).VersionInfo
-        if ($details.ProductName -cne 'NDM Next' -or $details.ProductVersion -cne $version) {
+        if ($details.ProductName -cne 'OnesDM' -or $details.ProductVersion -cne $version) {
             throw "Invalid Windows product metadata in $binary."
         }
     }
@@ -83,7 +83,7 @@ try {
     & $Nsis "/DNDM_BIN_DIR=$binaryDirectory" "/DNDM_OUTPUT=$output" "/DNDM_NOTICES=$notices" "/DNDM_FFMPEG_DIR=$mediaRoot" "/DNDM_VERSION=$version" "/DNDM_VERSION_QUAD=$versionQuad" (Join-Path $PSScriptRoot 'ndm-next.nsi')
     if ($LASTEXITCODE -ne 0) { throw 'Installer build failed.' }
     $installerDetails = (Get-Item -LiteralPath $output).VersionInfo
-    if ($installerDetails.ProductName -cne 'NDM Next' -or $installerDetails.ProductVersion -cne $version) {
+    if ($installerDetails.ProductName -cne 'OnesDM' -or $installerDetails.ProductVersion -cne $version) {
         throw 'Invalid Windows product metadata in installer.'
     }
     Write-Output "Installer: $output"

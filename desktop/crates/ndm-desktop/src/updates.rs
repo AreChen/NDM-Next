@@ -204,7 +204,7 @@ fn trusted_download_url(url: &reqwest::Url) -> bool {
 }
 fn client(proxy: Option<&ndm_core::ProxyOptions>) -> Result<reqwest::Client, ()> {
     let mut builder = reqwest::Client::builder()
-        .user_agent(concat!("NDM-Next/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("OnesDM/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(30 * 60))
         .read_timeout(Duration::from_secs(45))

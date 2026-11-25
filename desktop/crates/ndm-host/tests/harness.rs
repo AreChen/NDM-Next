@@ -7,7 +7,7 @@ use toml_edit::{Array, DocumentMut, value};
 fn target(root: &Path) -> Target {
     // Match the bundle layout and paths with spaces that a Finder launch uses.
     // A plain fixture file also proves registration never starts the host or CLI.
-    let bundle = root.join("NDM Next.app/Contents/MacOS");
+    let bundle = root.join("My OnesDM.app/Contents/MacOS");
     fs::create_dir_all(&bundle).unwrap();
     let executable = bundle.join(if cfg!(windows) {
         "ndm-host.exe"
@@ -107,7 +107,7 @@ fn all_clients_register_and_remove_their_own_mcp_and_skill_without_a_cli() {
         client.install(&target).unwrap();
         client.install(&target).unwrap();
         assert!(client.status(&target).unwrap().installed());
-        let root = target.home.join(skill_root).join("ndm-next");
+        let root = target.home.join(skill_root).join("onesdm");
         check_skill_bundle(&root);
         assert!(
             fs::read_to_string(root.join("SKILL.md"))
@@ -119,13 +119,13 @@ fn all_clients_register_and_remove_their_own_mcp_and_skill_without_a_cli() {
     assert!(codex.contains("# Keep this comment"));
     let parsed = codex.parse::<DocumentMut>().unwrap();
     assert_eq!(
-        parsed["mcp_servers"]["ndm-next"]["command"].as_str(),
+        parsed["mcp_servers"]["onesdm-mcp"]["command"].as_str(),
         target.executable.to_str()
     );
     let claude: Value = serde_json::from_slice(&fs::read(&claude_file).unwrap()).unwrap();
     assert_eq!(claude["projects"]["workspace"]["existing"], true);
     assert_eq!(
-        claude["mcpServers"]["ndm-next"],
+        claude["mcpServers"]["onesdm-mcp"],
         json!({
             "type":"stdio", "command": target.executable,
             "args":["--mcp","--data-dir", target.profile],
@@ -133,7 +133,7 @@ fn all_clients_register_and_remove_their_own_mcp_and_skill_without_a_cli() {
     );
     let pi: Value = serde_json::from_slice(&fs::read(&pi_file).unwrap()).unwrap();
     assert_eq!(pi["mcpServers"]["another"]["command"], "existing");
-    assert_eq!(pi["mcpServers"]["ndm-next"]["exposure"], "direct");
+    assert_eq!(pi["mcpServers"]["onesdm-mcp"]["exposure"], "direct");
     let opencode = fs::read_to_string(&opencode_file).unwrap();
     assert!(opencode.contains("// Keep OpenCode preferences"));
     assert!(opencode.contains("\"type\": \"local\""));
@@ -144,7 +144,7 @@ fn all_clients_register_and_remove_their_own_mcp_and_skill_without_a_cli() {
         client.remove(&target).unwrap();
         client.remove(&target).unwrap();
         assert_eq!(client.status(&target).unwrap(), Status::default());
-        assert!(!target.home.join(skill_root).join("ndm-next").exists());
+        assert!(!target.home.join(skill_root).join("onesdm").exists());
     }
     assert!(
         fs::read_to_string(codex_file)
@@ -165,16 +165,62 @@ fn all_clients_register_and_remove_their_own_mcp_and_skill_without_a_cli() {
 }
 
 #[test]
+fn existing_managed_integrations_migrate_once_and_keep_their_settings() {
+    let root = tempfile::tempdir().unwrap();
+    let target = target(root.path());
+    for (client, folder, config) in [
+        (Harness::Codex, ".agents/skills", ".codex/config.toml"),
+        (Harness::ClaudeCode, ".claude/skills", ".claude.json"),
+        (Harness::Pi, ".pi/agent/skills", ".pi/agent/mcp.json"),
+        (
+            Harness::OpenCode,
+            ".config/opencode/skills",
+            ".config/opencode/opencode.jsonc",
+        ),
+        (Harness::DeepSeek, ".dsh/skills", ".dsh/cordis.patch.yml"),
+    ] {
+        client.install(&target).unwrap();
+        let file = target.home.join(config);
+        let legacy_config = fs::read_to_string(&file)
+            .unwrap()
+            .replace("onesdm-mcp", "ndm-next");
+        fs::write(&file, &legacy_config).unwrap();
+        let skills = target.home.join(folder);
+        let old = skills.join("ndm-next");
+        fs::rename(skills.join("onesdm"), &old).unwrap();
+        fs::write(
+            old.join("SKILL.md"),
+            "<!-- Managed by the NDM Next desktop integration. -->",
+        )
+        .unwrap();
+        fs::write(old.join("personal.md"), "my notes").unwrap();
+        for _ in 0..2 {
+            ndm_host::harness::sync_skills(&target).unwrap();
+        }
+        assert!(client.status(&target).unwrap().installed());
+        assert_eq!(
+            fs::read_to_string(&file)
+                .unwrap()
+                .matches("ndm-next")
+                .count(),
+            0
+        );
+        assert!(fs::read_to_string(old.join("personal.md")).is_ok());
+        assert!(!old.join("SKILL.md").exists());
+    }
+}
+
+#[test]
 fn a_legacy_codex_entry_can_be_repaired_after_moving_the_app() {
     let root = tempfile::tempdir().unwrap();
     let mut target = target(root.path());
     let path = target.home.join(".codex/config.toml");
     // The version that used "codex mcp add" wrote the same stdio entry without
     // any NDM-specific keys. Preserve settings the user added to it afterwards.
-    let mut config = "[mcp_servers.ndm-next]\nenabled = false\n"
+    let mut config = "[mcp_servers.onesdm-mcp]\nenabled = false\n"
         .parse::<DocumentMut>()
         .unwrap();
-    let entry = &mut config["mcp_servers"]["ndm-next"];
+    let entry = &mut config["mcp_servers"]["onesdm-mcp"];
     entry["command"] = value(target.executable.to_str().unwrap());
     entry["args"] = value(
         ["--mcp", "--data-dir", target.profile.to_str().unwrap()]
@@ -200,7 +246,7 @@ fn a_legacy_codex_entry_can_be_repaired_after_moving_the_app() {
         .unwrap()
         .parse::<DocumentMut>()
         .unwrap();
-    let entry = &config["mcp_servers"]["ndm-next"];
+    let entry = &config["mcp_servers"]["onesdm-mcp"];
     assert_eq!(entry["command"].as_str(), target.executable.to_str());
     assert_eq!(entry["enabled"].as_bool(), Some(true));
     assert_eq!(
@@ -237,10 +283,10 @@ fn opencode_updates_existing_v2_jsonc_and_leaves_other_sources_in_place() {
         .object_value("mcp")
         .unwrap();
     let servers = mcp.object_value("servers").unwrap();
-    assert!(mcp.get("ndm-next").is_none());
+    assert!(mcp.get("onesdm-mcp").is_none());
     assert!(
         servers
-            .object_value("ndm-next")
+            .object_value("onesdm-mcp")
             .unwrap()
             .get("codemode")
             .is_some()
@@ -248,7 +294,7 @@ fn opencode_updates_existing_v2_jsonc_and_leaves_other_sources_in_place() {
     assert!(servers.get("example").is_some());
     assert_eq!(fs::read_to_string(&other).unwrap(), other_content);
     Harness::OpenCode.remove(&target).unwrap();
-    assert!(!fs::read_to_string(&config).unwrap().contains("ndm-next"));
+    assert!(!fs::read_to_string(&config).unwrap().contains("onesdm-mcp"));
     assert!(
         fs::read_to_string(&config)
             .unwrap()
@@ -276,7 +322,7 @@ fn installing_or_removing_the_sdk_preserves_user_files() {
     let config = target.home.join(".codex/config.toml");
     let original = "# Existing config\nmodel = \"example\"\n";
     write(&config, original);
-    let root = target.home.join(".agents/skills/ndm-next");
+    let root = target.home.join(".agents/skills/onesdm");
     let sdk = root.join("references/sdk");
     let readme = sdk.join("README.md");
     write(&readme, "User reference");
@@ -313,7 +359,7 @@ fn a_link_inside_the_sdk_is_never_followed() {
     Harness::Codex.install(&target).unwrap();
     let examples = target
         .home
-        .join(".agents/skills/ndm-next/references/sdk/examples");
+        .join(".agents/skills/onesdm/references/sdk/examples");
     let outside = temp.path().join("original-examples");
     fs::rename(&examples, &outside).unwrap();
     symlink(&outside, &examples).unwrap();
@@ -371,8 +417,8 @@ fn deepseek_removes_only_the_managed_row_from_an_annotated_patch() {
     let target = target(directory.path());
     let path = target.home.join(".dsh/cordis.patch.yml");
     let row = json!({
-        "id": "mcp-ndm-next", "name": "@deepseek-ai/dsh-mcp-client",
-        "config": {"serverName": "ndm-next", "transport": "stdio",
+        "id": "mcp-onesdm-mcp", "name": "@deepseek-ai/dsh-mcp-client",
+        "config": {"serverName": "onesdm-mcp", "transport": "stdio",
             "command": target.executable, "args": ["--mcp", "--data-dir", target.profile]}
     });
     for extra in [None, Some(json!({"name":"other", "id":"keep-this"}))] {
@@ -408,7 +454,7 @@ fn a_foreign_server_or_invalid_config_is_left_with_its_original_contents() {
         (
             Harness::ClaudeCode,
             ".claude.json",
-            "{\"mcpServers\":{\"ndm-next\":{\"type\":\"http\",\"url\":\"https://example.test/mcp\"}}}",
+            "{\"mcpServers\":{\"onesdm-mcp\":{\"type\":\"http\",\"url\":\"https://example.test/mcp\"}}}",
             io::ErrorKind::AlreadyExists,
         ),
         (
@@ -420,7 +466,7 @@ fn a_foreign_server_or_invalid_config_is_left_with_its_original_contents() {
         (
             Harness::DeepSeek,
             ".dsh/cordis.patch.yml",
-            "- insert:\n    - id: custom\n      name: '@deepseek-ai/dsh-mcp-client'\n      config: { serverName: ndm-next, transport: stdio, command: other }\n",
+            "- insert:\n    - id: custom\n      name: '@deepseek-ai/dsh-mcp-client'\n      config: { serverName: onesdm-mcp, transport: stdio, command: other }\n",
             io::ErrorKind::AlreadyExists,
         ),
         (
@@ -432,25 +478,25 @@ fn a_foreign_server_or_invalid_config_is_left_with_its_original_contents() {
         (
             Harness::DeepSeek,
             ".dsh/cordis.patch.yml",
-            "- insert:\n    - id: tools\n      group: true\n      config:\n        - name: '@deepseek-ai/dsh-mcp-client'\n          config: {serverName: ndm-next}\n",
+            "- insert:\n    - id: tools\n      group: true\n      config:\n        - name: '@deepseek-ai/dsh-mcp-client'\n          config: {serverName: onesdm-mcp}\n",
             io::ErrorKind::AlreadyExists,
         ),
         (
             Harness::DeepSeek,
             ".dsh/cordis.patch.yml",
-            "- id: tools\n  config:\n    - name: '@deepseek-ai/dsh-mcp-manager'\n      config: {servers: {ndm-next: {command: other}}}\n",
+            "- id: tools\n  config:\n    - name: '@deepseek-ai/dsh-mcp-manager'\n      config: {servers: {onesdm-mcp: {command: other}}}\n",
             io::ErrorKind::AlreadyExists,
         ),
         (
             Harness::DeepSeek,
             ".dsh/cordis.patch.yml",
-            "- id: custom\n  config: {serverName: ndm-next, transport: stdio, command: other}\n",
+            "- id: custom\n  config: {serverName: onesdm-mcp, transport: stdio, command: other}\n",
             io::ErrorKind::AlreadyExists,
         ),
         (
             Harness::DeepSeek,
             ".dsh/cordis.patch.yml",
-            "- id: custom\n  config: {serverName: &name ndm-next}\n- insert:\n    - name: '@deepseek-ai/dsh-mcp-client'\n      config: {serverName: *name, transport: stdio, command: other}\n",
+            "- id: custom\n  config: {serverName: &name onesdm-mcp}\n- insert:\n    - name: '@deepseek-ai/dsh-mcp-client'\n      config: {serverName: *name, transport: stdio, command: other}\n",
             io::ErrorKind::AlreadyExists,
         ),
     ] {
@@ -466,7 +512,7 @@ fn a_foreign_server_or_invalid_config_is_left_with_its_original_contents() {
 #[cfg(unix)]
 #[test]
 #[ignore = "requires Claude Code, Pi, and OpenCode on PATH and uses isolated user settings"]
-fn native_clients_discover_the_ndm_next_registration() {
+fn native_clients_discover_the_onesdm_mcp_registration() {
     use std::{env, process::Command};
 
     let directory = tempfile::tempdir().unwrap();
@@ -479,7 +525,7 @@ fn native_clients_discover_the_ndm_next_registration() {
         (
             Harness::ClaudeCode,
             "claude",
-            &["mcp", "get", "ndm-next"][..],
+            &["mcp", "get", "onesdm-mcp"][..],
         ),
         (Harness::Pi, "pi", &["mcp", "list"][..]),
         (Harness::OpenCode, "opencode", &["mcp", "list"][..]),
@@ -507,7 +553,7 @@ fn native_clients_discover_the_ndm_next_registration() {
             client.name()
         );
         assert!(
-            String::from_utf8_lossy(&output.stdout).contains("ndm-next"),
+            String::from_utf8_lossy(&output.stdout).contains("onesdm-mcp"),
             "{} did not report the server",
             client.name(),
         );
@@ -518,7 +564,7 @@ fn native_clients_discover_the_ndm_next_registration() {
 #[cfg(unix)]
 #[test]
 #[ignore = "requires DeepSeek Harness on PATH and uses an isolated DSH_HOME"]
-fn deepseek_composes_the_ndm_next_client_across_profiles() {
+fn deepseek_composes_the_onesdm_mcp_client_across_profiles() {
     use std::{env, process::Command};
 
     let directory = tempfile::tempdir().unwrap();
@@ -540,7 +586,8 @@ fn deepseek_composes_the_ndm_next_client_across_profiles() {
         );
         let config = String::from_utf8(output.stdout).unwrap();
         assert!(
-            config.contains("mcp-ndm-next") && config.contains(target.executable.to_str().unwrap())
+            config.contains("mcp-onesdm-mcp")
+                && config.contains(target.executable.to_str().unwrap())
         );
     }
 }

@@ -13,12 +13,12 @@ if (-not $ManifestPath) {
     $ManifestPath = [string]$registration.GetValue('')
 }
 if (-not $ManifestPath -or -not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
-    throw 'The NDM Next native host manifest was not found. Install the desktop app first.'
+    throw 'The OnesDM native host manifest was not found. Install the desktop app first.'
 }
 
 $manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
 if ($manifest.name -ne 'com.ndmnext.host' -or $manifest.type -ne 'stdio' -or -not $manifest.allowed_origins) {
-    throw 'The selected file is not an NDM Next native messaging manifest.'
+    throw 'The selected file is not an OnesDM native messaging manifest.'
 }
 $origin = "chrome-extension://$ExtensionId/"
 if (@($manifest.allowed_origins) -notcontains $origin) {

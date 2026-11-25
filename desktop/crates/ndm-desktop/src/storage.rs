@@ -89,11 +89,14 @@ fn reparse(metadata: &fs::Metadata) -> bool {
 }
 
 fn owned_update_name(name: &str) -> bool {
-    name.strip_prefix("NDM-Next-Setup-")
-        .and_then(|name| name.strip_suffix("-x64.exe"))
-        .is_some_and(|version| semver::Version::parse(version).is_ok())
+    name == "OnesDM.exe"
+        || name
+            .strip_prefix("NDM-Next-Setup-")
+            .and_then(|name| name.strip_suffix("-x64.exe"))
+            .is_some_and(|version| semver::Version::parse(version).is_ok())
         || name
             .strip_prefix("NDM-Next-")
+            .or_else(|| name.strip_prefix("OnesDM-"))
             .and_then(|name| {
                 name.strip_suffix("-macos-arm64.dmg")
                     .or_else(|| name.strip_suffix("-macos-x64.dmg"))

@@ -135,7 +135,7 @@ function scheduleRecovery() {
 const handoff = new Handoff({native,storage:chrome.storage.local,downloads:chrome.downloads,uuid:()=>crypto.randomUUID(),onPending:scheduleRecovery});
 
 // Existing installations retain the legacy backend. Brand-new installations
-// default to the NDM Next desktop app.
+// default to the OnesDM desktop app.
 chrome.runtime.onInstalled?.addListener(async ({reason}) => {
   const saved = await chrome.storage.local.get('backend');
   if (!saved.backend) await chrome.storage.local.set({backend:reason === 'install' ? 'next' : 'neatdm'});
@@ -317,7 +317,7 @@ async function askToTakeOver(download, task, config) {
   try { await chrome.storage.session?.set({[id]:pending}); } catch {}
   try {
     await chrome.notifications.create(id, {
-      type:'basic',iconUrl:'icons/icon-128.png',title:'NDM Next',
+      type:'basic',iconUrl:'icons/icon-128.png',title:'OnesDM',
       message:extensionMessage('confirmTitle', locale),
       buttons:[{title:extensionMessage('confirmAccept', locale)},{title:extensionMessage('confirmKeep', locale)}],
     });
@@ -374,7 +374,7 @@ chrome.downloads.onCreated.addListener(async download => {
       await chrome.downloads.cancel(download.id);
       await chrome.downloads.erase({id:download.id});
     }
-  } catch { console.warn('NDM Next: download left in browser'); }
+  } catch { console.warn('OnesDM: download left in browser'); }
 });
 chrome.downloads.onChanged?.addListener(delta => { if (delta.state || delta.error) handoff.recover().catch(scheduleRecovery); });
 

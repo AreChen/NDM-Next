@@ -553,14 +553,14 @@ fn managed_skill_refreshes_legacy_installs_and_plugin_guides() {
     fs::create_dir(&target.profile).unwrap();
     let store = Store::open(&target.profile.join("tasks.db")).unwrap();
     store.set_ai_enabled(true).unwrap();
-    let root = target.home.join(".agents/skills/ndm-next");
+    let root = target.home.join(".agents/skills/onesdm");
     let registry = PluginRegistry::new(&target.profile);
     sync_skills(&target).unwrap();
     assert!(!root.exists());
     fs::create_dir_all(&root).unwrap();
     fs::write(
         root.join("SKILL.md"),
-        "<!-- Managed by the NDM Next desktop integration. -->\nOld guide\n",
+        "<!-- Managed by the OnesDM desktop integration. -->\nOld guide\n",
     )
     .unwrap();
 
@@ -602,7 +602,7 @@ fn managed_skill_refreshes_legacy_installs_and_plugin_guides() {
     assert!(!Harness::Codex.status(&target).unwrap().skill_installed);
     fs::write(
         sdk.join("README.md"),
-        "<!-- Managed by the NDM Next desktop integration. -->\nOlder SDK\n",
+        "<!-- Managed by the OnesDM desktop integration. -->\nOlder SDK\n",
     )
     .unwrap();
     sync_skills(&target).unwrap();
@@ -625,7 +625,7 @@ fn managed_skill_refreshes_legacy_installs_and_plugin_guides() {
                 target
                     .home
                     .join(other)
-                    .join("ndm-next/references/plugins/plugin-fixture.md")
+                    .join("onesdm/references/plugins/plugin-fixture.md")
             )
             .unwrap(),
             text,
@@ -678,7 +678,7 @@ fn codex_cli_reads_the_shared_registration() {
     let servers = list();
     let server = servers
         .iter()
-        .find(|server| server["name"] == "ndm-next")
+        .find(|server| server["name"] == "onesdm-mcp")
         .unwrap();
     assert_eq!(server["transport"]["command"], json!(target.executable));
     assert_eq!(
@@ -686,5 +686,5 @@ fn codex_cli_reads_the_shared_registration() {
         json!(["--mcp", "--data-dir", target.profile.to_str().unwrap()])
     );
     Harness::Codex.remove(&target).unwrap();
-    assert!(!list().iter().any(|server| server["name"] == "ndm-next"));
+    assert!(!list().iter().any(|server| server["name"] == "onesdm-mcp"));
 }

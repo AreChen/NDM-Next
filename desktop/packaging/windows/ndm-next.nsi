@@ -51,21 +51,21 @@ RequestExecutionLevel user
   !define NDM_DATA_DIR "$LOCALAPPDATA\NDM Next"
 !endif
 
-Name "NDM Next"
+Name "OnesDM"
 OutFile "${NDM_OUTPUT}"
-InstallDir "$LOCALAPPDATA\Programs\NDM Next"
+InstallDir "$LOCALAPPDATA\Programs\OnesDM"
 InstallDirRegKey HKCU "${NDM_UNINSTALL_KEY}" "InstallLocation"
 Var InstallationGuard
 Var OldDesktop
 Var UpdateMode
 SetCompressor /SOLID lzma
 VIProductVersion "${NDM_VERSION_QUAD}"
-VIAddVersionKey "ProductName" "NDM Next"
-VIAddVersionKey "CompanyName" "NDM Next contributors"
-VIAddVersionKey "FileDescription" "NDM Next installer"
+VIAddVersionKey "ProductName" "OnesDM"
+VIAddVersionKey "CompanyName" "OnesDM contributors"
+VIAddVersionKey "FileDescription" "OnesDM installer"
 VIAddVersionKey "FileVersion" "${NDM_VERSION}"
 VIAddVersionKey "ProductVersion" "${NDM_VERSION}"
-VIAddVersionKey "LegalCopyright" "NDM Next contributors"
+VIAddVersionKey "LegalCopyright" "OnesDM contributors"
 Icon "ndm-next.ico"
 UninstallIcon "ndm-next.ico"
 
@@ -82,10 +82,10 @@ UninstallIcon "ndm-next.ico"
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "SimpChinese"
 !insertmacro MUI_LANGUAGE "English"
-LangString CloseApplication ${LANG_SIMPCHINESE} "NDM Next 未能完成安全退出。请等待下载停止后重试。"
-LangString CloseApplication ${LANG_ENGLISH} "NDM Next could not finish shutting down safely. Wait for downloads to stop and retry."
-LangString InstallationBusy ${LANG_SIMPCHINESE} "另一个 NDM Next 安装程序或启动过程正在运行，请稍后重试。"
-LangString InstallationBusy ${LANG_ENGLISH} "Another NDM Next installation or startup is in progress. Retry when it finishes."
+LangString CloseApplication ${LANG_SIMPCHINESE} "OnesDM 未能完成安全退出。请等待下载停止后重试。"
+LangString CloseApplication ${LANG_ENGLISH} "OnesDM could not finish shutting down safely. Wait for downloads to stop and retry."
+LangString InstallationBusy ${LANG_SIMPCHINESE} "另一个 OnesDM 安装程序或启动过程正在运行，请稍后重试。"
+LangString InstallationBusy ${LANG_ENGLISH} "Another OnesDM installation or startup is in progress. Retry when it finishes."
 LangString DeleteUserData ${LANG_SIMPCHINESE} "是否同时删除下载记录和设置？已下载的文件不会删除。"
 LangString DeleteUserData ${LANG_ENGLISH} "Also delete download history and settings? Downloaded files will be kept."
 LangString DeleteDataFailed ${LANG_SIMPCHINESE} "无法完全删除下载记录和设置；请检查数据目录。"
@@ -169,7 +169,7 @@ Function .onInit
   StrCpy $OldDesktop ""
   old_icon_parsed:
   ; Preserve a legacy custom location when no different directory was selected.
-  StrCmp $INSTDIR "$LOCALAPPDATA\Programs\NDM Next" 0 old_location_done
+  StrCmp $INSTDIR "$LOCALAPPDATA\Programs\OnesDM" 0 old_location_done
   StrCmp $OldDesktop "" old_location_done
   IfFileExists "$OldDesktop" 0 old_location_done
   ${GetParent} "$OldDesktop" $INSTDIR
@@ -244,6 +244,7 @@ Section "Install"
   SetOutPath "$INSTDIR"
   File "${NDM_BIN_DIR}\ndm-desktop.exe"
   File "${NDM_BIN_DIR}\ndm-host.exe"
+  File /oname=onesdm.exe "${NDM_BIN_DIR}\ndm-host.exe"
   File /oname=LICENSE.txt "..\..\..\LICENSE"
   File /oname=THIRD-PARTY-LICENSES.html "${NDM_NOTICES}"
   File /oname=LICENSE-LUCIDE.txt "licenses\LUCIDE.txt"
@@ -283,10 +284,13 @@ Section "Install"
   WriteRegStr HKCU "Software\Microsoft\Edge\NativeMessagingHosts\${NDM_HOST_NAME}" "" "$INSTDIR\native-messaging-host.json"
 
   !ifndef NDM_TEST_INSTALL
-    CreateDirectory "$SMPROGRAMS\NDM Next"
-    CreateShortcut "$SMPROGRAMS\NDM Next\NDM Next.lnk" "$INSTDIR\ndm-desktop.exe"
-    CreateShortcut "$SMPROGRAMS\NDM Next\Uninstall NDM Next.lnk" "$INSTDIR\Uninstall.exe"
-    WriteRegStr HKCU "${NDM_UNINSTALL_KEY}" "DisplayName" "NDM Next"
+    Delete "$SMPROGRAMS\NDM Next\NDM Next.lnk"
+    Delete "$SMPROGRAMS\NDM Next\Uninstall NDM Next.lnk"
+    RMDir "$SMPROGRAMS\NDM Next"
+    CreateDirectory "$SMPROGRAMS\OnesDM"
+    CreateShortcut "$SMPROGRAMS\OnesDM\OnesDM.lnk" "$INSTDIR\ndm-desktop.exe"
+    CreateShortcut "$SMPROGRAMS\OnesDM\Uninstall OnesDM.lnk" "$INSTDIR\Uninstall.exe"
+    WriteRegStr HKCU "${NDM_UNINSTALL_KEY}" "DisplayName" "OnesDM"
     WriteRegStr HKCU "${NDM_UNINSTALL_KEY}" "DisplayVersion" "${NDM_VERSION}"
     WriteRegStr HKCU "${NDM_UNINSTALL_KEY}" "DisplayIcon" "$INSTDIR\ndm-desktop.exe"
     WriteRegStr HKCU "${NDM_UNINSTALL_KEY}" "InstallLocation" "$INSTDIR"
@@ -343,9 +347,9 @@ Section "Uninstall"
     ReadRegStr $0 HKCU "${NDM_UNINSTALL_KEY}" "UninstallString"
     StrCmp $0 '$\"$INSTDIR\Uninstall.exe$\"' 0 skip_shortcuts
     DeleteRegKey HKCU "${NDM_UNINSTALL_KEY}"
-    Delete "$SMPROGRAMS\NDM Next\NDM Next.lnk"
-    Delete "$SMPROGRAMS\NDM Next\Uninstall NDM Next.lnk"
-    RMDir "$SMPROGRAMS\NDM Next"
+    Delete "$SMPROGRAMS\OnesDM\OnesDM.lnk"
+    Delete "$SMPROGRAMS\OnesDM\Uninstall OnesDM.lnk"
+    RMDir "$SMPROGRAMS\OnesDM"
   skip_shortcuts:
   !endif
   Delete "$INSTDIR\native-messaging-host.json"
@@ -400,6 +404,7 @@ Section "Uninstall"
   data_delete_error_silent:
   SetErrorLevel 1
   data_keep:
+  Delete "$INSTDIR\onesdm.exe"
   Delete "$INSTDIR\ndm-host.exe"
   Delete "$INSTDIR\ndm-desktop.exe"
   Delete "$INSTDIR\Uninstall.exe"

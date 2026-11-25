@@ -536,7 +536,7 @@ impl Desktop {
             .map(|plugin| plugin.manifest.name.for_language(chinese).to_owned())
             .unwrap_or_else(|| {
                 if draft.native {
-                    self.text("内置引擎", "Built-in engine")
+                    "ODM Core"
                 } else {
                     self.text("选择引擎", "Choose engine")
                 }
@@ -553,7 +553,7 @@ impl Desktop {
             })
             .collect();
         if draft.native {
-            choices.push((None, self.text("内置引擎", "Built-in engine").to_owned()));
+            choices.push((None, "ODM Core".to_owned()));
         }
         let source = draft.source.clone();
         let view = cx.entity().downgrade();

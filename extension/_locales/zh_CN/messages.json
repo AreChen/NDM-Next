@@ -1,6 +1,6 @@
 {
   "extensionDescription": {
-    "message": "将浏览器下载交给 NDM Next，并查看网页资源。"
+    "message": "将浏览器下载交给 OnesDM，并查看网页资源。"
   },
   "connecting": {
     "message": "正在连接…"
@@ -63,7 +63,7 @@
     "message": "浏览器扩展"
   },
   "desktopVersion": {
-    "message": "NDM Next 桌面端"
+    "message": "OnesDM 桌面端"
   },
   "installedPlugins": {
     "message": "已安装插件"
@@ -90,16 +90,16 @@
     "message": "每次询问"
   },
   "confirmTitle": {
-    "message": "将此下载交给 NDM Next？"
+    "message": "将此下载交给 OnesDM？"
   },
   "confirmAccept": {
-    "message": "交给 NDM Next"
+    "message": "交给 OnesDM"
   },
   "confirmKeep": {
     "message": "留在浏览器"
   },
   "captureHint": {
-    "message": "NDM Next 支持接管前询问。"
+    "message": "OnesDM 支持接管前询问。"
   },
   "transferPolicy": {
     "message": "接管时机"

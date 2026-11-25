@@ -1,13 +1,13 @@
 ---
-name: ndm-next
-description: Use NDM Next to download files or models, media and torrents, manage tasks through its local MCP server, diagnose speed or HTTP failures, or develop, test and package an NDM Next download-engine plugin with its SDK. 适用于下载、排查任务、开发插件和复用 yt-dlp。
+name: onesdm
+description: Use OnesDM to download files or models, media and torrents, manage tasks through its local MCP server, diagnose speed or HTTP failures, or develop, test and package an OnesDM download-engine plugin with its SDK. 适用于下载、排查任务、开发插件和复用 yt-dlp。
 ---
 
-<!-- Managed by the NDM Next desktop integration. -->
+<!-- Managed by the OnesDM desktop integration. -->
 
-# NDM Next
+# OnesDM Skill
 
-Use the local `ndm-next` MCP server for downloads. For plugin development, start with the SDK bundled in this Skill. All paths below are relative to this file.
+Use the local OnesDM MCP server (`onesdm-mcp`) for downloads. For plugin development, start with the SDK bundled in this Skill. All paths below are relative to this file.
 
 | What the user wants · 使用场景 | Where to start |
 | --- | --- |
@@ -31,6 +31,6 @@ Read `task_ids` from the result. For a status check, call `ndm_task_status` with
 
 ## Discover the current installation
 
-The client may prefix tool names. Use the names and input schemas in its live tool list. If the list is empty, check **Settings → AI integration** in NDM Next, enable **AI access**, and verify the client registration. Reopen the client session after installing the integration. Plugin tools also depend on the plugin's own AI access setting.
+The client may prefix tool names. Use the names and input schemas in its live tool list. If the list is empty, check **Settings → AI integration** in OnesDM, enable **AI access**, and verify the client registration. Reopen the client session after installing the integration. Plugin tools also depend on the plugin's own AI access setting.
 
 For a webpage or an engine-specific request, read `automatic_engine`, the matching plugin IDs, and their option schemas. Omit `plugin` for automatic selection. Use the exact ID for explicit selection. The installed plugin index follows local plugin and access changes. The SDK and examples are available offline, including when AI access is off.

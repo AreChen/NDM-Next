@@ -143,9 +143,7 @@ impl Desktop {
                 "客户端配置权限不足",
                 "Permission denied for client configuration",
             ),
-            Issue::MissingHost => {
-                self.text("无法找到 NDM Next 宿主", "NDM Next host is unavailable")
-            }
+            Issue::MissingHost => self.text("无法找到 OnesDM 宿主", "OnesDM host is unavailable"),
             Issue::Changed => self.text(
                 "客户端配置刚被修改，请重试",
                 "Client configuration changed. Try again.",

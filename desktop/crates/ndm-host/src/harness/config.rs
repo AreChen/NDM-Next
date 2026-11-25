@@ -11,7 +11,7 @@ use jsonc_parser::{
 use toml_edit::{Array, DocumentMut, Item, Table, TableLike, value};
 
 use super::{
-    Harness, MCP_ARGS, McpStatus, SERVER, Target, config_conflict, deepseek, host_name,
+    Harness, LEGACY, MCP_ARGS, McpStatus, SERVER, Target, config_conflict, deepseek, host_name,
     invalid_config,
 };
 
@@ -76,11 +76,16 @@ impl Config {
         self.original.is_some()
     }
 
-    pub(super) fn status(&self, target: &Target, client: Harness) -> io::Result<McpStatus> {
+    pub(super) fn status(
+        &self,
+        target: &Target,
+        client: Harness,
+        server: &str,
+    ) -> io::Result<McpStatus> {
         match &self.document {
-            Document::Toml(document) => codex_status(document, target),
-            Document::Json(document) => json_status(document, target, client),
-            Document::Cordis(document) => document.status(target),
+            Document::Toml(document) => codex_status(document, target, server),
+            Document::Json(document) => json_status(document, target, client, server),
+            Document::Cordis(document) => document.status(target, server),
         }
     }
 
@@ -98,7 +103,7 @@ impl Config {
                 }
             }
             Document::Json(document) => {
-                let (servers, v2) = json_servers(document, client, true)?;
+                let (servers, v2) = json_servers(document, client, true, SERVER)?;
                 let servers = servers.expect("configured with an object");
                 let is_new = property(&servers, SERVER)?.is_none();
                 let entry = json_object(&servers, SERVER, true)?.expect("created an entry");
@@ -151,7 +156,7 @@ impl Config {
                 }
             }
             Document::Json(document) => {
-                let (servers, _) = json_servers(document, client, false)?;
+                let (servers, _) = json_servers(document, client, false, SERVER)?;
                 if let Some(servers) = servers
                     && let Some(entry) = property(&servers, SERVER)?
                 {
@@ -159,6 +164,32 @@ impl Config {
                 }
             }
             Document::Cordis(document) => document.unregister()?,
+        }
+        Ok(())
+    }
+
+    pub(super) fn rename_legacy(&mut self, client: Harness) -> io::Result<()> {
+        match &mut self.document {
+            Document::Toml(doc) => {
+                let table = doc
+                    .get_mut(CODEX_SERVERS)
+                    .and_then(Item::as_table_like_mut)
+                    .ok_or_else(invalid_config)?;
+                let original = table.remove(LEGACY).ok_or_else(invalid_config)?;
+                table.insert(SERVER, original);
+            }
+            Document::Json(doc) => {
+                let (servers, _) = json_servers(doc, client, false, LEGACY)?;
+                let entry = property(&servers.ok_or_else(invalid_config)?, LEGACY)?
+                    .ok_or_else(invalid_config)?;
+                match entry.name() {
+                    Some(jsonc_parser::cst::ObjectPropName::String(name)) => {
+                        name.set_raw_value(format!("\"{SERVER}\""))
+                    }
+                    _ => return Err(invalid_config()),
+                }
+            }
+            Document::Cordis(doc) => doc.rename_legacy()?,
         }
         Ok(())
     }
@@ -181,12 +212,12 @@ impl Config {
     }
 }
 
-fn codex_status(document: &DocumentMut, target: &Target) -> io::Result<McpStatus> {
+fn codex_status(document: &DocumentMut, target: &Target, server: &str) -> io::Result<McpStatus> {
     let Some(servers) = document.get(CODEX_SERVERS) else {
         return Ok(McpStatus::Missing);
     };
     let servers = servers.as_table_like().ok_or_else(invalid_config)?;
-    let Some(entry) = servers.get(SERVER) else {
+    let Some(entry) = servers.get(server) else {
         return Ok(McpStatus::Missing);
     };
     let entry = entry.as_table_like().ok_or_else(config_conflict)?;
@@ -217,16 +248,21 @@ fn ensure_table<'a>(table: &'a mut dyn TableLike, key: &str) -> io::Result<&'a m
         .ok_or_else(invalid_config)
 }
 
-fn json_status(document: &CstRootNode, target: &Target, client: Harness) -> io::Result<McpStatus> {
-    let (servers, v2) = json_servers(document, client, false)?;
+fn json_status(
+    document: &CstRootNode,
+    target: &Target,
+    client: Harness,
+    server: &str,
+) -> io::Result<McpStatus> {
+    let (servers, v2) = json_servers(document, client, false, server)?;
     let Some(servers) = servers else {
         return Ok(McpStatus::Missing);
     };
     // Pi normalizes '-' and '_' to the same server name.
-    if client == Harness::Pi && property(&servers, "ndm_next")?.is_some() {
+    if client == Harness::Pi && property(&servers, &server.replace('-', "_"))?.is_some() {
         return Err(config_conflict());
     }
-    let Some(entry) = property(&servers, SERVER)? else {
+    let Some(entry) = property(&servers, server)? else {
         return Ok(McpStatus::Missing);
     };
     let entry = entry.object_value().ok_or_else(config_conflict)?;
@@ -294,6 +330,7 @@ fn json_servers(
     document: &CstRootNode,
     client: Harness,
     create: bool,
+    server: &str,
 ) -> io::Result<(Option<CstObject>, bool)> {
     let root = if create {
         document.object_value_or_create()
@@ -315,8 +352,8 @@ fn json_servers(
         // In V1, "servers" can itself be a server name.
         && nested.get("type").and_then(|prop| prop.value()).and_then(json_string).is_none()
     {
-        let has_legacy = property(legacy, SERVER)?.is_some();
-        if has_legacy && property(&nested, SERVER)?.is_some() {
+        let has_legacy = property(legacy, server)?.is_some();
+        if has_legacy && property(&nested, server)?.is_some() {
             return Err(config_conflict());
         }
         if !has_legacy {

@@ -13,6 +13,6 @@ fn main() {
         embed_resource::compile("icon.rc", embed_resource::NONE)
             .manifest_optional()
             .expect("embed the application icon");
-        version_resource::embed("ndm-desktop", "NDM Next desktop application");
+        version_resource::embed("ndm-desktop", "OnesDM desktop application");
     }
 }

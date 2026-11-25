@@ -21,7 +21,8 @@ const INSTALL: &str = "--install-macos-update";
 const FINISH: &str = "--finish-macos-update";
 pub(crate) const UPDATE_ROLLED_BACK: &str = "--macos-update-rolled-back";
 const STAGING_PREFIX: &str = ".ndm-next-update-";
-const BUNDLE_NAME: &str = "NDM Next.app";
+// Both sides of an in-place update must agree on the private staging name.
+const STAGED_BUNDLE: &str = "NDM Next.app";
 const DESKTOP_IMAGE: &str = "Contents/MacOS/ndm-desktop";
 const EXIT_MANUAL: i32 = 2;
 const EXIT_INTEGRITY: i32 = 3;
@@ -102,7 +103,7 @@ pub(crate) fn run_installer() {
         Err(InstallError::Manual) => EXIT_MANUAL,
         Err(InstallError::Integrity) => EXIT_INTEGRITY,
         Err(InstallError::Io(error)) => {
-            eprintln!("NDM Next upgrade did not finish: {error}");
+            eprintln!("OnesDM upgrade did not finish: {error}");
             1
         }
     };
@@ -176,14 +177,14 @@ fn run(arguments: Vec<OsString>) -> Result<(), InstallError> {
                         .expect("temporary directory name"),
                 )
                 .exec();
-            eprintln!("Could not launch upgraded NDM Next: {error}");
+            eprintln!("Could not launch upgraded OnesDM: {error}");
             if let Err(error) = exchange(current, &incoming) {
                 let backup = staging.keep();
-                eprintln!("NDM Next backup retained at {}", backup.display());
+                eprintln!("OnesDM backup retained at {}", backup.display());
                 return Err(error.into());
             }
         }
-        Err(error) => eprintln!("Could not replace NDM Next: {error}"),
+        Err(error) => eprintln!("Could not replace OnesDM: {error}"),
     }
     drop(staging);
     Err(relaunch(&executable).arg(UPDATE_ROLLED_BACK).exec().into())
@@ -255,7 +256,7 @@ fn stage_image(
     let mount = image_workspace.path().join("mount");
     fs::create_dir(&mount)?;
     let original_device = fs::metadata(&mount)?.dev();
-    let incoming = staging.join(BUNDLE_NAME);
+    let incoming = staging.join(STAGED_BUNDLE);
     let attached = checked_status(
         Command::new("/usr/bin/hdiutil")
             .args([
@@ -305,7 +306,7 @@ fn bundle_for(executable: &Path) -> Option<&Path> {
 fn invalid_bundle() -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
-        "invalid NDM Next application bundle",
+        "invalid OnesDM application bundle",
     )
 }
 
@@ -389,7 +390,7 @@ pub(crate) fn finish_update() {
             let executable = std::env::current_exe()?.canonicalize()?;
             let current = bundle_for(&executable).ok_or_else(invalid_bundle)?;
             let staging = current.parent().ok_or_else(invalid_bundle)?.join(name);
-            let backup = staging.join(BUNDLE_NAME);
+            let backup = staging.join(STAGED_BUNDLE);
             let running_version = bundle_version(current)?;
             if !fs::symlink_metadata(&staging)?.is_dir()
                 || running_version.to_string() != env!("CARGO_PKG_VERSION")
@@ -401,7 +402,7 @@ pub(crate) fn finish_update() {
             fs::remove_dir(staging)
         })();
         if let Err(error) = result {
-            eprintln!("Could not remove the previous NDM Next bundle: {error}");
+            eprintln!("Could not remove the previous OnesDM bundle: {error}");
         }
     });
 }

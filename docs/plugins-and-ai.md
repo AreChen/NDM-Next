@@ -20,7 +20,7 @@ MP4, WebM, or MKV. Choose uploaded or automatic subtitles and check the
 languages you want. For a separate HTTP(S) or SOCKS proxy, enable **Use a
 separate proxy**, choose a protocol, and enter the host and port.
 
-Paste a URL or select a local source file in **New download**. NDM Next
+Paste a URL or select a local source file in **New download**. OnesDM
 selects an installed engine that matches the source. Media Downloader
 matches pages on common media sites such as YouTube, Bilibili, TikTok and
 Vimeo. For another site, choose **Media Downloader** in **Download engine**.
@@ -37,30 +37,30 @@ Open **Settings → AI integration** and expand the client list. Install MCP
 and the Skill for each client you use, then turn on **AI access** to make
 download tools available. AI access starts disabled. Reopen the client
 session after installation. Each row shows the local configuration state
-and offers repair when the NDM Next executable has moved.
+and offers repair when the OnesDM executable has moved.
 
 | Client | User MCP configuration | User Skill location |
 | --- | --- | --- |
-| OpenAI Codex CLI and desktop | `~/.codex/config.toml` | `~/.agents/skills/ndm-next/` |
-| Claude Code | `~/.claude.json` | `~/.claude/skills/ndm-next/` |
-| Pi with built-in MCP | `~/.pi/agent/mcp.json` | `~/.pi/agent/skills/ndm-next/` |
-| OpenCode | `~/.config/opencode/opencode.json(c)` | `~/.config/opencode/skills/ndm-next/` |
-| DeepSeek Harness | `~/.dsh/cordis.patch.yml` | `~/.dsh/skills/ndm-next/` |
+| OpenAI Codex CLI and desktop | `~/.codex/config.toml` | `~/.agents/skills/onesdm/` |
+| Claude Code | `~/.claude.json` | `~/.claude/skills/onesdm/` |
+| Pi with built-in MCP | `~/.pi/agent/mcp.json` | `~/.pi/agent/skills/onesdm/` |
+| OpenCode | `~/.config/opencode/opencode.json(c)` | `~/.config/opencode/skills/onesdm/` |
+| DeepSeek Harness | `~/.dsh/cordis.patch.yml` | `~/.dsh/skills/onesdm/` |
 
 Codex CLI and the desktop app share MCP settings on the same Codex host.
-NDM Next can write this configuration even on a desktop-only installation.
-Pi's built-in MCP is available from version 0.99.0. NDM Next works with both
+OnesDM can write this configuration even on a desktop-only installation.
+Pi's built-in MCP is available from version 0.99.0. OnesDM works with both
 OpenCode's legacy MCP map and the V2 `mcp.servers` structure. These are the
-default locations. Absolute configuration paths inherited by NDM Next from
+default locations. Absolute configuration paths inherited by OnesDM from
 the client's environment can override them.
 
-DeepSeek Harness loads NDM Next through its built-in stdio MCP client. Its
+DeepSeek Harness loads OnesDM through its built-in stdio MCP client. Its
 home-level Cordis patch applies across profiles. Profiles with filesystem
 Skills discover the guide under the same `DSH_HOME`. [DeepSeek Harness MCP guide](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/guide/mcp-memory.md)
 
-NDM Next refreshes its installed Skill copies after a desktop upgrade,
-a plugin install, update or removal, and an AI access change. The plugin
-market's **AI on** control lets you disable AI use for one engine.
+OnesDM refreshes its installed Skill copies after a desktop upgrade,
+a plugin install, update or removal, and an AI access change. Use the AI access switch
+in a plugin’s settings to control whether agents may use that engine.
 The engine stays available for regular desktop and browser downloads.
 
 Use `ndm_list_engines` with a source to see compatible engines, the automatic
@@ -95,7 +95,7 @@ MCP downloads run quietly by default. Follow progress in the main list or with `
 
 For built-in HTTP(S), including HLS and DASH, select the default route in **Settings → Proxy and network**, or override it in **New download** or the MCP item's `proxy_mode`. Omit it or use `inherit` for the app default. `system_route` and legacy `direct` skip HTTP proxies and use normal OS routing, including an active TUN. `tun_direct` uses the configured exit for all transfer connections and fails if it is unavailable. Set `user_agent` for an individual UA override.
 
-For a DIRECT listener, configure your TUN client to listen for HTTP proxy connections on a dedicated IPv4 loopback port and route that inbound to DIRECT. Enter only the port in NDM Next. A normal mixed/proxy port follows its own rules. Linux and macOS also accept a physical interface name for TCP binding. DNS still uses the system resolver with an interface binding, and the OS or VPN can block the connection. Check `ndm_network_routes` for the configured exit type. Use the VPN client's connection log to verify its final outbound.
+For a DIRECT listener, configure your TUN client to listen for HTTP proxy connections on a dedicated IPv4 loopback port and route that inbound to DIRECT. Enter only the port in OnesDM. A normal mixed/proxy port follows its own rules. Linux and macOS also accept a physical interface name for TCP binding. DNS still uses the system resolver with an interface binding, and the OS or VPN can block the connection. Check `ndm_network_routes` for the configured exit type. Use the VPN client's connection log to verify its final outbound.
 
 `ndm_task_status` and `ndm_list_tasks` provide a redacted `error` for failed
 tasks. For built-in file downloads, look at `error.http_status`, `error.stage`,
@@ -114,7 +114,7 @@ name becomes visible while the download is running.
 
 - [Plugin market catalog](https://github.com/AreChen/NDM-Next-Plugin-Market)
 - [Download engine SDK](../desktop/crates/ndm-plugin-sdk/README.md)
-- [NDM Next Skill](../desktop/crates/ndm-host/skills/SKILL.md)
+- [OnesDM Skill](../desktop/crates/ndm-host/skills/SKILL.md)
 
 # 插件与 AI 客户端
 
@@ -133,7 +133,7 @@ SHA-256。也可以通过 **导入插件** 安装你信任的开发者提供的�
 和自动字幕，可以勾选多种语言。需要单独使用 HTTP(S) 或 SOCKS 代理时，在插件
 设置中开启 **使用独立代理**，选择协议并填写主机和端口。
 
-新建下载时粘贴链接或选择本地文件，NDM Next 会匹配已安装的引擎。
+新建下载时粘贴链接或选择本地文件，OnesDM 会匹配已安装的引擎。
 YouTube、Bilibili、TikTok、Vimeo 等常见媒体网页会匹配 **流媒体下载**。
 其他站点的媒体网页可在 **下载引擎** 中手动选用该插件。HLS、DASH 和媒体直链
 默认走内置引擎，也可选用流媒体下载。在多个自动匹配的插件之间选择时，应用会记住站点偏好。
@@ -144,27 +144,26 @@ YouTube、Bilibili、TikTok、Vimeo 等常见媒体网页会匹配 **流媒体�
 
 在 **设置 → AI 集成** 展开客户端列表，为需要的客户端安装 MCP 和 Skill，再开启
 **AI 接入**。AI 接入默认关闭。安装后重新打开对应客户端的会话。客户端行会显示
-本地配置状态，移动过 NDM Next 时可点 **修复**。
+本地配置状态，移动过 OnesDM 时可点 **修复**。
 
 | 客户端 | 用户级 MCP 配置 | 用户级 Skill 目录 |
 | --- | --- | --- |
-| OpenAI Codex CLI 与桌面版 | `~/.codex/config.toml` | `~/.agents/skills/ndm-next/` |
-| Claude Code | `~/.claude.json` | `~/.claude/skills/ndm-next/` |
-| 支持内置 MCP 的 Pi | `~/.pi/agent/mcp.json` | `~/.pi/agent/skills/ndm-next/` |
-| OpenCode | `~/.config/opencode/opencode.json(c)` | `~/.config/opencode/skills/ndm-next/` |
-| DeepSeek Harness | `~/.dsh/cordis.patch.yml` | `~/.dsh/skills/ndm-next/` |
+| OpenAI Codex CLI 与桌面版 | `~/.codex/config.toml` | `~/.agents/skills/onesdm/` |
+| Claude Code | `~/.claude.json` | `~/.claude/skills/onesdm/` |
+| 支持内置 MCP 的 Pi | `~/.pi/agent/mcp.json` | `~/.pi/agent/skills/onesdm/` |
+| OpenCode | `~/.config/opencode/opencode.json(c)` | `~/.config/opencode/skills/onesdm/` |
+| DeepSeek Harness | `~/.dsh/cordis.patch.yml` | `~/.dsh/skills/onesdm/` |
 
 同一 Codex 主机上的 CLI 和桌面版共用 MCP 配置，只有桌面版也可安装。
 Pi 需要 0.99.0 或更新版本使用内置 MCP。OpenCode 支持旧版 MCP 配置和 V2 的
-`mcp.servers` 结构。表中为默认位置，NDM Next 启动时继承的客户端绝对配置路径
+`mcp.servers` 结构。表中为默认位置，OnesDM 启动时继承的客户端绝对配置路径
 可覆盖默认值。
 
-DeepSeek Harness 通过自带的 stdio MCP 客户端连接 NDM Next。用户级 Cordis 配置对
+DeepSeek Harness 通过自带的 stdio MCP 客户端连接 OnesDM。用户级 Cordis 配置对
 各个 profile 生效。启用了文件系统 Skill 的 profile 会在同一个 `DSH_HOME` 下发现使用指南。[DeepSeek Harness MCP 官方指南](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/guide/mcp-memory.zh.md)
 
 桌面升级、安装、更新或卸载插件以及更改 AI 接入后，应用会刷新各客户端中
-已安装的 NDM Next Skill。点击插件市场卡片的 **AI 已开** 可关闭单个引擎的
-AI 接入。桌面和浏览器仍可使用该引擎下载。
+已安装的 OnesDM Skill。在每个插件的设置中可切换该引擎的 AI 接入。桌面和浏览器仍可使用该引擎下载。
 
 将来源传给 `ndm_list_engines` 可查看兼容引擎、自动选择和当前参数。
 主 Skill 附有下载示例和任务诊断指南，并链接到 `references/plugins/` 中对 AI
@@ -191,7 +190,7 @@ AI 下载默认静默，进度可在主列表或 `ndm_task_status` 查看。批�
 
 内置 HTTP(S)、HLS 和 DASH 在**设置 → 代理与网络**选择默认路由，也可在新建下载或 MCP 单项的 `proxy_mode` 中覆盖。省略或选 `inherit` 沿用应用默认。`system_route` 和旧值 `direct` 会跳过 HTTP 代理，跟随操作系统路由，包括活动 TUN。`tun_direct` 使用已配置的直连出口，出口不可用时下载失败。单项可用 `user_agent` 指定 UA。
 
-使用本地端口时，先在 TUN 客户端建立独立的 HTTP 代理入站，监听 IPv4 回环地址，并将这个入站路由到 DIRECT。在 NDM Next 填入端口号。普通混合端口仍遵循它自己的分流规则。Linux 和 macOS 也可以填物理网卡名称，绑定下载 TCP 连接；域名解析仍使用系统 DNS，系统或 VPN 策略可能阻止连接。用 `ndm_network_routes` 可查看已配置的出口类型，最终出站可在代理客户端的连接日志中核对。
+使用本地端口时，先在 TUN 客户端建立独立的 HTTP 代理入站，监听 IPv4 回环地址，并将这个入站路由到 DIRECT。在 OnesDM 填入端口号。普通混合端口仍遵循它自己的分流规则。Linux 和 macOS 也可以填物理网卡名称，绑定下载 TCP 连接；域名解析仍使用系统 DNS，系统或 VPN 策略可能阻止连接。用 `ndm_network_routes` 可查看已配置的出口类型，最终出站可在代理客户端的连接日志中核对。
 
 `ndm_task_status` 与 `ndm_list_tasks` 为失败任务返回脱敏的 `error`。
 内置文件下载会记录 `error.http_status`、`error.stage`、

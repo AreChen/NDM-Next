@@ -17,7 +17,7 @@ Find the store links in **Settings → Browser extension**:
 - [Chrome / Brave](https://chromewebstore.google.com/detail/ndm-next/caegebfdojcdlkkiaiokeoadefdooamd)
 - [Microsoft Edge](https://microsoftedge.microsoft.com/addons/detail/ndm-next/hiblommiheggidolemmnnlocmocebckp)
 
-The store pages may not be available yet; use manual installation below if needed. Store-installed extensions are already allowed by the desktop installer. Choose **NDM Next** in the extension settings when migrating from Neat Download Manager.
+The store pages may not be available yet; use manual installation below if needed. Store-installed extensions are already allowed by the desktop installer. Choose **OnesDM** in the extension settings when migrating from Neat Download Manager.
 
 Download the companion extension ZIP from the same desktop GitHub Release and extract it. Load the extracted folder as an unpacked extension in the browser's developer mode. The repository's `extension/` directory works too. Starting with extension 1.1.4, the fixed ID is already authorized by desktop 0.1.9 and later. See the [installation guide](../../../docs/extension-install.md). Only older or custom builds without that fixed ID need the helper:
 
@@ -25,7 +25,7 @@ Download the companion extension ZIP from the same desktop GitHub Release and ex
 pwsh -File .\enable-dev-extension.ps1 -ExtensionId <extension-id>
 ```
 
-Use `enable-dev-extension.ps1` inside the extension ZIP (or `desktop/packaging/windows/enable-dev-extension.ps1` in a source checkout). The command adds that one local extension to the native messaging manifest. Reload the extension and select **NDM Next** as its backend. Setup preserves existing valid extension IDs across upgrades, including when changing the installation directory. The existing extension store release has a separate version stream.
+Use `enable-dev-extension.ps1` inside the extension ZIP (or `desktop/packaging/windows/enable-dev-extension.ps1` in a source checkout). The command adds that one local extension to the native messaging manifest. Reload the extension and select **OnesDM** as its backend. Setup preserves existing valid extension IDs across upgrades, including when changing the installation directory. The existing extension store release has a separate version stream.
 
 Update the companion extension as well as the desktop app to receive media-button fixes. Reload open webpages after updating the extension. Media buttons appear above the player where space allows, with a viewport-clamped fallback near its top edge. A non-modal top-layer host avoids ordinary page stacking and clipping; controls stay within their own iframe. **Settings → Buttons beside media** hides the page buttons immediately; detected media remains available in the popup. Complete file sizes appear when the server supplies them; playlist and segment lengths are not presented as a whole video's size.
 

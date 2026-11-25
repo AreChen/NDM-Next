@@ -112,7 +112,7 @@ pub(crate) fn window_options() -> WindowOptions {
         app_id: Some("com.ndmnext.desktop".into()),
         titlebar: Some(TitlebarOptions {
             #[cfg(target_os = "linux")]
-            title: Some("NDM Next".into()),
+            title: Some("OnesDM".into()),
             traffic_light_position: None,
             ..TitleBar::title_bar_options()
         }),
@@ -156,7 +156,7 @@ pub(crate) fn main_toolbar(
                     div()
                         .text_sm()
                         .font_weight(FontWeight::BOLD)
-                        .child("NDM Next"),
+                        .child("OnesDM"),
                 )
                 .child(title_bar_action("sidebar-title-action", collapse)),
         )

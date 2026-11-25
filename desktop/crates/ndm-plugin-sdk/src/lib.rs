@@ -1,4 +1,4 @@
-//! Wire types and framing for NDM Next download engine workers.
+//! Wire types and framing for OnesDM download engine workers.
 
 mod manifest;
 mod worker;

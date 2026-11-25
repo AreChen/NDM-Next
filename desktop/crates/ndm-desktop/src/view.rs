@@ -1282,8 +1282,8 @@ impl Desktop {
         });
         let message = if result.is_ok() {
             self.text(
-                "已授权此扩展。请在扩展中选择 NDM Next，然后重试下载。",
-                "Extension allowed. Select NDM Next in the extension and retry your download.",
+                "已授权此扩展。请在扩展中选择 OnesDM，然后重试下载。",
+                "Extension allowed. Select OnesDM in the extension and retry your download.",
             )
         } else {
             self.text(

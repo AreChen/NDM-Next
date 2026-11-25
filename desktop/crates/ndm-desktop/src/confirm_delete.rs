@@ -45,7 +45,7 @@ pub(crate) fn open(
         move |window, cx| {
             chrome::configure_window_chrome(window);
             chrome::fit_content(window, size(px(480.), px(height)), cx);
-            window.set_window_title("NDM Next · Delete");
+            window.set_window_title("OnesDM · Delete");
             let handle = window.window_handle();
             cx.new(|cx| {
                 cx.on_release(move |this: &mut ConfirmDelete, cx| {

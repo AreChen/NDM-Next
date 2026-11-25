@@ -133,7 +133,7 @@ impl ProgressWindow {
         let snapshot = scheduler
             .progress(id)
             .or_else(|| task.as_ref().and_then(ndm_core::recover_task_progress));
-        window.set_window_title("NDM Next · Download");
+        window.set_window_title("OnesDM · Download");
         cx.observe_global::<ComponentTheme>(|_, cx| cx.notify())
             .detach();
         cx.spawn(async move |view, cx| {

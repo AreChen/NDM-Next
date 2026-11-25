@@ -1,6 +1,6 @@
 {
   "extensionDescription": {
-    "message": "Browser download handoff and page resources for NDM Next."
+    "message": "Browser download handoff and page resources for OnesDM."
   },
   "connecting": {
     "message": "Connecting…"
@@ -63,7 +63,7 @@
     "message": "Browser extension"
   },
   "desktopVersion": {
-    "message": "NDM Next desktop"
+    "message": "OnesDM desktop"
   },
   "installedPlugins": {
     "message": "Installed plugins"
@@ -90,16 +90,16 @@
     "message": "Ask for each download"
   },
   "confirmTitle": {
-    "message": "Send this download to NDM Next?"
+    "message": "Send this download to OnesDM?"
   },
   "confirmAccept": {
-    "message": "Send to NDM Next"
+    "message": "Send to OnesDM"
   },
   "confirmKeep": {
     "message": "Keep in browser"
   },
   "captureHint": {
-    "message": "Confirmation is available with NDM Next."
+    "message": "Confirmation is available with OnesDM."
   },
   "transferPolicy": {
     "message": "Takeover safety"

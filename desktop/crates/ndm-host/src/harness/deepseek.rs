@@ -4,10 +4,16 @@ use std::io;
 use yaml_edit::{Mapping, Sequence, YamlFile};
 
 use super::{
-    McpStatus, SERVER, Target, config::registration_status, config_conflict, invalid_config,
+    LEGACY, McpStatus, SERVER, Target, config::registration_status, config_conflict, invalid_config,
 };
 
-const ENTRY_ID: &str = "mcp-ndm-next";
+fn entry_id(server: &str) -> &'static str {
+    if server == LEGACY {
+        "mcp-ndm-next"
+    } else {
+        "mcp-onesdm-mcp"
+    }
+}
 const CLIENT: &str = "@deepseek-ai/dsh-mcp-client";
 const MANAGER: &str = "@deepseek-ai/dsh-mcp-manager";
 
@@ -60,13 +66,16 @@ impl PatchFile {
         self.file.to_string()
     }
 
-    fn entry(&self) -> io::Result<Option<Entry>> {
+    fn entry(&self, server: &str) -> io::Result<Option<Entry>> {
         let mut found = None;
         for (patch_index, item) in self.patches.values().enumerate() {
             let patch = item.as_mapping().ok_or_else(invalid_config)?;
             // A later patch could override a managed row or register a server
             // of the same name with the web/desktop server manager.
-            if reserves_server(patch) || conflicts_in_group(patch) || opaque_server(patch) {
+            if reserves_server(patch, server)
+                || conflicts_in_group(patch, server)
+                || opaque_server(patch)
+            {
                 return Err(config_conflict());
             }
             let Some(entries) = patch.get_sequence("insert") else {
@@ -77,7 +86,10 @@ impl PatchFile {
             };
             for (entry_index, item) in entries.values().enumerate() {
                 let row = item.as_mapping().ok_or_else(invalid_config)?;
-                if manager_has_server(row) || conflicts_in_group(row) || opaque_server(row) {
+                if manager_has_server(row, server)
+                    || conflicts_in_group(row, server)
+                    || opaque_server(row)
+                {
                     return Err(config_conflict());
                 }
                 let config = row.get_mapping("config");
@@ -86,8 +98,8 @@ impl PatchFile {
                     .as_ref()
                     .and_then(|cfg| string(cfg, "serverName"))
                     .as_deref()
-                    == Some(SERVER);
-                let matches_id = string(row, "id").as_deref() == Some(ENTRY_ID);
+                    == Some(server);
+                let matches_id = string(row, "id").as_deref() == Some(entry_id(server));
                 if !matches_id && !(is_client && matches_server) {
                     continue;
                 }
@@ -115,8 +127,8 @@ impl PatchFile {
         Ok(found)
     }
 
-    pub(super) fn status(&self, target: &Target) -> io::Result<McpStatus> {
-        let Some(entry) = self.entry()? else {
+    pub(super) fn status(&self, target: &Target, server: &str) -> io::Result<McpStatus> {
+        let Some(entry) = self.entry(server)? else {
             return Ok(McpStatus::Missing);
         };
         let args = entry.config.get_sequence("args").and_then(|args| {
@@ -142,9 +154,16 @@ impl PatchFile {
         )
     }
 
+    pub(super) fn rename_legacy(&self) -> io::Result<()> {
+        let entry = self.entry(LEGACY)?.ok_or_else(config_conflict)?;
+        entry.row.set("id", entry_id(SERVER));
+        entry.config.set("serverName", SERVER);
+        Ok(())
+    }
+
     pub(super) fn register(&self, target: &Target) -> io::Result<()> {
         let executable = target.executable.to_str().ok_or_else(invalid_config)?;
-        if let Some(entry) = self.entry()? {
+        if let Some(entry) = self.entry(SERVER)? {
             entry.config.set("command", executable);
             if entry.row.contains_key("disabled") {
                 entry.row.set("disabled", false);
@@ -160,7 +179,7 @@ impl PatchFile {
             }
             config.set("args", args);
             let row = Mapping::new();
-            row.set("id", ENTRY_ID);
+            row.set("id", entry_id(SERVER));
             row.set("name", CLIENT);
             row.set("config", config);
             let entries = Sequence::new();
@@ -173,7 +192,7 @@ impl PatchFile {
     }
 
     pub(super) fn unregister(&self) -> io::Result<()> {
-        if let Some(entry) = self.entry()? {
+        if let Some(entry) = self.entry(SERVER)? {
             if entry.standalone && entry.entries.len() == 1 {
                 self.patches.remove(entry.patch_index);
             } else if entry.entries.len() == 1 {
@@ -193,22 +212,22 @@ fn string(mapping: &Mapping, key: &str) -> Option<String> {
         .map(|scalar| scalar.as_string())
 }
 
-fn manager_has_server(row: &Mapping) -> bool {
+fn manager_has_server(row: &Mapping, server: &str) -> bool {
     let name = string(row, "name");
     (name.as_deref() == Some(MANAGER) || name.is_none())
         && row
             .get_mapping("config")
             .and_then(|cfg| cfg.get_mapping("servers"))
-            .is_some_and(|servers| servers.contains_key(SERVER))
+            .is_some_and(|servers| servers.contains_key(server))
 }
 
-fn reserves_server(row: &Mapping) -> bool {
+fn reserves_server(row: &Mapping, server: &str) -> bool {
     let name = string(row, "name");
     let config = row.get_mapping("config");
-    string(row, "id").as_deref() == Some(ENTRY_ID)
-        || manager_has_server(row)
+    string(row, "id").as_deref() == Some(entry_id(server))
+        || manager_has_server(row, server)
         || config.is_some_and(|cfg| {
-            string(&cfg, "serverName").as_deref() == Some(SERVER)
+            string(&cfg, "serverName").as_deref() == Some(server)
                 && (name.as_deref() == Some(CLIENT)
                     || (name.is_none() && cfg.contains_key("transport")))
         })
@@ -235,7 +254,7 @@ fn opaque_server(row: &Mapping) -> bool {
 
 // A group nests entries in config. A patch can also replace a pre-existing
 // group's config without repeating its group flag or plugin name.
-fn conflicts_in_group(row: &Mapping) -> bool {
+fn conflicts_in_group(row: &Mapping, server: &str) -> bool {
     let group = row
         .get("group")
         .and_then(|node| node.as_scalar().and_then(|s| s.as_bool()));
@@ -245,7 +264,9 @@ fn conflicts_in_group(row: &Mapping) -> bool {
     row.get_sequence("config").is_some_and(|entries| {
         entries.values().any(|entry| {
             entry.as_mapping().is_some_and(|row| {
-                reserves_server(row) || conflicts_in_group(row) || opaque_server(row)
+                reserves_server(row, server)
+                    || conflicts_in_group(row, server)
+                    || opaque_server(row)
             }) || (group == Some(true) && entry.is_alias())
         })
     })

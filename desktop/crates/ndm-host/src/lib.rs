@@ -44,7 +44,7 @@ pub fn native_manifest(name: &str, executable: &Path, ids: &[String]) -> io::Res
     let path = executable.to_str().ok_or_else(invalid)?;
     Ok(json!({
         "name": name,
-        "description": "NDM Next browser integration",
+        "description": "OnesDM browser integration",
         "path": path,
         "type": "stdio",
         "allowed_origins": ids.iter().map(|id| format!("chrome-extension://{id}/")).collect::<Vec<_>>(),

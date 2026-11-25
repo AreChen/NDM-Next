@@ -27,10 +27,10 @@ BEGIN
   BEGIN
     BLOCK "040904b0"
     BEGIN
-      VALUE "CompanyName", "NDM Next contributors\0"
+      VALUE "CompanyName", "OnesDM contributors\0"
       VALUE "FileDescription", "{description}\0"
       VALUE "FileVersion", "{version}\0"
-      VALUE "ProductName", "NDM Next\0"
+      VALUE "ProductName", "OnesDM\0"
       VALUE "ProductVersion", "{version}\0"
     END
   END

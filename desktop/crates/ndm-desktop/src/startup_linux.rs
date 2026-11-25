@@ -26,7 +26,7 @@ fn autostart_entry(executable: &Path) -> io::Result<String> {
         }
     }
     Ok(format!(
-        "[Desktop Entry]\nType=Application\nName=NDM Next\nExec=\"{argument}\" --background\nTerminal=false\n"
+        "[Desktop Entry]\nType=Application\nName=OnesDM\nExec=\"{argument}\" --background\nTerminal=false\n"
     ))
 }
 
@@ -63,11 +63,11 @@ mod tests {
     #[test]
     fn autostart_quotes_the_path_and_escapes_desktop_field_codes() {
         let entry =
-            super::autostart_entry(std::path::Path::new("/opt/NDM Next 100%/ndm-desktop")).unwrap();
+            super::autostart_entry(std::path::Path::new("/opt/OnesDM 100%/ndm-desktop")).unwrap();
         assert!(
             entry
                 .lines()
-                .any(|line| line == r#"Exec="/opt/NDM Next 100%%/ndm-desktop" --background"#)
+                .any(|line| line == r#"Exec="/opt/OnesDM 100%%/ndm-desktop" --background"#)
         );
     }
 }

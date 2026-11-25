@@ -23,7 +23,7 @@ def package(output: Path, tag: str | None = None) -> Path:
         if f'"{extension_id}"' not in (repo / registration).read_text(encoding='utf-8-sig'):
             raise ValueError(f'Unpacked extension ID missing from {registration}')
     output.mkdir(parents=True, exist_ok=True)
-    archive = output / f'NDM-Next-Extension-Desktop-{version}-v{manifest["version"]}.zip'
+    archive = output / f'OnesDM-Extension-Desktop-{version}-v{manifest["version"]}.zip'
     files = {str(path.relative_to(extension)): path for path in sorted(extension.rglob('*')) if path.is_file()}
     files['INSTALL.md'] = repo / 'docs/extension-install.md'
     files['enable-dev-extension.ps1'] = repo / 'desktop/packaging/windows/enable-dev-extension.ps1'

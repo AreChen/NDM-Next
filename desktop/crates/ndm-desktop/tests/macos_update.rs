@@ -62,14 +62,14 @@ fn verified_dmg_replaces_and_relaunches_the_app_in_place() {
         current_version.minor,
         current_version.patch + 1,
     );
-    let installed = root.path().join("My NDM Next.app");
+    let installed = root.path().join("My OnesDM.app");
     let executable = installed.join("Contents/MacOS/ndm-desktop");
     fs::create_dir_all(executable.parent().unwrap()).unwrap();
     fs::copy(env!("CARGO_BIN_EXE_ndm-desktop"), &executable).unwrap();
     write_plist(&installed, &current_version);
 
     let source = root.path().join("image");
-    let candidate = source.join("NDM Next.app");
+    let candidate = source.join("OnesDM.app");
     let new_binary = candidate.join("Contents/MacOS/ndm-desktop");
     fs::create_dir_all(new_binary.parent().unwrap()).unwrap();
     write_plist(&candidate, &next_version);

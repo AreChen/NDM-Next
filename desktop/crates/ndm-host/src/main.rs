@@ -77,50 +77,102 @@ fn run() -> io::Result<()> {
         }
         let host = Host::new(store.clone(), configured_downloads(&data_dir));
         let request: Value = serde_json::from_slice(&message).unwrap_or(Value::Null);
-        let kind = request.get("type").and_then(Value::as_str);
-        let can_commit = if matches!(kind, Some("commit" | "discard")) {
-            let launched = Command::new(&executable)
-                .arg("--handoff")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn();
-            #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
-            {
-                launched.is_ok()
-                    && ndm_core::wait_for_desktop_ready(
-                        &data_dir,
-                        std::time::Duration::from_secs(20),
-                    )
-                    .unwrap_or(false)
-            }
-            #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
-            {
-                launched.is_ok()
-            }
-        } else {
-            true
-        };
-        let mut result = if (matches!(kind, Some("status" | "browser_context" | "prepare"))
-            && !executable.is_file())
-            || !can_commit
-        {
-            json!({"ok":false,"error":"desktop_unavailable"})
-        } else {
-            host.handle(request.clone())
-        };
-        if matches!(kind, Some("commit" | "discard"))
-            && result.get("ok") == Some(&Value::Bool(true))
-        {
-            // Commit only after startup recovery finishes, then wake the scheduler.
-            // A retry is safe if the desktop exits between these two operations.
-            #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
-            if ndm_core::wake_desktop(&data_dir).is_err() {
-                result = json!({"ok":false,"error":"desktop_unavailable"});
-            }
-        }
+        let result = desktop_message(&host, &data_dir, &executable, request);
         let response = serde_json::to_vec(&result).map_err(io::Error::other)?;
         write_frame(&mut output, &response)?;
+    }
+    Ok(())
+}
+
+fn desktop_message(
+    host: &Host,
+    data_dir: &std::path::Path,
+    executable: &std::path::Path,
+    request: Value,
+) -> Value {
+    let kind = request.get("type").and_then(Value::as_str);
+    let can_commit = if matches!(kind, Some("commit" | "discard")) {
+        let launched = Command::new(executable)
+            .arg("--handoff")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+        #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+        {
+            launched.is_ok()
+                && ndm_core::wait_for_desktop_ready(data_dir, std::time::Duration::from_secs(20))
+                    .unwrap_or(false)
+        }
+        #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+        {
+            launched.is_ok()
+        }
+    } else {
+        true
+    };
+    let mut result = if (matches!(kind, Some("status" | "browser_context" | "prepare"))
+        && !executable.is_file())
+        || !can_commit
+    {
+        json!({"ok":false,"error":"desktop_unavailable"})
+    } else {
+        host.handle(request.clone())
+    };
+    if matches!(kind, Some("commit" | "discard")) && result.get("ok") == Some(&Value::Bool(true)) {
+        // Commit only after startup recovery finishes, then wake the scheduler.
+        // A retry is safe if the desktop exits between these two operations.
+        #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+        if ndm_core::wake_desktop(data_dir).is_err() {
+            result = json!({"ok":false,"error":"desktop_unavailable"});
+        }
+    }
+    result
+}
+
+fn cli(arguments: &[String]) -> io::Result<()> {
+    let sibling = std::env::current_exe()?.with_file_name(if cfg!(windows) {
+        "ndm-desktop.exe"
+    } else {
+        "ndm-desktop"
+    });
+    match arguments {
+        [] => {
+            Command::new(sibling).spawn()?;
+        }
+        [flag] if flag == "--version" || flag == "-V" => {
+            println!("OnesDM {}", env!("CARGO_PKG_VERSION"))
+        }
+        [flag] if flag == "--help" || flag == "-h" => println!(
+            "Ones Download Manager\nUsage: onesdm [download <http(s)-url> | mcp | --version]"
+        ),
+        [cmd] if cmd == "mcp" => return mcp::run(data_directory()),
+        [cmd, url] if cmd == "download" => {
+            let profile = data_directory();
+            if ndm_core::desktop_installation_active(&profile)? {
+                return Err(io::Error::other("installation is in progress"));
+            }
+            let store = Arc::new(Store::open(&profile.join("tasks.db")).map_err(io::Error::other)?);
+            let host = Host::new(store, configured_downloads(&profile));
+            let id = ndm_core::TaskId::new_v4();
+            let task = json!({"type":"prepare","id":id,"task":{"url":url}});
+            if desktop_message(&host, &profile, &sibling, task)["ok"] != true {
+                return Err(io::Error::other("could not prepare download"));
+            }
+            if desktop_message(&host, &profile, &sibling, json!({"type":"commit","id":id}))["ok"]
+                != true
+            {
+                host.handle(json!({"type":"abort","id":id}));
+                return Err(io::Error::other("could not confirm download with desktop"));
+            }
+            println!("{id}");
+        }
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "see onesdm --help",
+            ));
+        }
     }
     Ok(())
 }
@@ -248,6 +300,26 @@ fn old_installation_host(desktop: &std::path::Path) -> io::Result<Option<PathBuf
 }
 
 fn main() {
+    let mut args = std::env::args_os();
+    let entry = args.next().map(PathBuf::from);
+    if entry
+        .as_ref()
+        .and_then(|p| p.file_stem())
+        .and_then(|s| s.to_str())
+        .is_some_and(|s| s.eq_ignore_ascii_case("onesdm"))
+    {
+        let args = args
+            .map(|arg| {
+                arg.into_string()
+                    .map_err(|_| io::Error::other("invalid argument"))
+            })
+            .collect::<io::Result<Vec<_>>>();
+        if let Err(err) = args.and_then(|args| cli(&args)) {
+            eprintln!("OnesDM: {err}");
+            std::process::exit(1);
+        }
+        return;
+    }
     let arguments: Vec<_> = std::env::args().skip(1).collect();
     if arguments
         .first()
@@ -255,7 +327,7 @@ fn main() {
     {
         let result = helper_data_directory(&arguments[1..]).and_then(mcp::run);
         if result.is_err() {
-            eprintln!("NDM Next MCP server could not start or lost its transport");
+            eprintln!("OnesDM MCP server could not start or lost its transport");
         }
         std::process::exit(i32::from(result.is_err()));
     }

@@ -60,7 +60,7 @@ jobs:
         with:
           name: ndm-next-macos-${{ matrix.arch }}
           path: |
-            ${{ runner.temp }}/ndm-dist/NDM Next.app
+            ${{ runner.temp }}/ndm-dist/OnesDM.app
             ${{ runner.temp }}/ndm-dist/*.dmg
             ${{ runner.temp }}/ndm-dist/*.sha256
           if-no-files-found: error

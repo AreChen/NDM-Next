@@ -5,7 +5,9 @@ mod config;
 mod deepseek;
 mod skill;
 
-const SERVER: &str = "ndm-next";
+const SERVER: &str = "onesdm-mcp";
+const LEGACY: &str = "ndm-next";
+const SKILL_ID: &str = "onesdm";
 const MCP_ARGS: [&str; 2] = ["--mcp", "--data-dir"];
 
 #[derive(Default)]
@@ -173,7 +175,7 @@ impl Harness {
         } else {
             self.config_directory(target)
         };
-        root.join("skills").join(SERVER).join("SKILL.md")
+        root.join("skills").join(SKILL_ID).join("SKILL.md")
     }
 
     pub fn status(self, target: &Target) -> io::Result<Status> {
@@ -191,7 +193,7 @@ impl Harness {
         {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
-                "NDM Next host is unavailable",
+                "OnesDM host is unavailable",
             ));
         }
         self.change(target, true)
@@ -203,8 +205,9 @@ impl Harness {
 
     fn change(self, target: &Target, install: bool) -> io::Result<()> {
         let _lock = integration_lock(target)?;
-        let (mut config, mcp) = self.configuration(target)?;
         let skill_path = self.skill_path(target);
+        migrate(self, target, &skill_path)?;
+        let (mut config, mcp) = self.configuration(target)?;
         let managed_skill = skill::is_managed(&skill_path)?;
         let updated = match (install, mcp) {
             (true, McpStatus::Missing | McpStatus::NeedsRepair) => {
@@ -233,13 +236,21 @@ impl Harness {
     }
 
     fn configuration(self, target: &Target) -> io::Result<(config::Config, McpStatus)> {
+        self.configuration_for(target, SERVER)
+    }
+
+    fn configuration_for(
+        self,
+        target: &Target,
+        server: &'static str,
+    ) -> io::Result<(config::Config, McpStatus)> {
         let mut preferred = None;
         let mut existing = None;
         let mut registered = None;
         for path in self.config_files(target) {
             let requested = target.locations.opencode_file.as_ref() == Some(&path);
             let file = config::Config::open(path, self)?;
-            let state = file.status(target, self)?;
+            let state = file.status(target, self, server)?;
             if state != McpStatus::Missing {
                 if registered.is_some() {
                     return Err(config_conflict());
@@ -258,18 +269,43 @@ impl Harness {
     }
 }
 
-/// Refresh only the Skill copies that NDM Next already manages.
+// Called under the profile integration lock. Keep user-added server fields
+// and disabled states, and retire only files carrying our ownership marker.
+fn migrate(client: Harness, target: &Target, path: &std::path::Path) -> io::Result<()> {
+    let directory = path.parent().expect("Skill directory");
+    let legacy_path = directory.with_file_name(LEGACY).join("SKILL.md");
+    match skill::is_managed(&legacy_path) {
+        Ok(false) => return Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => return Ok(()),
+        result => {
+            result?;
+        }
+    }
+    let (mut config, old_status) = client.configuration_for(target, LEGACY)?;
+    let (_, new_status) = client.configuration(target)?;
+    if old_status != McpStatus::Missing && new_status != McpStatus::Missing {
+        return Err(config_conflict());
+    }
+    skill::write(path, &target.profile)?;
+    if old_status != McpStatus::Missing {
+        config.rename_legacy(client)?;
+        config.save()?;
+    }
+    skill::remove(&legacy_path)
+}
+
+/// Refresh only the Skill copies that OnesDM already manages.
 pub fn sync_skills(target: &Target) -> io::Result<()> {
     let _lock = integration_lock(target)?;
     let mut result = Ok(());
     for client in Harness::ALL {
         let path = client.skill_path(target);
-        let update = match skill::is_managed(&path) {
+        let update = migrate(client, target, &path).and_then(|()| match skill::is_managed(&path) {
             Ok(true) => skill::write(&path, &target.profile),
             Ok(false) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(()),
             Err(error) => Err(error),
-        };
+        });
         if result.is_ok() {
             result = update;
         }
@@ -292,7 +328,7 @@ fn integration_lock(target: &Target) -> io::Result<fs::File> {
 fn config_conflict() -> io::Error {
     io::Error::new(
         io::ErrorKind::AlreadyExists,
-        "conflicting ndm-next client configuration",
+        "conflicting OnesDM client configuration",
     )
 }
 

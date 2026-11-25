@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>NDM Next</title>
+  <title>OnesDM</title>
   <link rel="stylesheet" href="ui.css">
   <link rel="stylesheet" href="popup.css">
 </head>
@@ -11,7 +11,7 @@
 <main>
   <header class="app-header">
     <img src="icons/icon-48.png" width="36" height="36" alt="">
-    <h1>NDM Next</h1>
+    <h1>OnesDM</h1>
     <span id="status" class="status" data-state="waiting" role="status" data-i18n="connecting">Connecting…</span>
   </header>
 
@@ -45,10 +45,10 @@
     <summary data-i18n="settings">Settings</summary>
     <div class="settings-body">
       <label class="field"><span data-i18n="language">Language</span><select id="language"></select></label>
-      <label class="field"><span data-i18n="backend">Download manager</span><select id="backend"><option value="next">NDM Next</option><option value="neatdm">Neat Download Manager</option></select></label>
+      <label class="field"><span data-i18n="backend">Download manager</span><select id="backend"><option value="next">OnesDM</option><option value="neatdm">Neat Download Manager</option></select></label>
       <p class="muted small" data-i18n="backendHint">Neat Download Manager uses its original connection.</p>
       <label class="field"><span data-i18n="captureMode">Takeover mode</span><select id="captureMode"><option value="automatic" data-i18n="automatic">Automatic</option><option value="confirm" data-i18n="confirm">Ask for each download</option></select></label>
-      <p class="muted small" data-i18n="captureHint">Confirmation is available with NDM Next.</p>
+      <p class="muted small" data-i18n="captureHint">Confirmation is available with OnesDM.</p>
       <label class="field"><span data-i18n="transferPolicy">Takeover safety</span><select id="transferPolicy"><option value="immediate" data-i18n="immediateTransfer">Take over immediately</option><option value="safe" data-i18n="safeTransfer">Verify before takeover</option></select></label>
       <p class="muted small" data-i18n="transferHint"></p>
       <label class="field"><span data-i18n="size">Minimum file size (MB)</span><input id="minSize" type="number" min="0" step="0.1"></label>
@@ -69,7 +69,7 @@
     <summary><span data-i18n="versions">Versions and plugins</span><span id="extensionVersion" class="version"></span></summary>
     <div class="settings-body version-list">
       <div><span data-i18n="extensionVersion">Browser extension</span><code id="browserVersion">—</code></div>
-      <div><span data-i18n="desktopVersion">NDM Next desktop</span><code id="desktopVersion">—</code></div>
+      <div><span data-i18n="desktopVersion">OnesDM desktop</span><code id="desktopVersion">—</code></div>
       <h2 data-i18n="installedPlugins">Installed plugins</h2>
       <div id="plugins"></div>
     </div>

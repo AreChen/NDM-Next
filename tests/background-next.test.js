@@ -126,7 +126,7 @@ test('confirmation survives an extension service-worker restart without writing 
   assert.deepEqual(restarted.calls,['prepare','cancel','commit','erase']);
   assert.deepEqual(sharedSession,{});
 });
-test('new installs default to NDM Next while updates retain the legacy backend',async()=>{
+test('new installs default to OnesDM while updates retain the legacy backend',async()=>{
   const fresh=setup({capture:false,backendAbsent:true});await fresh.install('install');assert.equal(fresh.saved.backend,'next');
   const upgraded=setup({capture:false,backendAbsent:true});await upgraded.install('update');assert.equal(upgraded.saved.backend,'neatdm');
   const chosen=setup({capture:false,config:{backend:'next'}});await chosen.install('update');assert.equal(chosen.saved.backend,'next');

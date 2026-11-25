@@ -139,7 +139,7 @@
       if (!button.disabled && !entry.noticeTimer) {
         button.textContent = '↓ NDM';
         button.title = mediaMessage('download', language) + ' · ' + mediaSizeLabel(item, language);
-        button.setAttribute('aria-label', 'NDM Next · ' + button.title);
+        button.setAttribute('aria-label', 'OnesDM · ' + button.title);
       }
       close.title = mediaMessage('hideInline', language);
       close.setAttribute('aria-label', close.title);

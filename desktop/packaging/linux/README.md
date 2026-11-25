@@ -29,7 +29,7 @@ and run its `ndm-desktop`. The updated app uses the same XDG data directories.
 
 Start the desktop app once to register `ndm-host` for native installations
 of Chrome, Chromium, Brave, and Microsoft Edge. Use the matching release
-extension ZIP and select **NDM Next** as its backend. The **Repair connection**
+extension ZIP and select **OnesDM** as its backend. The **Repair connection**
 action also accepts a custom unpacked extension's ID. Native host paths are
 updated when you launch the app from a new directory. Browser packages with
 separate sandbox profiles can require their own native messaging setup.

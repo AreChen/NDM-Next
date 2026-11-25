@@ -811,7 +811,7 @@ fn client() -> io::Result<reqwest::Client> {
     reqwest::Client::builder()
         .https_only(true)
         .timeout(std::time::Duration::from_secs(300))
-        .user_agent("NDM-Next")
+        .user_agent("OnesDM")
         .build()
         .map_err(network)
 }

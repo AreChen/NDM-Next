@@ -9,6 +9,6 @@
   "inputs": [{"schemes": ["file"], "suffixes": [".ndmexample"]}],
   "limits": {"active_tasks": 2},
   "tools": [
-    {"id": "copy", "name": {"en": "Copy file", "zh": "复制文件"}, "description": {"en": "Copy a local .ndmexample file through NDM Next.", "zh": "通过 NDM Next 复制本地 .ndmexample 文件。"}}
+    {"id": "copy", "name": {"en": "Copy file", "zh": "复制文件"}, "description": {"en": "Copy a local .ndmexample file through OnesDM.", "zh": "通过 OnesDM 复制本地 .ndmexample 文件。"}}
   ]
 }

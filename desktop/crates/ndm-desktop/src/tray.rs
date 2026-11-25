@@ -49,7 +49,7 @@ impl Tray {
         language: Language,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let menu = Menu::new();
-        let open = MenuItem::with_id("ndm-open", "Open NDM Next", true, None);
+        let open = MenuItem::with_id("ndm-open", "Open OnesDM", true, None);
         let quit = MenuItem::with_id("ndm-quit", "Quit", true, None);
         menu.append_items(&[&open, &quit])?;
         let image =
@@ -58,7 +58,7 @@ impl Tray {
         let (width, height) = image.dimensions();
         let icon = Icon::from_rgba(image.into_raw(), width, height)?;
         let icon = TrayIconBuilder::new()
-            .with_tooltip("NDM Next")
+            .with_tooltip("OnesDM")
             .with_icon(icon)
             .with_menu(Box::new(menu))
             .build()?;
@@ -96,9 +96,9 @@ impl Tray {
 
     pub fn set_language(&self, language: Language) {
         self.open.set_text(if language == Language::Chinese {
-            "打开 NDM Next"
+            "打开 OnesDM"
         } else {
-            "Open NDM Next"
+            "Open OnesDM"
         });
         self.quit.set_text(if language == Language::Chinese {
             "退出"

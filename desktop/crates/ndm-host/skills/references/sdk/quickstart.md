@@ -1,11 +1,11 @@
 # 开发下载引擎插件 · Plugin development
 
-先确定插件的输入与输出。例如，媒体网页可以产出一个视频和字幕，本地种子可以产出一组文件。为普通 HTTP 文件排队已有内置工具。需要新来源匹配、专用选项、内容选择或后处理时，可以实现一个 NDM 下载引擎。[完整 SDK 协议与清单](../../../../ndm-plugin-sdk/README.md)
+先确定插件的输入与输出。例如，媒体网页可以产出一个视频和字幕，本地种子可以产出一组文件。为普通 HTTP 文件排队已有内置工具。需要新来源匹配、专用选项、内容选择或后处理时，可以实现一个 OnesDM 下载引擎。[完整 SDK 协议与清单](../../../../ndm-plugin-sdk/README.md)
 
 ## 运行一个最小插件
 
 1. 示例接受本地 `.ndmexample` 文件，支持停止、恢复和传输进度，完成时报告工作区里的 `copy.bin`。准备好这两份文件。[Rust worker](../../../../ndm-plugin-sdk/examples/file-copy.rs) · [plugin.json 清单](../../../../ndm-plugin-sdk/examples/file-copy.json)
-2. 在与目标桌面版匹配的 NDM Next 源码中，从 `desktop` 目录构建示例并运行宿主契约测试。独立 Rust 项目也可将这个 worker 保存为 `src/main.rs`，依赖同一份源码里的 `ndm-plugin-sdk` crate。其他语言可直接实现逐行 JSON 协议。[NDM Next SDK 源码](https://github.com/AreChen/NDM-Next/tree/main/desktop/crates/ndm-plugin-sdk)
+2. 在与目标桌面版匹配的 OnesDM 源码中，从 `desktop` 目录构建示例并运行宿主契约测试。独立 Rust 项目也可将这个 worker 保存为 `src/main.rs`，依赖同一份源码里的 `ndm-plugin-sdk` crate。其他语言可直接实现逐行 JSON 协议。[OnesDM SDK 源码](https://github.com/AreChen/NDM-Next/tree/main/desktop/crates/ndm-plugin-sdk)
 
    ```sh
    cargo +1.100.0 build --locked -p ndm-plugin-sdk --example file-copy

@@ -35,11 +35,12 @@ version=$(printf '%s' "$metadata" | python3 -c 'import json,sys; print(next(p["v
 [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Unsupported version' >&2; exit 1; }
 target_dir=$(printf '%s' "$metadata" | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
 cargo +1.100.0 build --locked --release --workspace --target "$target"
-app="$scratch/image/NDM Next.app"
+app="$scratch/image/OnesDM.app"
 macos="$app/Contents/MacOS"
 resources="$app/Contents/Resources"
 mkdir -p "$macos/ffmpeg" "$resources/media-source"
 cp "$target_dir/$target/release/ndm-desktop" "$target_dir/$target/release/ndm-host" "$macos/"
+ln -s ndm-host "$macos/onesdm"
 cp -RP "$media/bin/." "$macos/ffmpeg/"
 cp -R "$media/source/." "$resources/media-source/"
 cp "$media/SHA256SUMS" "$resources/media-source/SHA256SUMS.original"
@@ -51,22 +52,22 @@ python3 - "$app/Contents/Info.plist" "$version" "$MACOSX_DEPLOYMENT_TARGET" <<'P
 import plistlib, sys
 with open(sys.argv[1], 'wb') as file:
     plistlib.dump({
-        'CFBundleName': 'NDM Next', 'CFBundleDisplayName': 'NDM Next',
+        'CFBundleName': 'OnesDM', 'CFBundleDisplayName': 'OnesDM',
         'CFBundleIdentifier': 'com.ndmnext.desktop', 'CFBundleExecutable': 'ndm-desktop',
         'CFBundlePackageType': 'APPL', 'CFBundleIconFile': 'ndm-next',
         'CFBundleVersion': sys.argv[2], 'CFBundleShortVersionString': sys.argv[2],
         'LSMinimumSystemVersion': sys.argv[3], 'NSHighResolutionCapable': True,
         'NSPrincipalClass': 'NSApplication',
-        'NSDownloadsFolderUsageDescription': 'NDM Next saves your downloads in this folder.',
+        'NSDownloadsFolderUsageDescription': 'OnesDM saves your downloads in this folder.',
     }, file)
 PY
 # Generate all standard icon sizes from the repository's original artwork.
 iconset="$scratch/ndm-next.iconset"
 mkdir "$iconset"
 for size in 16 32 128 256 512; do
-    sips -s format png -z "$size" "$size" "$repo/extension/icons/icon-128.png" --out "$iconset/icon_${size}x${size}.png" >/dev/null
+    sips -s format png -z "$size" "$size" "$repo/assets/onesdm-icon.png" --out "$iconset/icon_${size}x${size}.png" >/dev/null
     double=$((size * 2))
-    sips -s format png -z "$double" "$double" "$repo/extension/icons/icon-128.png" --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
+    sips -s format png -z "$double" "$double" "$repo/assets/onesdm-icon.png" --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
 done
 iconutil -c icns "$iconset" -o "$resources/ndm-next.icns"
 # Ad-hoc signing supports local/CI verification without Apple credentials.
@@ -80,10 +81,10 @@ plutil -lint "$app/Contents/Info.plist"
 "$macos/ffmpeg/ffmpeg" -hide_banner -version
 "$macos/ffmpeg/ffprobe" -hide_banner -version
 ln -s /Applications "$scratch/image/Applications"
-name="NDM-Next-$version-macos-$arch"
-[[ ! -e "$out/$name.dmg" && ! -e "$out/NDM Next.app" ]] || { echo 'Output already exists; use a fresh directory' >&2; exit 2; }
-hdiutil create -quiet -volname 'NDM Next' -srcfolder "$scratch/image" -format UDZO -ov "$out/$name.dmg"
-ditto "$app" "$out/NDM Next.app"
+name="OnesDM-$version-macos-$arch"
+[[ ! -e "$out/$name.dmg" && ! -e "$out/OnesDM.app" ]] || { echo 'Output already exists; use a fresh directory' >&2; exit 2; }
+hdiutil create -quiet -volname 'OnesDM' -srcfolder "$scratch/image" -format UDZO -ov "$out/$name.dmg"
+ditto "$app" "$out/OnesDM.app"
 (cd "$out" && shasum -a 256 "$name.dmg" > "$name.dmg.sha256")
-echo "Application: $out/NDM Next.app"
+echo "Application: $out/OnesDM.app"
 echo "Disk image: $out/$name.dmg"

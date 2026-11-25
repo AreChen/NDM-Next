@@ -293,16 +293,16 @@ impl Desktop {
                     #[cfg(target_os = "macos")]
                     {
                         this.set_notice(this.text(
-                            "当前位置需要手动安装。退出 NDM Next 后，可从已打开的磁盘镜像安装。",
-                            "This location requires manual installation. Quit NDM Next, then install from the open disk image.",
+                            "当前位置需要手动安装。退出 OnesDM 后，可从已打开的磁盘镜像安装。",
+                            "This location requires manual installation. Quit OnesDM, then install from the open disk image.",
                         ).into(), cx);
                         UpdateState::Available(manual_release)
                     }
                     #[cfg(target_os = "linux")]
                     {
                         this.set_notice(this.text(
-                            "新版压缩包已校验。退出 NDM Next，解压后运行新版。",
-                            "Update archive verified. Quit NDM Next, extract the archive, and run the new version.",
+                            "新版压缩包已校验。退出 OnesDM，解压后运行新版。",
+                            "Update archive verified. Quit OnesDM, extract the archive, and run the new version.",
                         ).into(), cx);
                         UpdateState::Available(manual_release)
                     }

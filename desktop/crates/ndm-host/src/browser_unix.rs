@@ -83,7 +83,7 @@ mod tests {
     fn registration_uses_actual_bundle_path_and_preserves_valid_developer_ids() {
         let home = tempfile::tempdir().unwrap();
         let old = home.path().join("Old App.app/Contents/MacOS/ndm-host");
-        let new = home.path().join("NDM Next.app/Contents/MacOS/ndm-host");
+        let new = home.path().join("OnesDM.app/Contents/MacOS/ndm-host");
         for path in [&old, &new] {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, b"host").unwrap();

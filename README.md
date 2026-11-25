@@ -1,6 +1,8 @@
 <div align="center">
-  <h1><img src="assets/readme/hero.webp" width="1200" alt="NDM Next"></h1>
-  <p><strong>Fast, multithreaded downloads in a modern native app.</strong></p>
+  <img src="assets/onesdm.svg" width="96" alt="">
+  <h1>OnesDM</h1>
+  <p>Ones Download Manager · PlayOnes · AI-Native Download Manager</p>
+  <p><strong>Any Agent. All Downloads.</strong></p>
   <p>Built with Rust and GPUI for Windows, macOS, and Linux, with a memory-safe core, pluggable download engines, and optional AI integration.</p>
   <p>Download torrents, magnet links, and streaming media with optional engines from the <a href="#plugins-and-ai">desktop plugin market</a>.</p>
   <p>
@@ -26,16 +28,22 @@ Get your installer from [**GitHub Releases →**](https://github.com/AreChen/NDM
 
 | Platform | Package | Install |
 | :--- | :--- | :--- |
-| Windows · x64 | `NDM-Next-Setup-*-x64.exe` | Run the installer. |
-| macOS 12+ · Apple Silicon | `NDM-Next-*-macos-arm64.dmg` | Drag **NDM Next** to **Applications**. |
-| macOS 12+ · Intel | `NDM-Next-*-macos-x64.dmg` | Drag **NDM Next** to **Applications**. |
-| Linux · x86-64 | `NDM-Next-*-linux-x64.tar.gz` | Install the [Linux dependencies](desktop/packaging/linux/README.md), extract the archive, and run `ndm-desktop`. |
+| Windows · x64 | `OnesDM.exe` | Run the installer. |
+| macOS 12+ · Apple Silicon | `OnesDM-*-macos-arm64.dmg` | Drag **OnesDM** to **Applications**. |
+| macOS 12+ · Intel | `OnesDM-*-macos-x64.dmg` | Drag **OnesDM** to **Applications**. |
+| Linux · x86-64 | `OnesDM-*-linux-x64.tar.gz` | Install the [Linux dependencies](desktop/packaging/linux/README.md), extract the archive, and run `ndm-desktop`. |
 
 The app checks GitHub for updates. Click **Upgrade** to download a verified package. Windows installs when idle, macOS opens the DMG, and Linux opens the folder containing the archive.
 
 New profiles allow up to 16 concurrent HTTP ranges per download and start at login. The downloader chooses range sizes using the file size and the time the server took to answer the initial probe. Existing settings are preserved.
 
+## Command line
+
+The installed desktop package includes `onesdm`. Add its folder to your shell PATH or run the executable by path. On macOS it is inside `OnesDM.app/Contents/MacOS`. Use `onesdm download <URL>` to queue an HTTP(S) link in the desktop, `onesdm mcp` for stdio integration, or `onesdm --version`.
+
 ## Screenshots
+
+NDM Next 0.6.x interface.
 
 | Dark theme | Light theme |
 | :---: | :---: |
@@ -43,7 +51,7 @@ New profiles allow up to 16 concurrent HTTP ranges per download and start at log
 
 ## Plugins and AI
 
-<img src="assets/readme/plugins-ai.webp" width="1200" alt="NDM Next plugin market and AI integration settings">
+<img src="assets/readme/plugins-ai.webp" width="1200" alt="OnesDM plugin market and AI integration settings">
 
 Install **BitTorrent** for `.torrent` files and magnet links, or **Media Downloader** for streaming video, audio, and playlists from supported sites. Both engines are available in the [desktop plugin market](assets/readme/plugin-market.webp).
 
@@ -55,7 +63,7 @@ Connect **Chrome, Edge or Brave** to capture downloads and discover webpage medi
 
 Each release includes its matching versioned extension ZIP. Follow the [extension installation guide](docs/extension-install.md).
 
-**Platform details:** [Windows](desktop/packaging/windows/README.md#browser-extension) · [macOS](desktop/packaging/macos/README.md#browser-extension) · [Linux](desktop/packaging/linux/README.md#browser-extension). Select **NDM Next** as the extension backend. The extension also supports Neat Download Manager.
+**Platform details:** [Windows](desktop/packaging/windows/README.md#browser-extension) · [macOS](desktop/packaging/macos/README.md#browser-extension) · [Linux](desktop/packaging/linux/README.md#browser-extension). Select **OnesDM** as the extension backend. The extension also supports Neat Download Manager.
 
 <details>
 <summary><strong>Build & release</strong></summary>

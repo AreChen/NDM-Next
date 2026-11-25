@@ -1,4 +1,4 @@
-# NDM Next download engine SDK
+# OnesDM download engine SDK
 
 NDM launches the installed engine executable with `--ndm-engine` for one
 operation, with the engine's installation directory as its current directory.
@@ -69,7 +69,7 @@ manifest are both checked before installation.
   submit the page URL. Page matching uses both input lists.
 - Set `skill` to package a self-contained UTF-8 Markdown guide at a portable
   relative `.md` path, up to 32 KiB. Explain when to choose the engine, give tool
-  and option examples, and describe source limitations. NDM Next 0.6.0 and
+  and option examples, and describe source limitations. OnesDM 0.6.0 and
   later link this guide from the installed `ndm-next` Skill when the engine is
   available to AI. Hosts can generate a basic guide from the manifest when
   this field is omitted.
@@ -177,7 +177,7 @@ or network APIs. NDM uses the manifest controls if the script fails.
 Start with [examples/file-copy.rs](examples/file-copy.rs) and
 [examples/file-copy.json](examples/file-copy.json). Build the example and
 package the matching platform executable and manifest at the ZIP root.
-Use the `.exe` suffix in the manifest on Windows. In NDM Next, choose
+Use the `.exe` suffix in the manifest on Windows. In OnesDM, choose
 **Plugin market → Import plugin**, then add a local `.ndmexample` file.
 
 From the `desktop` directory:

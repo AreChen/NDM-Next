@@ -13,7 +13,8 @@ use ndm_core::{
 
 const SKILL: &str = include_str!("../../skills/SKILL.md");
 const PLUGIN_INDEX: &str = include_str!("../../skills/references/plugins/index.md");
-const OWNER: &str = "<!-- Managed by the NDM Next desktop integration. -->";
+const OWNER: &str = "<!-- Managed by the OnesDM desktop integration. -->";
+const LEGACY_OWNER: &str = "<!-- Managed by the NDM Next desktop integration. -->";
 const MAX_DOCUMENT_BYTES: u64 = 256 * 1024;
 const DIRECTORIES: &[&str] = &["plugins", "sdk", "sdk/examples"];
 const RESOURCES: &[(&str, &str)] = &[
@@ -126,7 +127,7 @@ pub(super) fn write(path: &Path, profile: &Path) -> io::Result<()> {
         index.push_str(if enabled {
             "\nNo installed plugin is enabled for AI access. Use the built-in engine.\n"
         } else {
-            "\nAI access is off in NDM Next. Enable it in the app to see available plugins.\n"
+            "\nAI access is off in OnesDM. Enable it in the app to see available plugins.\n"
         });
     }
 
@@ -157,7 +158,7 @@ pub(super) fn write(path: &Path, profile: &Path) -> io::Result<()> {
     }
     write_document(&index_path, &index)?;
     let skill = format!(
-        "{}\n<!-- NDM Next {} -->\n",
+        "{}\n<!-- OnesDM {} -->\n",
         SKILL.replace("../../ndm-plugin-sdk/", "references/sdk/"),
         env!("CARGO_PKG_VERSION")
     );
@@ -363,9 +364,15 @@ fn owned_document(path: &Path) -> io::Result<Option<String>> {
     let managed = if path.extension().is_some_and(|ext| ext == "json") {
         serde_json::from_str::<serde_json::Value>(&text)
             .ok()
-            .is_some_and(|value| value.get("$comment").and_then(|v| v.as_str()) == Some(OWNER))
+            .is_some_and(|value| {
+                matches!(
+                    value.get("$comment").and_then(|v| v.as_str()),
+                    Some(OWNER | LEGACY_OWNER)
+                )
+            })
     } else {
-        text.lines().any(|line| line == OWNER)
+        text.lines()
+            .any(|line| matches!(line, OWNER | LEGACY_OWNER))
     };
     if text.len() as u64 > MAX_DOCUMENT_BYTES || !managed {
         return Err(conflict());
@@ -375,7 +382,7 @@ fn owned_document(path: &Path) -> io::Result<Option<String>> {
 
 fn write_document(path: &Path, text: &str) -> io::Result<()> {
     if text.len() as u64 > MAX_DOCUMENT_BYTES {
-        return Err(io::Error::other("NDM Next Skill document is too large"));
+        return Err(io::Error::other("OnesDM Skill document is too large"));
     }
     let previous = owned_document(path)?;
     if previous.as_deref() == Some(text) {
@@ -396,7 +403,7 @@ fn write_document(path: &Path, text: &str) -> io::Result<()> {
 fn conflict() -> io::Error {
     io::Error::new(
         io::ErrorKind::AlreadyExists,
-        "an unmanaged NDM Next Skill path exists",
+        "an unmanaged OnesDM Skill path exists",
     )
 }
 

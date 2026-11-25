@@ -134,7 +134,7 @@
       language = extensionLocale(reply.language, chrome.i18n.getUILanguage());
       await loadCatalog(language);
       localizeDocument(language);
-      document.title = 'NDM Next · ' + text('title');
+      document.title = 'OnesDM · ' + text('title');
       sourceClosed = reply.source === null;
       detecting = reply.detecting !== false;
       items = sourceClosed ? [] : reply.items.sort((a, b) => Number(mediaKind(a) === 'image') - Number(mediaKind(b) === 'image'));

@@ -92,14 +92,14 @@ fn main() {
         Ok(preferences) => preferences,
         Err(_) => {
             #[cfg(target_os = "linux")]
-            eprintln!("Could not read NDM Next settings or decrypt stored credentials.");
+            eprintln!("Could not read OnesDM settings or decrypt stored credentials.");
             #[cfg(windows)]
             {
                 use windows_sys::Win32::UI::WindowsAndMessaging::{
                     MB_ICONERROR, MB_OK, MessageBoxW,
                 };
                 let text: Vec<u16> = "无法读取设置或解密代理凭据。请检查当前 Windows 账户和设置文件。\nCould not read settings or decrypt proxy credentials. Check your Windows account and settings file.\0".encode_utf16().collect();
-                let title: Vec<u16> = "NDM Next\0".encode_utf16().collect();
+                let title: Vec<u16> = "OnesDM\0".encode_utf16().collect();
                 // SAFETY: both buffers are null-terminated and remain alive during the call.
                 unsafe {
                     MessageBoxW(
@@ -251,7 +251,7 @@ fn main() {
                 })
             },
         )
-        .expect("open NDM Next");
+        .expect("open OnesDM");
         // On Linux, GPUI connects to the display during run. A browser
         // handoff must wait until the desktop has opened successfully.
         #[cfg(target_os = "linux")]

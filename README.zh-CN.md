@@ -1,6 +1,8 @@
 <div align="center">
-  <h1><img src="assets/readme/hero.webp" width="1200" alt="NDM Next"></h1>
-  <p><strong>高性能多线程下载，搭配现代原生界面。</strong></p>
+  <img src="assets/onesdm.svg" width="96" alt="">
+  <h1>OnesDM</h1>
+  <p>Ones Download Manager · PlayOnes · AI-Native Download Manager</p>
+  <p><strong>Any Agent. All Downloads.</strong></p>
   <p>使用 Rust 和 GPUI 构建，支持 Windows、macOS 和 Linux，提供内存安全的下载核心、可扩展的下载引擎与可选的 AI 接入。</p>
   <p>通过<a href="#插件与-ai">桌面插件市场</a>安装下载引擎，即可下载种子、磁力链接和流媒体。</p>
   <p>
@@ -26,16 +28,22 @@
 
 | 平台 | 安装包 | 安装方式 |
 | :--- | :--- | :--- |
-| Windows · x64 | `NDM-Next-Setup-*-x64.exe` | 运行安装程序。 |
-| macOS 12+ · Apple Silicon | `NDM-Next-*-macos-arm64.dmg` | 将 **NDM Next** 拖入 **Applications**。 |
-| macOS 12+ · Intel | `NDM-Next-*-macos-x64.dmg` | 将 **NDM Next** 拖入 **Applications**。 |
-| Linux · x86-64 | `NDM-Next-*-linux-x64.tar.gz` | 安装 [Linux 运行依赖](desktop/packaging/linux/README.md)，解压并运行 `ndm-desktop`。 |
+| Windows · x64 | `OnesDM.exe` | 运行安装程序。 |
+| macOS 12+ · Apple Silicon | `OnesDM-*-macos-arm64.dmg` | 将 **OnesDM** 拖入 **Applications**。 |
+| macOS 12+ · Intel | `OnesDM-*-macos-x64.dmg` | 将 **OnesDM** 拖入 **Applications**。 |
+| Linux · x86-64 | `OnesDM-*-linux-x64.tar.gz` | 安装 [Linux 运行依赖](desktop/packaging/linux/README.md)，解压并运行 `ndm-desktop`。 |
 
 应用通过 GitHub 检查更新。点击**升级**下载并校验安装包。Windows 在空闲时安装，macOS 打开 DMG，Linux 打开压缩包所在目录。
 
 新安装默认允许每个 HTTP 下载最多并发请求 16 个分段，并开启开机自启。下载器根据文件大小和服务器首次响应的耗时选择分段大小。已有设置会保留。
 
+## 命令行
+
+安装包内含 `onesdm`。可将其目录加入 PATH，或用完整路径调用。macOS 的命令位于 `OnesDM.app/Contents/MacOS`。使用 `onesdm download <URL>` 将 HTTP(S) 链接加入桌面队列，`onesdm mcp` 启动 stdio 服务，`onesdm --version` 查看版本。
+
 ## 界面截图
+
+以下为 NDM Next 0.6.x 界面。
 
 | 暗色主题 | 亮色主题 |
 | :---: | :---: |
@@ -43,7 +51,7 @@
 
 ## 插件与 AI
 
-<img src="assets/readme/plugins-ai.webp" width="1200" alt="NDM Next 插件市场和 AI 接入设置">
+<img src="assets/readme/plugins-ai.webp" width="1200" alt="OnesDM 插件市场和 AI 接入设置">
 
 在[桌面插件市场](assets/readme/plugin-market.webp)安装 **BitTorrent**，即可下载 `.torrent` 文件和磁力链接。安装 **Media Downloader**，即可下载受支持网站的流媒体视频、音频和播放列表。
 
@@ -55,7 +63,7 @@
 
 每次 Release 均附带对应版本的扩展 ZIP。按照[扩展安装说明](docs/extension-install.md)连接浏览器。
 
-**平台说明** [Windows](desktop/packaging/windows/README.md#browser-extension) · [macOS](desktop/packaging/macos/README.md#browser-extension) · [Linux](desktop/packaging/linux/README.md#browser-extension)。扩展后端请选择 **NDM Next**。扩展也支持连接 Neat Download Manager。
+**平台说明** [Windows](desktop/packaging/windows/README.md#browser-extension) · [macOS](desktop/packaging/macos/README.md#browser-extension) · [Linux](desktop/packaging/linux/README.md#browser-extension)。扩展后端请选择 **OnesDM**。扩展也支持连接 Neat Download Manager。
 
 <details>
 <summary><strong>构建与发布</strong></summary>

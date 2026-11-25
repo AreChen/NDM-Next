@@ -135,16 +135,16 @@ jobs:
           version="${RELEASE_TAG#desktop-v}"
           workspace_version=$(python3 -c 'import tomllib; print(tomllib.load(open("desktop/Cargo.toml", "rb"))["workspace"]["package"]["version"])')
           [[ "$workspace_version" == "$version" ]]
-          windows="NDM-Next-Setup-$version-x64.exe"
-          intel="NDM-Next-$version-macos-x64.dmg"
-          arm64="NDM-Next-$version-macos-arm64.dmg"
-          linux="NDM-Next-$version-linux-x64.tar.gz"
+          windows="OnesDM.exe"
+          intel="OnesDM-$version-macos-x64.dmg"
+          arm64="OnesDM-$version-macos-arm64.dmg"
+          linux="OnesDM-$version-linux-x64.tar.gz"
           cp "macos-x64/$intel"{,.sha256} "macos-arm64/$arm64"{,.sha256} release-assets/
           packages=("$windows" "$intel" "$arm64" "$linux")
           checksums=("$intel.sha256" "$arm64.sha256" "$linux.sha256")
           if [[ "$DESKTOP_ONLY" != true ]]; then
             extension_version=$(python3 -c 'import json; print(json.load(open("extension/manifest.json"))["version"])')
-            extension="NDM-Next-Extension-Desktop-$version-v$extension_version.zip"
+            extension="OnesDM-Extension-Desktop-$version-v$extension_version.zip"
             unzip -t "release-assets/$extension"
             unzip -p "release-assets/$extension" manifest.json | cmp - extension/manifest.json
             packages+=("$extension")
@@ -161,7 +161,7 @@ jobs:
           set -euo pipefail
           mapfile -t assets < <(find release-assets -maxdepth 1 -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' -o -name SHA256SUMS \) -print)
           gh release create "$RELEASE_TAG" "${assets[@]}" \
-            --title "NDM Next ${RELEASE_TAG#desktop-v}" \
+            --title "OnesDM ${RELEASE_TAG#desktop-v}" \
             --verify-tag \
             --draft \
             --notes-file "docs/releases/desktop-${RELEASE_TAG#desktop-v}.md" \

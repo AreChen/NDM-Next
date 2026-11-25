@@ -34,12 +34,12 @@ jobs:
           version=$(python3 -c 'import json; print(json.load(open("extension/manifest.json"))["version"])')
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$GITHUB_REF_NAME" == "extension-v$version" ]]
           desktop=$(python3 -c 'import tomllib; print(tomllib.load(open("desktop/Cargo.toml", "rb"))["workspace"]["package"]["version"])')
-          filename="NDM-Next-Extension-Desktop-$desktop-v$version.zip"
+          filename="OnesDM-Extension-Desktop-$desktop-v$version.zip"
           (cd extension-dist && sha256sum --check "$filename.sha256")
           unzip -t "extension-dist/$filename"
           unzip -p "extension-dist/$filename" manifest.json | cmp - extension/manifest.json
           gh release create "$GITHUB_REF_NAME" "extension-dist/$filename" "extension-dist/$filename.sha256" \
-            --title "NDM Next Extension $version" \
+            --title "OnesDM Extension $version" \
             --notes-file "docs/releases/extension-$version.md" \
             --verify-tag --draft --latest=false
           gh release edit "$GITHUB_REF_NAME" --draft=false --latest=false

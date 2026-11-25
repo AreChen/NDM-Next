@@ -1,6 +1,6 @@
-# NDM Next
+# OnesDM
 
-NDM Next 是 Rust 1.100.0 / GPUI 桌面下载器，支持 Windows、macOS 和 Linux；浏览器扩展通过 Native Messaging 连接桌面端。
+OnesDM 是 Rust 1.100.0 / GPUI 桌面下载器，支持 Windows、macOS 和 Linux；浏览器扩展通过 Native Messaging 连接桌面端。
 
 - 修改桌面或扩展 UI 前阅读 [DESIGN.md](DESIGN.md)。保持紧凑、中英文、亮暗主题；界面视觉验收由用户进行，未经本次任务明确授权不要操作用户的桌面窗口。
 - 在仓库根目录运行扩展测试：`rtk proxy node --test tests/*.test.js`。

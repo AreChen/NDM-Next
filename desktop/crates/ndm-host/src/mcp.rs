@@ -78,7 +78,7 @@ pub fn run(profile: PathBuf) -> io::Result<()> {
                         };
                         Ok(json!({
                             "protocolVersion":version, "capabilities":{"tools":{"listChanged":true}},
-                            "serverInfo":{"name":"ndm-next","version":env!("CARGO_PKG_VERSION")}
+                            "serverInfo":{"name":"onesdm-mcp","title":"OnesDM MCP","version":env!("CARGO_PKG_VERSION")}
                         }))
                     }
                     Some("ping") => Ok(json!({})),
@@ -136,7 +136,7 @@ impl Server {
         let mut tools = vec![
             tool(
                 "ndm_download",
-                "Queue downloads in NDM Next. Omit destination to use the configured download directory. Batch settings apply only to these items.",
+                "Queue downloads in OnesDM. Omit destination to use the configured download directory. Batch settings apply only to these items.",
                 json!({
                     "items":{"type":"array","minItems":1,"maxItems":128,"items":object(item_fields(), &["source"])},
                     "destination":{"type":"string","description":"Absolute directory"},
@@ -176,13 +176,13 @@ impl Server {
             ),
             tool(
                 "ndm_pause_task",
-                "Request that NDM Next pause a task and save resumable data.",
+                "Request that OnesDM pause a task and save resumable data.",
                 task_id.clone(),
                 &["task_id"],
             ),
             tool(
                 "ndm_resume_task",
-                "Resume or retry an NDM Next task.",
+                "Resume or retry an OnesDM task.",
                 task_id,
                 &["task_id"],
             ),
@@ -262,7 +262,7 @@ impl Server {
 
     fn call(&self, params: &Value) -> Result<Value, &'static str> {
         if !self.store.ai_enabled().unwrap_or(false) {
-            return Err("Enable AI integration in NDM Next first.");
+            return Err("Enable AI integration in OnesDM first.");
         }
         let name = params["name"].as_str().ok_or("Missing tool name.")?;
         let args = params
@@ -558,13 +558,13 @@ impl Server {
             match self.store.settings_reply(id) {
                 Ok(Some(reply)) if reply.get("error").is_some() => {
                     break Err(match reply["error"].as_str() {
-                        Some("proxy") => "Configure a saved proxy in NDM Next first.",
+                        Some("proxy") => "Configure a saved proxy in OnesDM first.",
                         Some("tun") => "Set a TUN direct exit before selecting that route.",
                         Some("disabled") => "AI integration is disabled.",
                         Some("busy") => {
                             "Storage settings are busy. Retry after the operation finishes."
                         }
-                        _ => "NDM Next could not apply the preferences.",
+                        _ => "OnesDM could not apply the preferences.",
                     });
                 }
                 Ok(Some(reply)) => break Ok(reply),
@@ -599,7 +599,7 @@ impl Server {
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
-                .map_err(|_| "Could not launch NDM Next.")?;
+                .map_err(|_| "Could not launch OnesDM.")?;
             std::thread::spawn(move || {
                 let _ = child.wait();
             });
@@ -608,7 +608,7 @@ impl Server {
         {
             Ok(())
         } else {
-            Err("NDM Next did not become ready.")
+            Err("OnesDM did not become ready.")
         }
     }
 
@@ -741,7 +741,7 @@ fn item_fields() -> Value {
     json!({
         "show_progress":{"type":"boolean","description":"Override the batch window choice for this item. Defaults to quiet."},
         "source":{"type":"string","description":SOURCE_SCHEMA},
-        "destination":{"type":"string","description":"Absolute download directory. Omit to use NDM Next's default."},
+        "destination":{"type":"string","description":"Absolute download directory. Omit to use OnesDM's default."},
         "plugin":{"type":"string","description":"Optional installed plugin ID"},
         "options":{"type":"object","description":"Options declared by the selected plugin"},
         "download_threads":thread_limit(),

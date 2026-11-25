@@ -15,7 +15,7 @@ esac
 
 cd -- "$desktop"
 version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
-package="NDM-Next-$version-linux-$arch"
+package="OnesDM-$version-linux-$arch"
 scratch=$(mktemp -d)
 trap 'rm -rf -- "$scratch"' EXIT
 stage="$scratch/$package"
@@ -26,6 +26,7 @@ cargo +1.100.0 build --locked --release --target "$target" -p ndm-desktop -p ndm
 target_dir=$(cargo +1.100.0 metadata --locked --no-deps --format-version 1 |
     python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
 install -m 755 "$target_dir/$target/release/ndm-desktop" "$target_dir/$target/release/ndm-host" "$stage/"
+ln -s ndm-host "$stage/onesdm"
 install -m 644 "$repo/LICENSE" "$repo/PRIVACY.md" "$stage/"
 install -m 644 "$desktop/packaging/linux/README.md" "$stage/README.md"
 cargo +1.100.0 about generate --frozen --workspace --target "$target" --fail \
