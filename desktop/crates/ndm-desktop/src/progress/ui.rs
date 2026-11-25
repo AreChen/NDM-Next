@@ -48,7 +48,7 @@ impl Render for ProgressWindow {
         } else if state == TaskState::Failed {
             0xef8b9a
         } else {
-            0x9c87ff
+            tone.rgb(0x9c87ff, 0x7152b4)
         };
         let name = task
             .as_ref()
@@ -305,12 +305,12 @@ impl Render for ProgressWindow {
             .rounded_full()
             .bg(linear_gradient(
                 90.,
-                linear_color_stop(rgb(0x885dff), 0.),
+                linear_color_stop(rgb(tone.rgb(0x885dff, 0x885dff)), 0.),
                 linear_color_stop(
                     rgb(if state == TaskState::Completed {
                         0x3ed4b2
                     } else {
-                        0x37c9f5
+                        tone.rgb(0x37c9f5, 0x37c9f5)
                     }),
                     1.,
                 ),

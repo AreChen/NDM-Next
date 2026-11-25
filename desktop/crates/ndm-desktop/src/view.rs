@@ -1,6 +1,6 @@
 use crate::{
     library::{Category, SortOrder, TaskIndex},
-    preferences::{Language, Preferences, Theme},
+    preferences::{ColorScheme, Language, Preferences, Theme},
     progress::ProgressWindow,
     protocol_auth::{AuthFields, apply as apply_protocol_auth},
     updates::{self, InstallWait, UpdateState},
@@ -93,6 +93,7 @@ pub(crate) struct Desktop {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     extension_id_input: Entity<InputState>,
     speed_input: Entity<InputState>,
+    custom_accent_inputs: [Entity<InputState>; 2],
     user_agent_input: Entity<InputState>,
     proxy_url_input: Entity<InputState>,
     tun_egress_input: Entity<InputState>,
@@ -247,6 +248,18 @@ impl Desktop {
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         let extension_id_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("chrome://extensions → ID"));
+        let custom_accent_inputs = preferences.custom_accents.map(|color| {
+            cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder("#RRGGBB")
+                    .default_value(format!("#{color:06X}"))
+            })
+        });
+        cx.observe_window_appearance(window, |this, _, cx| {
+            this.refresh_appearance(cx);
+            cx.notify();
+        })
+        .detach();
         let speed_input = cx.new(|cx| {
             InputState::new(window, cx).default_value(preferences.max_kib_per_second.to_string())
         });
@@ -498,6 +511,7 @@ impl Desktop {
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             extension_id_input,
             speed_input,
+            custom_accent_inputs,
             user_agent_input,
             proxy_url_input,
             tun_egress_input,
@@ -651,6 +665,9 @@ impl Desktop {
             return;
         }
         self.in_tray = true;
+        if self.theme_transition.take().is_some() {
+            crate::apply_theme(&self.preferences, cx);
+        }
         self.tasks = Vec::new();
         self.task_index = TaskIndex::default();
         self.matching_tasks = Vec::new();
@@ -1076,7 +1093,20 @@ impl Desktop {
     }
     fn set_theme(&mut self, mode: Theme, cx: &mut Context<Self>) {
         self.preferences.theme = mode;
-        self.theme_transition = crate::motion::ThemeTransition::begin(mode, cx);
+        self.save_appearance(cx);
+    }
+
+    fn refresh_appearance(&mut self, cx: &mut Context<Self>) {
+        self.theme_transition = if self.in_tray {
+            crate::apply_theme(&self.preferences, cx);
+            None
+        } else {
+            crate::motion::ThemeTransition::begin(&self.preferences, cx)
+        };
+    }
+
+    fn save_appearance(&mut self, cx: &mut Context<Self>) {
+        self.refresh_appearance(cx);
         self.save_preferences(cx);
         cx.notify();
     }
@@ -1561,20 +1591,16 @@ impl Desktop {
             )
             .child(Input::new(input).small().id(id).aria_label(label).w_full())
     }
-    fn hls_options_panel(
-        &self,
-        catalog: &HlsCatalog,
-        dark: bool,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn hls_options_panel(&self, catalog: &HlsCatalog, cx: &mut Context<Self>) -> impl IntoElement {
+        let tone = crate::motion::ThemeTone::current(cx);
         let mut panel = div()
             .id("hls-options")
             .max_h(px(200.))
             .overflow_y_scroll()
             .rounded_xl()
             .border_1()
-            .border_color(rgb(if dark { 0x28344b } else { 0xe3e8f2 }))
-            .bg(rgb(if dark { 0x111625 } else { 0xf8f9fd }))
+            .border_color(rgb(tone.rgb(0x28344b, 0xe3e8f2)))
+            .bg(rgb(tone.rgb(0x111625, 0xf8f9fd)))
             .p_4()
             .flex()
             .flex_col()
@@ -2151,12 +2177,12 @@ impl Render for Desktop {
                 if let Some((url, catalog)) = &self.hls_catalog
                     && self.url_input.read(cx).value().as_ref().trim() == url
                 {
-                    content = content.child(self.hls_options_panel(catalog, dark, cx));
+                    content = content.child(self.hls_options_panel(catalog, cx));
                 }
                 if let Some((url, catalog)) = &self.dash_catalog
                     && self.url_input.read(cx).value().as_ref().trim() == url
                 {
-                    content = content.child(self.dash_options_panel(catalog, dark, cx));
+                    content = content.child(self.dash_options_panel(catalog, cx));
                 }
             }
             if self.editing_url.is_some() {
@@ -2432,7 +2458,7 @@ impl Render for Desktop {
                             .h_full()
                             .flex_shrink_0()
                             .cursor(CursorStyle::ResizeLeftRight)
-                            .hover(|style| style.bg(rgb(0x885dff)))
+                            .hover(|style| style.bg(rgb(tone.rgb(0x885dff, 0x7052b8))))
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(|this, event: &MouseDownEvent, window, cx| {

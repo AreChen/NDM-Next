@@ -31,11 +31,62 @@ pub enum Theme {
     Dark,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ColorScheme {
+    #[default]
+    Classic,
+    Silver,
+    Ocean,
+    Forest,
+    Sunset,
+    Custom,
+}
+
+impl ColorScheme {
+    pub const ALL: [Self; 6] = [
+        Self::Classic,
+        Self::Silver,
+        Self::Ocean,
+        Self::Forest,
+        Self::Sunset,
+        Self::Custom,
+    ];
+
+    pub fn label(self, language: Language) -> &'static str {
+        let (zh, en) = match self {
+            Self::Classic => ("经典紫", "Classic violet"),
+            Self::Silver => ("银环黑白", "Silver ring"),
+            Self::Ocean => ("海蓝", "Ocean"),
+            Self::Forest => ("森林绿", "Forest"),
+            Self::Sunset => ("落日珊瑚", "Sunset coral"),
+            Self::Custom => ("自定义", "Custom"),
+        };
+        if language == Language::Chinese {
+            zh
+        } else {
+            en
+        }
+    }
+
+    pub fn accents(self, custom: [u32; 2]) -> [u32; 2] {
+        match self {
+            Self::Classic => [0x885dff, 0x37c9f5],
+            Self::Silver => [0xc7c7c7, 0x909090],
+            Self::Ocean => [0x367aed, 0x1ebbcf],
+            Self::Forest => [0x23885c, 0x9bb548],
+            Self::Sunset => [0xd95e74, 0xeaa64b],
+            Self::Custom => custom,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
     pub language: Language,
     pub theme: Theme,
+    pub color_scheme: ColorScheme,
+    pub custom_accents: [u32; 2],
     pub sidebar_collapsed: bool,
     pub sidebar_width: u16,
     pub ui_animations: bool,
@@ -69,6 +120,8 @@ impl Default for Preferences {
         Self {
             language: Language::Chinese,
             theme: Theme::System,
+            color_scheme: ColorScheme::Classic,
+            custom_accents: [0x885dff, 0x37c9f5],
             sidebar_collapsed: false,
             sidebar_width: crate::sidebar::DEFAULT_WIDTH as u16,
             ui_animations: true,
@@ -111,6 +164,8 @@ impl Preferences {
                         .get("use_system_download_dir")
                         .and_then(|value| value.as_bool()),
                 );
+                preferences.custom_accents =
+                    preferences.custom_accents.map(|value| value.min(0xffffff));
                 preferences.download_dir = directory;
                 preferences.sidebar_width =
                     crate::sidebar::valid_width(f32::from(preferences.sidebar_width)) as u16;
@@ -251,6 +306,8 @@ mod tests {
         let path = dir.path().join("preferences.json");
         let preferences = Preferences {
             theme: Theme::Dark,
+            color_scheme: ColorScheme::Custom,
+            custom_accents: [0x001144, 0xfd2034],
             language: Language::English,
             auto_update: false,
             last_update_check: Some(1_000),
@@ -263,6 +320,7 @@ mod tests {
         fs::write(&path, br#"{"theme":"Light"}"#).unwrap();
         let restored = Preferences::load(&path).unwrap();
         assert_eq!(restored.theme, Theme::Light);
+        assert_eq!(restored.color_scheme, ColorScheme::Classic);
         assert_eq!(restored.user_agent, None);
         assert_eq!(restored.max_connections, 16);
         assert_eq!(restored.start_at_login, None);

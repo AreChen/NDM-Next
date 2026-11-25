@@ -141,9 +141,9 @@ impl Desktop {
     pub(super) fn dash_options_panel(
         &self,
         catalog: &DashCatalog,
-        dark: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let tone = crate::motion::ThemeTone::current(cx);
         let selected = self.dash_variant.or_else(|| {
             catalog
                 .representations
@@ -230,8 +230,8 @@ impl Desktop {
             .overflow_y_scroll()
             .rounded_lg()
             .border_1()
-            .border_color(rgb(if dark { 0x28344b } else { 0xe3e8f2 }))
-            .bg(rgb(if dark { 0x141d2d } else { 0xffffff }))
+            .border_color(rgb(tone.rgb(0x28344b, 0xe3e8f2)))
+            .bg(rgb(tone.rgb(0x141d2d, 0xffffff)))
             .p_3()
             .flex()
             .flex_col()
@@ -247,7 +247,7 @@ impl Desktop {
             .child(
                 div()
                     .text_xs()
-                    .text_color(rgb(if dark { 0xa0b0cc } else { 0x6c7b94 }))
+                    .text_color(rgb(tone.rgb(0xa0b0cc, 0x6c7b94)))
                     .child(self.text(
                         "音轨最多选 8 个，同一音轨选择一种码率。",
                         "Choose up to 8 tracks, with one bitrate per track.",

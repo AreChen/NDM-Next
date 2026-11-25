@@ -97,8 +97,12 @@ pub(crate) fn choice_item(
             .py_1()
             .rounded(cx.theme().radius.min(px(8.)))
             .when(selected, |row| {
-                row.bg(rgb(if dark { 0x302b50 } else { 0xede9ff }))
-                    .text_color(rgb(if dark { 0xd9d1ff } else { 0x523fa7 }))
+                let tone = cx
+                    .try_global::<crate::palette::ThemeTone>()
+                    .copied()
+                    .unwrap_or_else(|| dark.into());
+                row.bg(rgb(tone.rgb(0x302b50, 0xede9ff)))
+                    .text_color(rgb(tone.rgb(0xd9d1ff, 0x523fa7)))
             })
             .child(label.clone())
     })

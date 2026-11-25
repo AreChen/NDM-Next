@@ -117,9 +117,6 @@ impl Desktop {
         if old.ui_animations != p.ui_animations {
             cx.set_reduce_motion(!p.ui_animations);
         }
-        if old.theme != p.theme {
-            self.theme_transition = crate::motion::ThemeTransition::begin(p.theme, cx);
-        }
         if old.auto_resume != p.auto_resume {
             self.pending_auto_resume = p.auto_resume;
         }
@@ -164,7 +161,11 @@ impl Desktop {
                 input.set_value(p.download_dir.to_string_lossy().into_owned(), window, cx)
             });
         }
-        if old.language != p.language {
+        let language_changed = old.language != p.language;
+        if old.theme != p.theme {
+            self.refresh_appearance(cx);
+        }
+        if language_changed {
             self.refresh_language(window, cx);
         }
         cx.notify();

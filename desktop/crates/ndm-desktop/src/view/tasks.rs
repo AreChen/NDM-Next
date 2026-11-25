@@ -357,8 +357,8 @@ impl Desktop {
                                 .rounded_full()
                                 .bg(linear_gradient(
                                     90.,
-                                    linear_color_stop(rgb(0x8958ff), 0.),
-                                    linear_color_stop(rgb(0x39cbf3), 1.),
+                                    linear_color_stop(rgb(tone.rgb(0x8958ff, 0x8958ff)), 0.),
+                                    linear_color_stop(rgb(tone.rgb(0x39cbf3, 0x39cbf3)), 1.),
                                 )),
                         ),
                 );
@@ -423,7 +423,7 @@ impl Desktop {
                 .rounded_lg()
                 .border_1()
                 .border_color(rgb(if self.selected_tasks.contains(&id) {
-                    0x967bff
+                    tone.rgb(0x967bff, 0x7656c9)
                 } else {
                     edge
                 }))

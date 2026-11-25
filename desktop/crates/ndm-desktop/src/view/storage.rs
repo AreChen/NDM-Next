@@ -2,8 +2,8 @@ use super::*;
 use gpui_kit::component::Disableable;
 
 impl Desktop {
-    pub(super) fn storage_settings(&self, dark: bool, cx: &mut Context<Self>) -> AnyElement {
-        let muted = if dark { 0x95a5c0 } else { 0x71809a };
+    pub(super) fn storage_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        let muted = crate::motion::ThemeTone::current(cx).rgb(0x95a5c0, 0x71809a);
         let report = self
             .cache_report
             .map(|report| {

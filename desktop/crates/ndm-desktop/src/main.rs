@@ -11,6 +11,7 @@ mod instance;
 mod library;
 mod motion;
 mod notice;
+mod palette;
 mod peer_metrics;
 mod preferences;
 mod progress;
@@ -46,8 +47,8 @@ fn application_assets() -> impl AssetSource {
     branding::Assets
 }
 
-pub(crate) fn apply_theme(theme: Theme, cx: &mut App) {
-    let mode = match theme {
+pub(crate) fn apply_theme(preferences: &Preferences, cx: &mut App) {
+    let mode = match preferences.theme {
         Theme::Dark => ThemeMode::Dark,
         Theme::Light => ThemeMode::Light,
         Theme::System => {
@@ -62,6 +63,15 @@ pub(crate) fn apply_theme(theme: Theme, cx: &mut App) {
         }
     };
     ComponentTheme::change(mode, None, cx);
+    let tone = palette::ThemeTone::new(
+        mode.is_dark(),
+        preferences.color_scheme,
+        preferences.custom_accents,
+    );
+    cx.set_global(tone);
+    if preferences.color_scheme != preferences::ColorScheme::Classic {
+        ComponentTheme::update(cx, |theme| tone.style_controls(&mut theme.colors));
+    }
 }
 
 fn main() {
@@ -206,7 +216,7 @@ fn main() {
             })
             .detach();
         }
-        apply_theme(preferences.theme, cx);
+        apply_theme(&preferences, cx);
         let bounds = Bounds::centered(None, size(px(1000.), px(500.)), cx);
         // Keep browser-triggered launches in the background. Linux GPUI maps
         // the main window during creation, then the view minimizes it.

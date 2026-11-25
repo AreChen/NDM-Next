@@ -84,6 +84,121 @@ impl Desktop {
         cx.notify();
     }
 
+    fn save_custom_accents(&mut self, cx: &mut Context<Self>) {
+        let [primary, secondary] = self
+            .custom_accent_inputs
+            .each_ref()
+            .map(|input| parse_hex_color(&input.read(cx).value()));
+        let (Some(primary), Some(secondary)) = (primary, secondary) else {
+            self.set_notice(
+                self.text(
+                    "请输入六位十六进制颜色，例如 #885DFF。",
+                    "Enter six hexadecimal digits per color, e.g. #885DFF.",
+                )
+                .into(),
+                cx,
+            );
+            cx.notify();
+            return;
+        };
+        self.clear_notice();
+        self.preferences.custom_accents = [primary, secondary];
+        self.preferences.color_scheme = ColorScheme::Custom;
+        self.save_appearance(cx);
+    }
+
+    fn appearance_details(
+        &self,
+        motion: impl IntoElement,
+        muted: u32,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let scheme = self.preferences.color_scheme;
+        let language = self.preferences.language;
+        let view = cx.entity().downgrade();
+        let dark = self.is_dark(cx);
+        let mut details = div().flex().flex_col().gap_3().child(
+            div()
+                .flex()
+                .items_center()
+                .flex_wrap()
+                .gap_2()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(muted))
+                        .child(self.text("界面配色", "Color palette")),
+                )
+                .children(
+                    scheme
+                        .accents(self.preferences.custom_accents)
+                        .map(|color| {
+                            div()
+                                .size(px(12.))
+                                .rounded_full()
+                                .bg(rgb(color))
+                                .border_1()
+                                .border_color(rgb(muted))
+                        }),
+                )
+                .child(
+                    Button::new("color-scheme")
+                        .small()
+                        .dropdown_caret(true)
+                        .label(scheme.label(language))
+                        .accessibility_label(self.text("界面配色", "Color palette"))
+                        .dropdown_menu(move |menu, _, _| {
+                            ColorScheme::ALL.into_iter().fold(menu, |menu, option| {
+                                let view = view.clone();
+                                menu.item(
+                                    crate::chrome::choice_item(
+                                        option.label(language),
+                                        option == scheme,
+                                        dark,
+                                    )
+                                    .on_click(
+                                        move |_, _, cx| {
+                                            let _ = view.update(cx, |this, cx| {
+                                                this.preferences.color_scheme = option;
+                                                this.save_appearance(cx);
+                                            });
+                                        },
+                                    ),
+                                )
+                            })
+                        }),
+                ),
+        );
+        if scheme == ColorScheme::Custom {
+            details = details.child(
+                div()
+                    .flex()
+                    .items_end()
+                    .gap_2()
+                    .child(self.settings_field(
+                        self.text("主色", "Primary"),
+                        "custom-primary",
+                        &self.custom_accent_inputs[0],
+                        muted,
+                    ))
+                    .child(self.settings_field(
+                        self.text("辅助色", "Secondary"),
+                        "custom-secondary",
+                        &self.custom_accent_inputs[1],
+                        muted,
+                    ))
+                    .child(
+                        Button::new("apply-custom-colors")
+                            .small()
+                            .primary()
+                            .label(self.text("应用", "Apply"))
+                            .on_click(cx.listener(|this, _, _, cx| this.save_custom_accents(cx))),
+                    ),
+            );
+        }
+        details.child(motion)
+    }
+
     fn save_user_agent(&mut self, cx: &mut Context<Self>) {
         let value = self.user_agent_input.read(cx).value();
         let value = value.trim();
@@ -624,7 +739,7 @@ impl Desktop {
                                     .h_full()
                                     .w(relative(ratio))
                                     .rounded_full()
-                                    .bg(rgb(0x7c68ff)),
+                                    .bg(rgb(tone.rgb(0x7c68ff, 0x6955be))),
                             ),
                     )
                 },
@@ -637,7 +752,10 @@ impl Desktop {
                 self.text("主题、语言与界面动效", "Theme, language and motion"),
             ),
             appearance,
-            Some(motion.into_any_element()),
+            Some(
+                self.appearance_details(motion, muted, cx)
+                    .into_any_element(),
+            ),
             frames[0],
             cx,
         );
@@ -684,7 +802,7 @@ impl Desktop {
                 .to_string_lossy()
                 .into_owned()
                 .into(),
-            self.storage_settings(dark, cx),
+            self.storage_settings(cx),
             cx,
         );
         let proxy = form(
@@ -857,6 +975,15 @@ pub(super) fn settings_detail(
     .into_any_element()
 }
 
+fn parse_hex_color(value: &str) -> Option<u32> {
+    let value = value.trim();
+    let hex = value.strip_prefix('#').unwrap_or(value);
+    if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    u32::from_str_radix(hex, 16).ok()
+}
+
 fn theme_switch(
     theme: Theme,
     zh: bool,
@@ -969,6 +1096,16 @@ pub(super) fn card_surface(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn custom_colors_accept_only_six_rgb_digits() {
+        for input in ["#00fF42", " 00FF42 "] {
+            assert_eq!(super::parse_hex_color(input), Some(0x00ff42));
+        }
+        for input in ["", "#fff", "#ffffffff", "12345g", "+12345", "#颜色"] {
+            assert_eq!(super::parse_hex_color(input), None);
+        }
+    }
+
     use super::{settings_card, theme_switch};
     use crate::preferences::Theme;
     use gpui::component::{

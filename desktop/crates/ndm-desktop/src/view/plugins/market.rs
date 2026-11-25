@@ -413,7 +413,7 @@ impl Desktop {
                                 .h_full()
                                 .w(relative(ratio))
                                 .rounded_full()
-                                .bg(rgb(0x8864ed)),
+                                .bg(rgb(tone.rgb(0x8864ed, 0x7951ce))),
                         ),
                 )
             })

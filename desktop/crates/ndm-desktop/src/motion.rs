@@ -1,38 +1,12 @@
 use gpui_kit::{
-    App, ElementId, Global, Hsla, Pixels, Rgba, SharedString, Window,
+    App, ElementId, Hsla, Pixels, Rgba, SharedString, Window,
     component::{Theme as ComponentTheme, theme::ThemeColor},
 };
 use gpui_motion_kit::core::{Easing, Transition};
 use std::{rc::Rc, sync::Arc, time::Duration};
 
-/// Presentation state is shared by all windows, independently of target mode.
-#[derive(Clone, Copy)]
-pub(crate) struct ThemeTone(pub f32);
-impl Global for ThemeTone {}
-impl From<bool> for ThemeTone {
-    fn from(dark: bool) -> Self {
-        Self(if dark { 1. } else { 0. })
-    }
-}
-impl ThemeTone {
-    pub fn current(cx: &App) -> Self {
-        cx.try_global::<Self>()
-            .copied()
-            .unwrap_or_else(|| ComponentTheme::global(cx).mode.is_dark().into())
-    }
-    pub fn rgb(self, dark: u32, light: u32) -> u32 {
-        let channel = |shift: u32| {
-            let a = ((light >> shift) & 255u32) as f32;
-            let b = ((dark >> shift) & 255u32) as f32;
-            (a + (b - a) * self.0.clamp(0., 1.)).round() as u32
-        };
-        (channel(16) << 16) | (channel(8) << 8) | channel(0)
-    }
-    pub fn rgba(self, dark: u32, light: u32) -> u32 {
-        let alpha = (light & 255) as f32 + ((dark & 255) as f32 - (light & 255) as f32) * self.0;
-        (self.rgb(dark >> 8, light >> 8) << 8) | alpha.round() as u32
-    }
-}
+pub(crate) use crate::palette::ThemeTone;
+use crate::preferences::Preferences;
 
 pub(crate) struct ThemeTransition {
     progress: gpui_motion_kit::ValueState,
@@ -43,16 +17,16 @@ pub(crate) struct ThemeTransition {
 }
 
 impl ThemeTransition {
-    pub fn begin(mode: crate::preferences::Theme, cx: &mut App) -> Option<Self> {
+    pub fn begin(preferences: &Preferences, cx: &mut App) -> Option<Self> {
         let from = ComponentTheme::global(cx).colors;
         let from_tone = ThemeTone::current(cx);
-        crate::apply_theme(mode, cx);
+        crate::apply_theme(preferences, cx);
         let to = ComponentTheme::global(cx).colors;
-        let to_tone = ThemeTone::from(ComponentTheme::global(cx).mode.is_dark());
-        if cx.reduce_motion() || (from == to && from_tone.0 == to_tone.0) {
-            cx.set_global(to_tone);
+        let to_tone = ThemeTone::current(cx);
+        if cx.reduce_motion() || (from == to && from_tone == to_tone) {
             return None;
         }
+        cx.set_global(from_tone);
         // Restore the presented palette before a frame can paint the new mode.
         ComponentTheme::update(cx, |theme| theme.colors = from);
         Some(Self {
@@ -68,13 +42,17 @@ impl ThemeTransition {
         let frame = self.progress.frame(1., tween(280), window, cx);
         let t = frame.value() as f32;
         let colors = blend_palette(self.from, self.to, t);
-        cx.set_global(ThemeTone(
-            self.from_tone.0 + (self.to_tone.0 - self.from_tone.0) * t,
-        ));
+        let tone = self.from_tone.blend(self.to_tone, t);
+        let tone_changed = ThemeTone::current(cx) != tone;
+        if tone_changed {
+            cx.set_global(tone);
+        }
         // Theme::update refreshes every window. Don't feed an unchanged sample
         // back into rendering (especially while the frame clock is stationary).
         if ComponentTheme::global(cx).colors != colors {
             ComponentTheme::update(cx, |theme| theme.colors = colors);
+        } else if tone_changed {
+            cx.refresh_windows();
         }
         frame.is_animating()
     }
@@ -329,7 +307,7 @@ impl gpui_kit::RenderOnce for SegmentedControl {
                     .h_full()
                     .rounded_md()
                     .border_1()
-                    .border_color(rgba(0xa78bfa55))
+                    .border_color(rgba(tone.rgba(0xa78bfa55, 0xa78bfa55)))
                     .bg(rgb(tone.rgb(0x51447e, 0xe5ddff))),
             );
         }
@@ -442,6 +420,11 @@ impl gpui_kit::RenderOnce for Switch {
         });
         let tone = ThemeTone::current(cx);
         let id = self.id;
+        let track_color = crate::palette::mix_rgb(
+            tone.rgb(0x3c475c, 0xc8d0e0),
+            tone.rgb(0x8864ed, 0x8864ed),
+            progress,
+        );
         let track = div()
             .id((id, 2usize))
             .debug_selector(move || format!("{id}-track"))
@@ -450,9 +433,7 @@ impl gpui_kit::RenderOnce for Switch {
             .h(px(18.))
             .flex_shrink_0()
             .rounded_full()
-            .bg(rgb(
-                ThemeTone(progress).rgb(0x8864ed, tone.rgb(0x3c475c, 0xc8d0e0))
-            ))
+            .bg(rgb(track_color))
             .child(
                 div()
                     .id((id, 3usize))
@@ -462,7 +443,7 @@ impl gpui_kit::RenderOnce for Switch {
                     .left(px(2. + 12. * progress))
                     .size(px(14.))
                     .rounded_full()
-                    .bg(rgb(0xffffff)),
+                    .bg(rgb(tone.switch_thumb(track_color))),
             );
         gpui_kit::base::Switch::new(self.id)
             .checked(self.checked)
@@ -481,7 +462,7 @@ impl gpui_kit::RenderOnce for Switch {
             .cursor_pointer()
             .border_1()
             .border_color(rgba(0))
-            .focus_visible(|style| style.border_color(rgb(0x9b85ed)))
+            .focus_visible(|style| style.border_color(rgb(tone.rgb(0x9b85ed, 0x6850ad))))
             .on_change(move |next, _, window, cx| {
                 if let Some(callback) = &self.on_change {
                     callback(&next, window, cx);
@@ -514,9 +495,14 @@ mod tests {
 
     #[test]
     fn theme_tones_and_scramble_resolve_without_touching_nonlabels() {
-        assert_eq!(ThemeTone(0.).rgb(0x112233, 0xaabbcc), 0xaabbcc);
-        assert_eq!(ThemeTone(1.).rgb(0x112233, 0xaabbcc), 0x112233);
-        assert_eq!(ThemeTone(0.5).rgb(0xffffff, 0), 0x808080);
+        assert_eq!(ThemeTone::from(false).rgb(0x112233, 0xaabbcc), 0xaabbcc);
+        assert_eq!(ThemeTone::from(true).rgb(0x112233, 0xaabbcc), 0x112233);
+        assert_eq!(
+            ThemeTone::from(false)
+                .blend(true.into(), 0.5)
+                .rgb(0xffffff, 0),
+            0x808080
+        );
         for label in ["设置中心", "Settings center", "中文 / English"] {
             assert_eq!(scramble(label, 1.), label);
             assert_eq!(scramble(label, 2.), label);
@@ -542,25 +528,43 @@ mod tests {
         }
         cx.update(|cx| {
             gpui_kit::init(cx);
-            crate::apply_theme(crate::preferences::Theme::Dark, cx);
+            crate::apply_theme(
+                &Preferences {
+                    theme: crate::preferences::Theme::Dark,
+                    ..Default::default()
+                },
+                cx,
+            );
         });
         let (view, cx) = cx.add_window_view(|_, _| ThemeView(None));
         cx.update(|window, cx| {
             view.update(cx, |view, cx| {
-                view.0 = ThemeTransition::begin(crate::preferences::Theme::Light, cx)
+                view.0 = ThemeTransition::begin(
+                    &Preferences {
+                        theme: crate::preferences::Theme::Light,
+                        ..Default::default()
+                    },
+                    cx,
+                )
             });
             window.draw(cx).clear(cx);
-            assert_eq!(ThemeTone::current(cx).0, 1.);
+            assert_eq!(ThemeTone::current(cx).darkness, 1.);
         });
         cx.background_executor
             .advance_clock(Duration::from_millis(120));
         cx.update(|window, cx| {
             window.draw(cx).clear(cx);
-            let tone = ThemeTone::current(cx).0;
+            let tone = ThemeTone::current(cx).darkness;
             assert!(tone > 0. && tone < 1., "Theme must interpolate");
             let color = ComponentTheme::global(cx).colors.background;
             view.update(cx, |view, cx| {
-                view.0 = ThemeTransition::begin(crate::preferences::Theme::Dark, cx)
+                view.0 = ThemeTransition::begin(
+                    &Preferences {
+                        theme: crate::preferences::Theme::Dark,
+                        ..Default::default()
+                    },
+                    cx,
+                )
             });
             assert_eq!(
                 ComponentTheme::global(cx).colors.background,
@@ -577,10 +581,44 @@ mod tests {
                 view.read(cx).0.is_none(),
                 "Stop scheduling frames when settled"
             );
-            assert_eq!(ThemeTone::current(cx).0, 1.);
+            assert_eq!(ThemeTone::current(cx).darkness, 1.);
             cx.set_reduce_motion(true);
-            assert!(ThemeTransition::begin(crate::preferences::Theme::Light, cx).is_none());
-            assert_eq!(ThemeTone::current(cx).0, 0.);
+            assert!(
+                ThemeTransition::begin(
+                    &Preferences {
+                        theme: crate::preferences::Theme::Light,
+                        ..Default::default()
+                    },
+                    cx
+                )
+                .is_none()
+            );
+            assert_eq!(ThemeTone::current(cx).darkness, 0.);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn changing_only_the_scheme_updates_controls_and_can_restore_classic(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_reduce_motion(true);
+            let mut preferences = Preferences {
+                theme: crate::preferences::Theme::Dark,
+                ..Default::default()
+            };
+            crate::apply_theme(&preferences, cx);
+            let classic = ComponentTheme::global(cx).colors;
+            preferences.color_scheme = crate::preferences::ColorScheme::Silver;
+            assert!(ThemeTransition::begin(&preferences, cx).is_none());
+            let tone = ThemeTone::current(cx);
+            assert_eq!(tone.darkness, 1.);
+            assert_eq!(
+                ComponentTheme::global(cx).colors.button_primary,
+                Hsla::from(rgb(tone.rgb(0xa488ff, 0x6544b4)))
+            );
+            preferences.color_scheme = crate::preferences::ColorScheme::Classic;
+            assert!(ThemeTransition::begin(&preferences, cx).is_none());
+            assert_eq!(ComponentTheme::global(cx).colors, classic);
         });
     }
 
