@@ -261,7 +261,7 @@ async function mediaPosters(tabId, entries) {
   return posters;
 }
 
-function browserTask(item, download, mediaCapture, originalUrl) {
+function browserTask(item, download, mediaCapture, originalUrl, config) {
   const captures = [...requests.values()];
   let capture = mediaCapture || findCapture(captures,item.url);
   // Redirect targets can lack an observable request capture. Replay the
@@ -272,9 +272,16 @@ function browserTask(item, download, mediaCapture, originalUrl) {
     capture = findCapture(captures,originalUrl);
   }
   if (!capture) return null;
+  const sourceUrl = reliablePage(item.pageUrl);
+  if (config?.blockedDomains?.length) {
+    // Chromium can omit the referrer even when webRequest knows the initiating
+    // site. Use that origin for policy only, without adding a replay Referer.
+    const initiatingPage = sourceUrl || reliablePage(capture.initiator);
+    if (initiatingPage ? shouldSkip({...item,pageUrl:initiatingPage},config) : !capture.directNavigation) return null;
+  }
   const filename = typeof download?.filename === 'string' ? download.filename.split(/[\\/]/).pop() : undefined;
   return {
-    url:capture.url, source_url:reliablePage(item.pageUrl), suggested_filename:filename || null,
+    url:capture.url, source_url:sourceUrl, suggested_filename:filename || null,
     expected_size:!isMediaManifest(item) && Number.isSafeInteger(item.size) && item.size > 0 ? item.size : null,
     media_type:item.type || null,
     headers:capture.headers,
@@ -348,7 +355,7 @@ chrome.downloads.onCreated.addListener(async download => {
     await captureReady;
     const config = await settings();
     const item = { url:download.finalUrl || download.url, pageUrl:download.referrer, size:knownDownloadSize(download.totalBytes), type:download.mime };
-    if ((config.blockedDomains || []).length && !reliablePage(item.pageUrl)) return;
+    if (config.backend !== 'next' && (config.blockedDomains || []).length && !reliablePage(item.pageUrl)) return;
     if (shouldSkip(item,config) || shouldSkip({ ...item, url:download.url },config)) return;
     // Do not issue an extra probe for the new backend: it might consume a
     // one-time URL. Unknown size remains eligible as documented.
@@ -366,7 +373,7 @@ chrome.downloads.onCreated.addListener(async download => {
     item.url = current.finalUrl || item.url;
     if (shouldSkip(item,config)) return;
     if (config.backend === 'next') {
-      const task = browserTask(item,current,undefined,download.url);
+      const task = browserTask(item,current,undefined,download.url,config);
       if (!task) return;
       if (config.captureMode === 'confirm') await askToTakeOver(current,task,config);
       else await handoff.transfer(download.id,task,config.transferPolicy);
