@@ -23,7 +23,7 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 pub const CATALOG_URL: &str =
-    "https://raw.githubusercontent.com/AreChen/NDM-Next-Plugin-Market/main/catalog.json";
+    "https://raw.githubusercontent.com/AreChen/onesdm-plugin-market/main/catalog.json";
 const JSON_LIMIT: u64 = 2 * 1024 * 1024;
 const PACKAGE_LIMIT: u64 = 384 * 1024 * 1024;
 const EXTRACT_LIMIT: u64 = 1024 * 1024 * 1024;

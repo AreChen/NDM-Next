@@ -112,7 +112,7 @@ such as `missing_validator`, `range_ignored`, `connection_limit` or `rate_limite
 Repository file paths can supply a name when a task is queued. A server attachment
 name becomes visible while the download is running.
 
-- [Plugin market catalog](https://github.com/AreChen/NDM-Next-Plugin-Market)
+- [Plugin market catalog](https://github.com/AreChen/onesdm-plugin-market)
 - [Download engine SDK](../desktop/crates/ndm-plugin-sdk/README.md)
 - [NDM Next Skill](../desktop/crates/ndm-host/skills/SKILL.md)
 

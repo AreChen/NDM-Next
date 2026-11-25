@@ -147,7 +147,7 @@ and `description`, choose a stable `category` ID from `sources.json`, and
 optionally include search `keywords` such as protocol abbreviations and
 translations. NDM displays listing text and category labels in the selected
 language and searches both languages. An imported ZIP with no listing uses
-its manifest text on the card. [Marketplace listing format](https://github.com/AreChen/NDM-Next-Plugin-Market#listing-and-translations)
+its manifest text on the card. [Marketplace listing format](https://github.com/AreChen/onesdm-plugin-market#listing-and-translations)
 
 ### 中文
 
@@ -159,7 +159,7 @@ its manifest text on the card. [Marketplace listing format](https://github.com/A
 提交市场时，在目录中填写中英文名称与描述，选用 `sources.json` 中的分类
 ID，也可添加中英文关键词和协议简称。市场卡片和分类随应用语言切换，
 搜索同时匹配两种语言。没有市场条目的本地导入插件使用包内清单的文本。
-[插件市场上架格式](https://github.com/AreChen/NDM-Next-Plugin-Market#listing-and-translations)
+[插件市场上架格式](https://github.com/AreChen/onesdm-plugin-market#listing-and-translations)
 
 ## JavaScript panels
 
