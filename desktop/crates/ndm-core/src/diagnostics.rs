@@ -9,6 +9,10 @@ pub enum ProxyMode {
     #[default]
     Inherit,
     Direct,
+    /// Use normal OS routing (including an active TUN), ignoring HTTP proxies.
+    SystemRoute,
+    /// Use only the locally configured DIRECT listener or bound TCP interface.
+    TunDirect,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -17,6 +21,51 @@ pub enum ProxyRoute {
     Direct,
     ConfiguredProxy,
     SystemProxy,
+    OsRoute,
+    BoundInterface,
+    LocalDirectListener,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TunEgress {
+    LocalPort(std::num::NonZeroU16),
+    Interface(String),
+}
+
+impl TunEgress {
+    pub fn parse(value: &str) -> Result<Self> {
+        if !value.is_empty() && value.bytes().all(|c| c.is_ascii_digit()) {
+            return value
+                .parse()
+                .map(Self::LocalPort)
+                .map_err(|_| Error::TunEgressUnavailable);
+        }
+        if cfg!(any(target_os = "linux", target_os = "macos"))
+            && !value.is_empty()
+            && value.len() <= 15
+            && value
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.'))
+        {
+            return Ok(Self::Interface(value.to_owned()));
+        }
+        Err(Error::TunEgressUnavailable)
+    }
+
+    pub fn input_value(&self) -> String {
+        match self {
+            Self::LocalPort(port) => port.to_string(),
+            Self::Interface(name) => name.clone(),
+        }
+    }
+
+    pub fn route(&self) -> ProxyRoute {
+        match self {
+            Self::LocalPort(_) => ProxyRoute::LocalDirectListener,
+            Self::Interface(_) => ProxyRoute::BoundInterface,
+        }
+    }
 }
 
 /// Uses the same destination matcher as reqwest's system-proxy feature.
@@ -27,8 +76,14 @@ pub(crate) enum Routing {
 }
 
 impl Routing {
-    pub(crate) fn new(mode: ProxyMode, proxy: Option<&ProxyOptions>) -> Self {
+    pub(crate) fn new(
+        mode: ProxyMode,
+        proxy: Option<&ProxyOptions>,
+        egress: Option<&TunEgress>,
+    ) -> Self {
         match mode {
+            ProxyMode::SystemRoute => Self::Fixed(ProxyRoute::OsRoute),
+            ProxyMode::TunDirect => egress.map_or(Self::CustomClient, |e| Self::Fixed(e.route())),
             ProxyMode::Direct => Self::Fixed(ProxyRoute::Direct),
             ProxyMode::Inherit if proxy.is_some() => Self::Fixed(ProxyRoute::ConfiguredProxy),
             ProxyMode::Inherit => Self::System(Box::new(
@@ -106,6 +161,7 @@ pub enum DownloadFailure {
     Connection,
     InvalidHeader,
     InvalidProxy,
+    TunEgressUnavailable,
     Filesystem,
     DownloadFailed,
 }
@@ -120,6 +176,7 @@ impl DownloadFailure {
             Error::Network(error) if error.is_connect() => Self::Connection,
             Error::Network(_) => Self::Network,
             Error::InvalidHeader => Self::InvalidHeader,
+            Error::TunEgressUnavailable => Self::TunEgressUnavailable,
             Error::InvalidProxy => Self::InvalidProxy,
             Error::Io(_) => Self::Filesystem,
             _ => Self::DownloadFailed,
@@ -131,6 +188,7 @@ impl DownloadFailure {
             "server rejected the download" => Self::HttpStatus,
             "server returned an inconsistent response" => Self::InvalidResponse,
             "download SHA-256 does not match the source" => Self::ChecksumMismatch,
+            "TUN direct exit is missing or unsupported" => Self::TunEgressUnavailable,
             "network error" => Self::Network,
             "file or operating system error" => Self::Filesystem,
             _ => Self::DownloadFailed,
@@ -146,6 +204,7 @@ impl DownloadFailure {
             Self::Timeout => "network request timed out",
             Self::Connection => "could not connect to the server or proxy",
             Self::InvalidHeader => "download request contains an invalid header",
+            Self::TunEgressUnavailable => "TUN direct exit is missing or unsupported",
             Self::InvalidProxy => "proxy configuration is invalid",
             Self::Filesystem => "file or operating system error",
             Self::DownloadFailed => "download failed",

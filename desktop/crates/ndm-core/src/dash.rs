@@ -46,6 +46,8 @@ pub struct DashOptions {
     pub proxy_mode: crate::ProxyMode,
     #[serde(default)]
     pub user_agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tun_egress: Option<crate::TunEgress>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -119,6 +121,7 @@ impl Network {
                 options.proxy.as_ref(),
                 options.proxy_mode,
                 options.user_agent.as_deref(),
+                options.tun_egress.as_ref(),
             )?,
             origin,
             headers: request_headers(request)?,
@@ -309,6 +312,9 @@ pub async fn execute_dash(
         }
         Err(error) => {
             let reason = match error {
+                Error::TunEgressUnavailable => {
+                    crate::DownloadFailure::TunEgressUnavailable.message()
+                }
                 Error::DashDrmUnsupported => "dash_drm_unsupported",
                 Error::DashDynamicUnsupported => "dash_dynamic_unsupported",
                 Error::DashUnsupported => "dash_layout_unsupported",

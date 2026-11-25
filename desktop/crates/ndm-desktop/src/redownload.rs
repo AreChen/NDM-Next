@@ -22,6 +22,7 @@ pub(crate) fn enqueue(store: &Store, source: TaskId) -> ndm_core::Result<Task> {
     let id = TaskId::new_v4();
     let mut policy = task.policy;
     policy.batch = None;
+    policy.show_progress = None;
     store.enqueue(&[(id, request, task.options, policy)])?;
     store.get(id)?.ok_or(ndm_core::Error::NotFound)
 }

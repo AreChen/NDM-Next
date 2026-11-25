@@ -43,6 +43,9 @@ pub struct TaskPolicy {
     pub download_threads: Option<u32>,
     #[serde(default)]
     pub proxy_mode: crate::ProxyMode,
+    /// None preserves desktop/browser presentation. MCP supplies an explicit choice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_progress: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

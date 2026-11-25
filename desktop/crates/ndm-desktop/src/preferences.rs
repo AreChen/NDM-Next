@@ -57,6 +57,8 @@ pub struct Preferences {
     pub max_kib_per_second: u64,
     pub user_agent: Option<String>,
     pub proxy_enabled_by_default: bool,
+    pub download_route: ndm_core::ProxyMode,
+    pub tun_egress: Option<ndm_core::TunEgress>,
     #[serde(skip)]
     pub proxy: Option<ndm_core::ProxyOptions>,
 }
@@ -86,6 +88,8 @@ impl Default for Preferences {
             max_kib_per_second: 0,
             user_agent: None,
             proxy_enabled_by_default: false,
+            download_route: Default::default(),
+            tun_egress: None,
             proxy: None,
         }
     }
@@ -174,8 +178,9 @@ impl Preferences {
                     Some(self.max_kib_per_second.saturating_mul(1024))
                 },
                 proxy: self.default_proxy(),
+                proxy_mode: self.download_route,
+                tun_egress: self.tun_egress.clone(),
                 user_agent: self.user_agent.clone(),
-                ..Default::default()
             },
         }
     }

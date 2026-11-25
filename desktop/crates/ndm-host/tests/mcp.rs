@@ -128,6 +128,18 @@ fn tools_follow_opt_in_and_current_plugin_registry() {
             .iter()
             .any(|tool| tool["name"] == "ndm_download")
     );
+    let routes = server.call(
+        "tools/call",
+        json!({"name":"ndm_network_routes","arguments":{}}),
+    );
+    assert!(routes["structuredContent"]["tun_direct_exit"].is_null());
+    let rejected = server.call(
+        "tools/call",
+        json!({"name":"ndm_download","arguments":{
+        "items":[{"source":"https://example.org/model.bin", "proxy_mode":"tun_direct"}]}}),
+    );
+    assert_eq!(rejected["isError"], true);
+    assert!(store.list().unwrap().is_empty());
     let package = fixture(profile.path()).unwrap();
     PluginRegistry::new(profile.path())
         .import(&package)
@@ -257,7 +269,7 @@ fn download_overrides_and_failure_diagnostics_round_trip_through_mcp() {
     let socket =
         UnixListener::bind(ndm_core::unix_instance::socket_path(profile.path()).unwrap()).unwrap();
     let desktop = std::thread::spawn(move || {
-        for command in *b"RW" {
+        for command in *b"RWRWW" {
             let (mut connection, _) = socket.accept().unwrap();
             let mut received = [0];
             connection.read_exact(&mut received).unwrap();
@@ -335,6 +347,25 @@ fn download_overrides_and_failure_diagnostics_round_trip_through_mcp() {
         store.get(id).unwrap().unwrap().policy.proxy_mode,
         ProxyMode::Direct
     );
+    assert_eq!(
+        store.get(id).unwrap().unwrap().policy.show_progress,
+        Some(false)
+    );
+    assert!(store.progress_window_requests().unwrap().is_empty());
+    for visible in [true, false] {
+        let reply = mcp.call(
+            "tools/call",
+            json!({"name":"ndm_progress_window","arguments":{"task_id":id,"visible":visible}}),
+        );
+        assert_eq!(reply["structuredContent"]["requested"], true);
+        assert_eq!(
+            store.progress_window_requests().unwrap(),
+            vec![(id, visible)]
+        );
+        assert_eq!(store.get(id).unwrap().unwrap().state, TaskState::Queued);
+    }
+    store.finish_progress_window_request(id, true).unwrap();
+    assert_eq!(store.progress_window_requests().unwrap(), vec![(id, false)]);
     desktop.join().unwrap();
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {
@@ -386,6 +417,71 @@ fn download_overrides_and_failure_diagnostics_round_trip_through_mcp() {
     assert_eq!(task["progress"]["http"]["redirect_count"], 1);
     assert_eq!(task["progress"]["downloaded"], 0);
     assert!(!result.to_string().contains("private-"));
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn batch_and_plugin_window_options_and_tun_routes_are_persisted() {
+    use std::{io::Read, os::unix::net::UnixListener};
+    let profile = tempfile::tempdir().unwrap();
+    let store = Store::open(&profile.path().join("tasks.db")).unwrap();
+    store.set_ai_enabled(true).unwrap();
+    PluginRegistry::new(profile.path())
+        .import(&fixture(profile.path()).unwrap())
+        .unwrap();
+    fs::write(
+        profile.path().join("preferences.json"),
+        br#"{"tun_egress":{"local_port":7893}}"#,
+    )
+    .unwrap();
+    let socket =
+        UnixListener::bind(ndm_core::unix_instance::socket_path(profile.path()).unwrap()).unwrap();
+    let desktop = std::thread::spawn(move || {
+        for command in *b"RWRW" {
+            let (mut stream, _) = socket.accept().unwrap();
+            let mut byte = [0];
+            stream.read_exact(&mut byte).unwrap();
+            assert_eq!(byte, [command]);
+            stream.write_all(&[1]).unwrap();
+        }
+    });
+    let mut mcp = Server::start(profile.path());
+    mcp.call("initialize", json!({"protocolVersion":"2025-11-25"}));
+    let routes = mcp.call("tools/call", json!({"name":"ndm_network_routes"}));
+    assert_eq!(
+        routes["structuredContent"]["tun_direct_exit"],
+        "local_direct_listener"
+    );
+    let batch=mcp.call("tools/call",json!({"name":"ndm_download","arguments":{
+        "show_progress":true,
+        "items":[{"source":"https://example.org/a","proxy_mode":"tun_direct"},
+                 {"source":"https://example.org/b","proxy_mode":"system_route","show_progress":false}]
+    }}));
+    let plugin = mcp.call(
+        "tools/call",
+        json!({"name":"ndm_fixture__download","arguments":{"source":"fixture://example/b"}}),
+    );
+    let ids: Vec<TaskId> =
+        serde_json::from_value(batch["structuredContent"]["task_ids"].clone()).unwrap();
+    let plugin_id =
+        serde_json::from_value(plugin["structuredContent"]["task_ids"][0].clone()).unwrap();
+    assert_eq!(
+        store.get(ids[0]).unwrap().unwrap().policy.proxy_mode,
+        ndm_core::ProxyMode::TunDirect
+    );
+    assert_eq!(
+        store.get(ids[1]).unwrap().unwrap().policy.proxy_mode,
+        ndm_core::ProxyMode::SystemRoute
+    );
+    assert_eq!(
+        store.get(plugin_id).unwrap().unwrap().policy.show_progress,
+        Some(false)
+    );
+    assert_eq!(
+        store.progress_window_requests().unwrap(),
+        vec![(ids[0], true)]
+    );
+    desktop.join().unwrap();
 }
 
 #[test]

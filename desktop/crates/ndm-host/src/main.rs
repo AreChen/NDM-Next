@@ -14,6 +14,9 @@ mod mcp;
 
 #[derive(Deserialize)]
 struct HostPreferences {
+    #[serde(default)]
+    download_route: ndm_core::ProxyMode,
+    tun_egress: Option<ndm_core::TunEgress>,
     download_dir: Option<PathBuf>,
     use_system_download_dir: Option<bool>,
     max_active_tasks: Option<u32>,

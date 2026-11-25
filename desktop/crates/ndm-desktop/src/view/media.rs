@@ -72,6 +72,12 @@ impl Desktop {
             expected_size: None,
             headers: BTreeMap::new(),
         };
+        let mode = if self.task_route == ProxyMode::Inherit {
+            self.preferences.download_route
+        } else {
+            self.task_route
+        };
+        let egress = self.preferences.tun_egress.clone();
         let proxy = self.preferences.default_proxy();
         let user_agent = self.preferences.user_agent.clone();
         self.inspecting_hls = true;
@@ -80,6 +86,8 @@ impl Desktop {
             let cancel = tokio_util::sync::CancellationToken::new();
             let dash = DashOptions {
                 proxy: proxy.clone(),
+                proxy_mode: mode,
+                tun_egress: egress.clone(),
                 user_agent: user_agent.clone(),
                 ..Default::default()
             };
@@ -90,6 +98,8 @@ impl Desktop {
             }
             let hls = HlsOptions {
                 proxy,
+                proxy_mode: mode,
+                tun_egress: egress,
                 user_agent,
                 ..Default::default()
             };

@@ -32,10 +32,22 @@ HTTP(S)、FTP(S)、SFTP、HLS、静态 DASH 是内置引擎支持的来源。媒
 
 ## 单任务网络设置
 
-用户要这一次直连时，把 `proxy_mode` 放进对应文件项。`direct` 绕过应用和系统代理，`inherit` 或省略该字段沿用当前路由。用户要求指定 UA 时可加入 `user_agent`。这两个覆盖项适用于内置 HTTP(S) 文件任务。插件代理和媒体选项以该插件的 schema 为准。
+省略 `proxy_mode` 或使用 `inherit` 沿用桌面设置。用户要按默认 TUN 分流时选 `system_route`。它和旧的 `direct` 都跳过 HTTP 代理，连接仍服从系统路由。用户要在 TUN 开启时使用直连出口，先调用 `ndm_network_routes`。若 `tun_direct_exit` 为空，请用户在「设置 → 代理与网络」配置出口。已有出口时使用以下参数。
 
 ```json
-{"items":[{"source":"https://example.org/models/weights.bin","proxy_mode":"direct","user_agent":"ExampleClient/1.0"}]}
+{"items":[{"source":"https://example.org/models/weights.bin","proxy_mode":"tun_direct"}]}
 ```
+
+`bound_interface` 表示绑定网卡（Linux/macOS），DNS 仍使用系统解析器。`local_direct_listener` 表示发送到用户在代理客户端配置为 DIRECT 的本地 HTTP 入站（三个平台均支持）。这些值描述下载器的连接方式，代理客户端日志可以确认最终出站。出口不可用时报告失败，不自动切换线路。单项路由和 `user_agent` 用于内置 HTTP(S)，包括 HLS 和 DASH。插件选项以其实时 schema 为准。
+
+## 静默下载与进度窗口
+
+默认只在主任务列表显示。用户要求单独显示某项时，对该项传 `"show_progress":true`。整批需要显示时在 `items` 旁设置同名字段，单项值优先。插件专用工具直接接收该字段。已有任务无需重新下载，调用 `ndm_progress_window` 即可操作独立窗口，例如：
+
+```json
+{"task_id":"11111111-1111-4111-8111-111111111111","visible":false}
+```
+
+`visible:true` 打开或激活该窗口，`false` 关闭该窗口。任务继续运行，返回的 `requested:true` 表示桌面端已收到待处理的请求。
 
 成功入队后记录 `task_ids`，并在用户要求跟踪时用这些 ID 查询状态。设置了批次并发时，结果还会包含 `batch_id`。[状态与排查](diagnostics.md)

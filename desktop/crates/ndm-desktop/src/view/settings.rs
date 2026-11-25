@@ -207,6 +207,73 @@ impl Desktop {
             })
     }
 
+    fn route_label(&self, mode: ProxyMode, global: bool) -> &'static str {
+        match mode {
+            ProxyMode::Inherit if global => {
+                self.text("应用与系统代理设置", "App and system proxy settings")
+            }
+            ProxyMode::Inherit => self.text("应用默认", "App default"),
+            ProxyMode::Direct | ProxyMode::SystemRoute => {
+                self.text("系统路由（含 TUN）", "OS routing (including TUN)")
+            }
+            ProxyMode::TunDirect => self.text("TUN 直连出口", "TUN direct exit"),
+        }
+    }
+
+    pub(super) fn route_picker(&self, global: bool, dark: bool, cx: &mut Context<Self>) -> Div {
+        let current = if global {
+            self.pending_route
+        } else {
+            self.task_route
+        };
+        let choices = [
+            ProxyMode::Inherit,
+            ProxyMode::SystemRoute,
+            ProxyMode::TunDirect,
+        ]
+        .map(|mode| (mode, self.route_label(mode, global)));
+        let view = cx.entity().downgrade();
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .text_sm()
+            .child(if global {
+                self.text("内置 HTTP(S) 默认路由", "Default HTTP(S) route")
+            } else {
+                self.text("本次 HTTP(S) 路由", "HTTP(S) route for this download")
+            })
+            .child(
+                Button::new(if global {
+                    "default-route"
+                } else {
+                    "task-route"
+                })
+                .small()
+                .label(self.route_label(current, global))
+                .dropdown_caret(true)
+                .dropdown_menu(move |menu, _, _| {
+                    choices.into_iter().fold(menu, |menu, (mode, label)| {
+                        let view = view.clone();
+                        menu.item(
+                            crate::chrome::choice_item(label, mode == current, dark).on_click(
+                                move |_, _, cx| {
+                                    let _ = view.update(cx, |this, cx| {
+                                        if global {
+                                            this.pending_route = mode;
+                                        } else {
+                                            this.task_route = mode;
+                                        }
+                                        cx.notify();
+                                    });
+                                },
+                            ),
+                        )
+                    })
+                }),
+            )
+    }
+
     pub(super) fn settings_panel(
         &self,
         dark: bool,
@@ -409,6 +476,16 @@ impl Desktop {
                     })),
             )
             .child(
+                self.route_picker(true, dark, cx)
+            )
+            .child(self.settings_field(
+                self.text("TUN 直连出口", "TUN direct exit"), "tun-direct-exit", &self.tun_egress_input, muted))
+            .child(div().text_xs().text_color(rgb(muted)).child(if cfg!(windows) {
+                self.text("填写代理客户端已设为 DIRECT 出站的本地 HTTP 监听端口。", "Enter a local HTTP listener port mapped to DIRECT in your proxy client.")
+            } else {
+                self.text("填写物理网卡名称，或代理客户端已设为 DIRECT 出站的本地 HTTP 监听端口。", "Enter a physical interface name or a local HTTP listener port mapped to DIRECT in your proxy client.")
+            }))
+            .child(
                 Button::new("save-proxy-settings")
                     .small()
                     .primary()
@@ -608,7 +685,9 @@ impl Desktop {
             PROXY_GROUP,
             IconName::Globe,
             self.text("代理与网络", "Proxy and network"),
-            self.display_text(if self.preferences.default_proxy().is_some() {
+            self.display_text(if self.preferences.download_route != ProxyMode::Inherit {
+                self.route_label(self.preferences.download_route, true)
+            } else if self.preferences.default_proxy().is_some() {
                 self.text(
                     "新任务默认使用已配置代理",
                     "Configured proxy for new downloads",

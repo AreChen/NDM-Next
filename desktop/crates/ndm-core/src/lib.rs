@@ -34,7 +34,7 @@ pub use dash::{
 };
 pub use diagnostics::{
     DownloadFailure, HttpDiagnostics, HttpRangeMode, HttpStage, ProxyMode, ProxyRoute,
-    TaskActivity, validate_user_agent,
+    TaskActivity, TunEgress, validate_user_agent,
 };
 pub use ftp::{FtpOptions, FtpSecurity, download_ftp, execute_ftp};
 pub use hls::{
@@ -103,6 +103,8 @@ pub enum Error {
     InvalidDownloadAddress,
     #[error("proxy configuration is invalid")]
     InvalidProxy,
+    #[error("TUN direct exit is missing or unsupported")]
+    TunEgressUnavailable,
     #[error("invalid FTP address or unsafe FTP command")]
     InvalidFtpAddress,
     #[error("FTP server connection or transfer failed")]

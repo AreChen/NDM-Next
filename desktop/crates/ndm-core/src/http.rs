@@ -52,6 +52,8 @@ pub struct HttpOptions {
     pub proxy_mode: ProxyMode,
     #[serde(default)]
     pub user_agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tun_egress: Option<crate::TunEgress>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -383,6 +385,7 @@ impl Default for HttpOptions {
             max_bytes_per_second: None,
             proxy: None,
             proxy_mode: ProxyMode::Inherit,
+            tun_egress: None,
             user_agent: None,
         }
     }
@@ -392,6 +395,7 @@ pub(crate) fn network_client(
     proxy: Option<&ProxyOptions>,
     mode: ProxyMode,
     user_agent: Option<&str>,
+    egress: Option<&crate::TunEgress>,
 ) -> Result<Client> {
     let user_agent = user_agent.unwrap_or(CHROME_USER_AGENT);
     validate_user_agent(user_agent)?;
@@ -401,7 +405,21 @@ pub(crate) fn network_client(
         .read_timeout(Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::none())
         .referer(false);
-    if mode == ProxyMode::Direct {
+    if mode == ProxyMode::TunDirect {
+        builder = builder.no_proxy();
+        match egress.ok_or(Error::TunEgressUnavailable)? {
+            crate::TunEgress::LocalPort(port) => {
+                let listener = reqwest::Proxy::all(format!("http://127.0.0.1:{port}"))
+                    .map_err(|_| Error::TunEgressUnavailable)?;
+                builder = builder.proxy(listener);
+            }
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            crate::TunEgress::Interface(name) if crate::TunEgress::parse(name).is_ok() => {
+                builder = builder.interface(name);
+            }
+            _ => return Err(Error::TunEgressUnavailable),
+        }
+    } else if matches!(mode, ProxyMode::Direct | ProxyMode::SystemRoute) {
         builder = builder.no_proxy();
     } else if let Some(config) = proxy {
         config.validate()?;
@@ -577,7 +595,11 @@ async fn download_http_with_progress(
     progress.0.phase.store(0, Ordering::Release);
     progress.set_total(None);
     let routing = if context.client.is_none() {
-        Routing::new(options.proxy_mode, options.proxy.as_ref())
+        Routing::new(
+            options.proxy_mode,
+            options.proxy.as_ref(),
+            options.tun_egress.as_ref(),
+        )
     } else {
         Routing::CustomClient
     };
@@ -589,11 +611,20 @@ async fn download_http_with_progress(
     };
     trace.record();
     let client = match context.client {
+        Some(_)
+            if matches!(
+                options.proxy_mode,
+                ProxyMode::TunDirect | ProxyMode::SystemRoute
+            ) =>
+        {
+            return Err(Error::TunEgressUnavailable);
+        }
         Some(client) => client,
         None => network_client(
             options.proxy.as_ref(),
             options.proxy_mode,
             options.user_agent.as_deref(),
+            options.tun_egress.as_ref(),
         )?,
     };
     let mut headers = request_headers(request)?;
@@ -2043,5 +2074,99 @@ mod publication_tests {
         );
         assert!(!target_dir.path().join("finished.bin").exists());
         assert_eq!(std::fs::read(source).unwrap(), b"complete transfer");
+    }
+}
+
+#[cfg(test)]
+mod route_tests {
+    use super::*;
+    use crate::TunEgress;
+    use axum::{Router, routing::get};
+
+    #[tokio::test]
+    async fn os_route_and_tun_exit_use_distinct_transports_without_fallback() {
+        let origin = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/download", origin.local_addr().unwrap());
+        tokio::spawn(async move {
+            axum::serve(origin, Router::new().fallback(get(|| async { "origin" })))
+                .await
+                .unwrap();
+        });
+        let local = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = local.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            axum::serve(
+                local,
+                Router::new().fallback(get(|uri: axum::http::Uri| async move {
+                    assert!(uri.authority().is_some());
+                    "local listener"
+                })),
+            )
+            .await
+            .unwrap();
+        });
+        let application_proxy = ProxyOptions {
+            url: "http://127.0.0.1:0".into(),
+            username: None,
+            password: None,
+        };
+        let client = |mode, exit: Option<&TunEgress>| {
+            network_client(Some(&application_proxy), mode, None, exit)
+        };
+        let local = TunEgress::parse(&port.to_string()).unwrap();
+        for (mode, expected) in [
+            (ProxyMode::SystemRoute, "origin"),
+            (ProxyMode::TunDirect, "local listener"),
+        ] {
+            assert_eq!(
+                client(mode, Some(&local))
+                    .unwrap()
+                    .get(&url)
+                    .send()
+                    .await
+                    .unwrap()
+                    .text()
+                    .await
+                    .unwrap(),
+                expected
+            );
+        }
+        assert!(matches!(
+            client(ProxyMode::TunDirect, None),
+            Err(Error::TunEgressUnavailable)
+        ));
+        assert!(TunEgress::parse("0").is_err());
+        assert!(TunEgress::parse("65536").is_err());
+        assert!(TunEgress::parse("https://example.org").is_err());
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            let nonexistent = TunEgress::parse("ndm-missing-if").unwrap();
+            assert!(
+                client(ProxyMode::TunDirect, Some(&nonexistent))
+                    .unwrap()
+                    .get(&url)
+                    .send()
+                    .await
+                    .is_err()
+            );
+            let loopback = TunEgress::parse(if cfg!(target_os = "macos") {
+                "lo0"
+            } else {
+                "lo"
+            })
+            .unwrap();
+            assert_eq!(
+                client(ProxyMode::TunDirect, Some(&loopback))
+                    .unwrap()
+                    .get(&url)
+                    .send()
+                    .await
+                    .unwrap()
+                    .text()
+                    .await
+                    .unwrap(),
+                "origin"
+            );
+        }
     }
 }

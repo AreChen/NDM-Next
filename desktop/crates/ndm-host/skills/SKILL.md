@@ -24,6 +24,8 @@ Call `ndm_download` with the original source URL. Supply only the settings the u
 {"items":[{"source":"https://example.org/releases/archive.zip"}]}
 ```
 
+AI downloads are quiet by default and appear in the main task list. To show a separate window on request, set `show_progress` to true. For an existing task call `ndm_progress_window` with `task_id` and `visible` to open or close just that window. For a TUN routing request, first call `ndm_network_routes`, then consult the [network route examples](references/downloads.md#单任务网络设置).
+
 Read `task_ids` from the result. For a status check, call `ndm_task_status` with one returned ID. Report the output path once `state` is `completed`. When a user asks about an existing transfer, look up its ID before creating another task.
 
 ## Discover the current installation

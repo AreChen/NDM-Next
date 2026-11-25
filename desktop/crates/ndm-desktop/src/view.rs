@@ -16,9 +16,9 @@ use gpui_kit::{
     *,
 };
 use ndm_core::{
-    DashCatalog, DashOptions, FtpSecurity, HlsCatalog, HlsOptions, NewTask, ProxyOptions,
-    Scheduler, SchedulerEvent, SpeedMeter, Store, Task, TaskId, TaskOptions, TaskState,
-    inspect_dash_with_options, inspect_hls_with_options,
+    DashCatalog, DashOptions, FtpSecurity, HlsCatalog, HlsOptions, NewTask, ProxyMode,
+    ProxyOptions, Scheduler, SchedulerEvent, SpeedMeter, Store, Task, TaskId, TaskOptions,
+    TaskState, inspect_dash_with_options, inspect_hls_with_options,
 };
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -94,6 +94,9 @@ pub(crate) struct Desktop {
     speed_input: Entity<InputState>,
     user_agent_input: Entity<InputState>,
     proxy_url_input: Entity<InputState>,
+    tun_egress_input: Entity<InputState>,
+    pending_route: ProxyMode,
+    task_route: ProxyMode,
     proxy_user_input: Entity<InputState>,
     proxy_password_input: Entity<InputState>,
     auth_user_input: Entity<InputState>,
@@ -251,6 +254,24 @@ impl Desktop {
                 .placeholder(ndm_core::CHROME_USER_AGENT)
                 .default_value(preferences.user_agent.clone().unwrap_or_default())
         });
+        let pending_route = preferences.download_route;
+        let tun_egress_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(if cfg!(windows) {
+                    "7893"
+                } else if cfg!(target_os = "macos") {
+                    "en0 / 7893"
+                } else {
+                    "eth0 / 7893"
+                })
+                .default_value(
+                    preferences
+                        .tun_egress
+                        .as_ref()
+                        .map(|e| e.input_value())
+                        .unwrap_or_default(),
+                )
+        });
         let proxy_url_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("http://127.0.0.1:8080")
@@ -401,7 +422,7 @@ impl Desktop {
                                     this.sample.remove(&id);
                                     this.speed.remove(&id);
                                     this.track_progress(cx);
-                                    if this.seen_tasks.insert(id) { this.show_progress(id, cx); }
+                                    this.discover_progress_window(id, cx);
                                 }
                                 SchedulerEvent::TaskTitleChanged(_) => {}
                                 SchedulerEvent::SharingChanged { id, failed } => {
@@ -477,6 +498,9 @@ impl Desktop {
             speed_input,
             user_agent_input,
             proxy_url_input,
+            tun_egress_input,
+            pending_route,
+            task_route: ProxyMode::Inherit,
             proxy_user_input,
             proxy_password_input,
             auth_user_input,
@@ -550,6 +574,9 @@ impl Desktop {
         {
             this.track_progress(cx);
         }
+        cx.defer_in(window, |this, _, cx| {
+            this.apply_progress_window_requests(cx)
+        });
         this.start_update_watcher(cx);
         this.start_storage_watcher(cx);
         this
@@ -719,12 +746,29 @@ impl Desktop {
                 .map(|task| task.id)
                 .collect()
         };
+        self.apply_progress_window_requests(cx);
         for id in ids {
-            if self.seen_tasks.insert(id) {
-                self.show_progress(id, cx);
-            }
+            self.discover_progress_window(id, cx);
         }
         cx.notify();
+    }
+
+    fn discover_progress_window(&mut self, id: TaskId, cx: &mut Context<Self>) {
+        if self.seen_tasks.insert(id) && self.store.automatic_progress_window(id).unwrap_or(false) {
+            self.show_progress(id, cx);
+        }
+    }
+
+    fn apply_progress_window_requests(&mut self, cx: &mut Context<Self>) {
+        for (id, show) in self.store.progress_window_requests().unwrap_or_default() {
+            self.seen_tasks.insert(id);
+            if show {
+                self.show_progress(id, cx);
+            } else if let Some((handle, _)) = self.progress_windows.remove(&id) {
+                let _ = handle.update(cx, |_, window, _| window.remove_window());
+            }
+            let _ = self.store.finish_progress_window_request(id, show);
+        }
     }
     fn show_progress(&mut self, id: TaskId, cx: &mut Context<Self>) {
         if let Some((handle, _)) = self.progress_windows.get(&id)
@@ -881,6 +925,30 @@ impl Desktop {
             cx.notify();
             return;
         }
+        if self.task_route != ProxyMode::Inherit
+            && (plugin_options.is_some() || !matches!(parsed.scheme(), "http" | "https"))
+        {
+            self.set_notice(
+                self.text(
+                    "单任务路由仅适用于内置 HTTP(S) 下载。",
+                    "Per-task routing requires a built-in HTTP(S) download.",
+                )
+                .into(),
+                cx,
+            );
+            return;
+        }
+        if self.task_route == ProxyMode::TunDirect && self.preferences.tun_egress.is_none() {
+            self.set_notice(
+                self.text(
+                    "请先在代理与网络中设置 TUN 直连出口。",
+                    "Set a TUN direct exit in Proxy and network first.",
+                )
+                .into(),
+                cx,
+            );
+            return;
+        }
         let auth = AuthFields {
             username: self.auth_user_input.read(cx).value().to_string(),
             password: self.auth_password_input.read(cx).value().to_string(),
@@ -949,10 +1017,15 @@ impl Desktop {
             headers: BTreeMap::new(),
         };
         self.remember_engine_choice(&parsed, &options);
-        match self
-            .store
-            .enqueue(&[(id, request, options, Default::default())])
-        {
+        match self.store.enqueue(&[(
+            id,
+            request,
+            options,
+            ndm_core::TaskPolicy {
+                proxy_mode: self.task_route,
+                ..Default::default()
+            },
+        )]) {
             Ok(_) => {
                 self.scheduler.notify();
                 self.seen_tasks.insert(id);
@@ -961,6 +1034,7 @@ impl Desktop {
                 self.set_notice(self.text("下载已添加。", "Download added.").into(), cx);
                 self.section = Section::All;
                 self.new_download_open = false;
+                self.task_route = ProxyMode::Inherit;
                 self.url_input
                     .update(cx, |state, cx| state.set_value("", window, cx));
                 self.hls_catalog = None;
@@ -1069,7 +1143,32 @@ impl Desktop {
             }
             Some(config)
         };
+        let input = self.tun_egress_input.read(cx).value();
+        let egress = if input.trim().is_empty() {
+            Ok(None)
+        } else {
+            ndm_core::TunEgress::parse(input.trim()).map(Some)
+        };
+        let Ok(egress) = egress.and_then(|exit| {
+            if self.pending_route == ProxyMode::TunDirect && exit.is_none() {
+                Err(ndm_core::Error::TunEgressUnavailable)
+            } else {
+                Ok(exit)
+            }
+        }) else {
+            self.set_notice(
+                self.text(
+                    "请检查 TUN 直连出口设置。",
+                    "Check the TUN direct exit setting.",
+                )
+                .into(),
+                cx,
+            );
+            return;
+        };
         let mut updated = self.preferences.clone();
+        updated.download_route = self.pending_route;
+        updated.tun_egress = egress;
         updated.max_active_tasks = active;
         updated.max_connections = connections;
         updated.max_kib_per_second = speed;
@@ -2028,6 +2127,7 @@ impl Render for Desktop {
                                     ),
                                 ),
                         )
+                        .child(self.route_picker(false, dark, cx))
                         .child(self.engine_draft_panel(cx)),
                 );
                 if self.auth_expanded {
@@ -2425,6 +2525,31 @@ mod tray_tests {
                 })
                 .unwrap();
         });
+        let template = store.get(original).unwrap().unwrap().request;
+        let quiet = TaskId::new_v4();
+        let popup = TaskId::new_v4();
+        store
+            .enqueue(&[
+                (
+                    quiet,
+                    template.clone(),
+                    Default::default(),
+                    ndm_core::TaskPolicy {
+                        show_progress: Some(false),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    popup,
+                    template,
+                    Default::default(),
+                    ndm_core::TaskPolicy {
+                        show_progress: Some(true),
+                        ..Default::default()
+                    },
+                ),
+            ])
+            .unwrap();
         let added = save_paused("second.zip");
         cx.update(|cx| {
             view.update(cx, |this, cx| {
@@ -2432,9 +2557,20 @@ mod tray_tests {
                 assert!(this.seen_tasks.contains(&added));
                 assert!(this.progress_windows.contains_key(&added));
                 assert_eq!(this.tasks.capacity(), 0);
+                assert!(!this.progress_windows.contains_key(&quiet));
+                assert!(this.progress_windows.contains_key(&popup));
+                store.request_progress_window(popup, false).unwrap();
+                store.request_progress_window(quiet, true).unwrap();
+                this.discover_new_tasks(cx);
+                assert!(this.progress_windows.contains_key(&quiet));
+                assert!(!this.progress_windows.contains_key(&popup));
+                assert_eq!(
+                    store.get(popup).unwrap().unwrap().state,
+                    ndm_core::TaskState::Queued
+                );
                 this.restore_frontend(cx);
-                assert_eq!(this.tasks.len(), 2);
-                assert_eq!(this.matching_tasks.len(), 2);
+                assert_eq!(this.tasks.len(), 4);
+                assert_eq!(this.matching_tasks.len(), 4);
             });
         });
         drop(sender);

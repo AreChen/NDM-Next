@@ -788,6 +788,12 @@ fn task_proxy_options(
 }
 
 fn task_options(task: &Task, defaults: &SchedulerOptions) -> TaskOptions {
+    let inherit_route = match &task.options {
+        TaskOptions::Http(opts) => opts.proxy.is_none(),
+        TaskOptions::Hls(opts) => opts.proxy.is_none(),
+        TaskOptions::Dash(opts) => opts.proxy.is_none(),
+        _ => true,
+    };
     let mut resolved = match task.options.clone() {
         TaskOptions::AutoHttp => TaskOptions::Http(defaults.http.clone()),
         TaskOptions::Auto => {
@@ -858,14 +864,31 @@ fn task_options(task: &Task, defaults: &SchedulerOptions) -> TaskOptions {
         }
         other => other,
     };
-    let (mode, ua) = match &mut resolved {
-        TaskOptions::Http(options) => (&mut options.proxy_mode, &mut options.user_agent),
-        TaskOptions::Hls(options) => (&mut options.proxy_mode, &mut options.user_agent),
-        TaskOptions::Dash(options) => (&mut options.proxy_mode, &mut options.user_agent),
+    let (mode, ua, egress) = match &mut resolved {
+        TaskOptions::Http(options) => (
+            &mut options.proxy_mode,
+            &mut options.user_agent,
+            &mut options.tun_egress,
+        ),
+        TaskOptions::Hls(options) => (
+            &mut options.proxy_mode,
+            &mut options.user_agent,
+            &mut options.tun_egress,
+        ),
+        TaskOptions::Dash(options) => (
+            &mut options.proxy_mode,
+            &mut options.user_agent,
+            &mut options.tun_egress,
+        ),
         _ => return resolved,
     };
-    if task.policy.proxy_mode == ProxyMode::Direct {
-        *mode = ProxyMode::Direct;
+    if task.policy.proxy_mode != ProxyMode::Inherit {
+        *mode = task.policy.proxy_mode;
+    } else if inherit_route && *mode == ProxyMode::Inherit {
+        *mode = defaults.http.proxy_mode;
+    }
+    if *mode == ProxyMode::TunDirect {
+        *egress = defaults.http.tun_egress.clone();
     }
     if ua.is_none() {
         *ua = defaults.http.user_agent.clone();

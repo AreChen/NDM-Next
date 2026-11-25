@@ -140,6 +140,7 @@ impl Server {
                 json!({
                     "items":{"type":"array","minItems":1,"maxItems":128,"items":object(item_fields(), &["source"])},
                     "destination":{"type":"string","description":"Absolute directory"},
+                    "show_progress":{"type":"boolean","default":false,"description":"Open an independent progress window per item. Omit for quiet downloads in the main list."},
                     "batch_active_tasks":task_limit(),
                     "download_threads":thread_limit()
                 }),
@@ -168,6 +169,12 @@ impl Server {
                 &["task_id"],
             ),
             tool(
+                "ndm_progress_window",
+                "Request to show or close one task’s independent progress window. Closing leaves the download running.",
+                json!({"task_id":{"type":"string","format":"uuid"},"visible":{"type":"boolean"}}),
+                &["task_id", "visible"],
+            ),
+            tool(
                 "ndm_pause_task",
                 "Request that NDM Next pause a task and save resumable data.",
                 task_id.clone(),
@@ -178,6 +185,12 @@ impl Server {
                 "Resume or retry an NDM Next task.",
                 task_id,
                 &["task_id"],
+            ),
+            tool(
+                "ndm_network_routes",
+                "Read the built-in HTTP(S) download route default and configured TUN direct exit type. Does not probe VPN state or reveal addresses.",
+                json!({}),
+                &[],
             ),
             tool(
                 "ndm_get_download_limits",
@@ -258,6 +271,17 @@ impl Server {
                     .map(task_json)
                     .ok_or("Task not found.")
             }
+            "ndm_progress_window" => {
+                let args: WindowArgument = parse_arguments(args)?;
+                if args.visible {
+                    self.ensure_desktop()?;
+                }
+                self.store
+                    .request_progress_window(args.task_id, args.visible)
+                    .map_err(|_| "Task not found or unavailable.")?;
+                self.wake();
+                Ok(json!({"task_id":args.task_id, "visible":args.visible, "requested":true}))
+            }
             "ndm_pause_task" | "ndm_resume_task" => {
                 let args: TaskArgument = parse_arguments(args)?;
                 self.ensure_desktop()?;
@@ -271,6 +295,15 @@ impl Server {
                     .map_err(|_| "Task cannot accept that action.")?;
                 self.wake();
                 Ok(json!({"task_id":args.task_id,"requested":true}))
+            }
+            "ndm_network_routes" => {
+                let prefs = super::read_preferences(&self.profile);
+                let exit = prefs.as_ref().and_then(|p| p.tun_egress.as_ref());
+                Ok(
+                    json!({"default":prefs.as_ref().map(|p| p.download_route).unwrap_or_default(),
+                    "tun_direct_exit":exit.map(|e| e.route()),
+                    "interface_binding_supported":cfg!(any(target_os="linux",target_os="macos"))}),
+                )
             }
             "ndm_get_download_limits" => {
                 let limits = self
@@ -400,6 +433,9 @@ impl Server {
             .destination
             .unwrap_or_else(|| super::configured_downloads(&self.profile));
         let mut tasks = Vec::with_capacity(batch.items.len());
+        let tun_configured = super::read_preferences(&self.profile)
+            .and_then(|p| p.tun_egress)
+            .is_some();
         for item in batch.items {
             let source = parse_source(&item.source).map_err(|_| "Invalid download source.")?;
             let options = self
@@ -410,10 +446,13 @@ impl Server {
                 return Err("No installed download engine handles this source.");
             }
             let proxy_mode = item.proxy_mode.unwrap_or_default();
-            if (proxy_mode == ProxyMode::Direct || item.user_agent.is_some())
+            if (proxy_mode != ProxyMode::Inherit || item.user_agent.is_some())
                 && (options.is_some() || !matches!(source.scheme(), "http" | "https"))
             {
                 return Err("Proxy and User-Agent overrides apply to built-in HTTP(S) downloads.");
+            }
+            if proxy_mode == ProxyMode::TunDirect && !tun_configured {
+                return Err("Configure a TUN direct exit in Settings > Proxy and network first.");
             }
             let mut headers = std::collections::BTreeMap::new();
             if let Some(user_agent) = item.user_agent {
@@ -443,6 +482,7 @@ impl Server {
                     batch: batch_limit,
                     download_threads: threads,
                     proxy_mode,
+                    show_progress: Some(item.show_progress.unwrap_or(batch.show_progress)),
                 },
             ));
         }
@@ -470,7 +510,7 @@ impl Server {
                     "ndm-desktop"
                 });
             let mut child = Command::new(executable)
-                .arg("--handoff")
+                .args(["--handoff", "--background"])
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -501,6 +541,8 @@ fn parse_arguments<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, &'
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Batch {
+    #[serde(default)]
+    show_progress: bool,
     items: Vec<Item>,
     destination: Option<PathBuf>,
     batch_active_tasks: Option<u32>,
@@ -510,6 +552,7 @@ struct Batch {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Item {
+    show_progress: Option<bool>,
     source: String,
     destination: Option<PathBuf>,
     plugin: Option<String>,
@@ -518,6 +561,13 @@ struct Item {
     user_agent: Option<String>,
     #[serde(default)]
     options: Map<String, Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WindowArgument {
+    task_id: TaskId,
+    visible: bool,
 }
 
 #[derive(Deserialize)]
@@ -602,12 +652,13 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> 
 
 fn item_fields() -> Value {
     json!({
+        "show_progress":{"type":"boolean","description":"Override the batch window choice for this item. Defaults to quiet."},
         "source":{"type":"string","description":SOURCE_SCHEMA},
         "destination":{"type":"string","description":"Absolute download directory. Omit to use NDM Next's default."},
         "plugin":{"type":"string","description":"Optional installed plugin ID"},
         "options":{"type":"object","description":"Options declared by the selected plugin"},
         "download_threads":thread_limit(),
-        "proxy_mode":{"type":"string","enum":["inherit","direct"],"description":"For built-in HTTP(S). Direct bypasses both NDM Next and system proxies for this item."},
+        "proxy_mode":{"type":"string","enum":["inherit","direct","system_route","tun_direct"],"description":"Built-in HTTP(S) only. inherit uses desktop settings. system_route (or legacy direct) skips HTTP proxies and follows OS routing including TUN. tun_direct requires the configured network interface or local DIRECT listener."},
         "user_agent":{"type":"string","maxLength":1024,"description":"Optional User-Agent for this built-in HTTP(S) item. Omit to use app defaults."}
     })
 }

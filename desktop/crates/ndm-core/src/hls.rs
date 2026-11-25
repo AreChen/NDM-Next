@@ -74,6 +74,8 @@ pub struct HlsOptions {
     pub proxy_mode: crate::ProxyMode,
     #[serde(default)]
     pub user_agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tun_egress: Option<crate::TunEgress>,
 }
 
 #[derive(Clone, Debug)]
@@ -290,6 +292,7 @@ fn network_source(
         options.proxy.as_ref(),
         options.proxy_mode,
         options.user_agent.as_deref(),
+        options.tun_egress.as_ref(),
     )?;
     let source = Arc::new(NetworkSource {
         client,
@@ -407,7 +410,9 @@ pub async fn execute_hls(
         Err(error) => {
             store.fail(
                 id,
-                if matches!(error, Error::HlsRecovery) {
+                if matches!(error, Error::TunEgressUnavailable) {
+                    crate::DownloadFailure::TunEgressUnavailable.message()
+                } else if matches!(error, Error::HlsRecovery) {
                     "hls_recovery_conflict"
                 } else {
                     "hls_failed"

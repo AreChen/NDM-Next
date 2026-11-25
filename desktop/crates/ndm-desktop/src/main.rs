@@ -214,7 +214,9 @@ fn main() {
         let show_main = !handoff;
         #[cfg(target_os = "linux")]
         let show_main = !background && !handoff;
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        #[cfg(windows)]
+        let show_main = !(handoff && background);
+        #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
         let show_main = true;
         gpui_kit::open_window(
             WindowOptions {

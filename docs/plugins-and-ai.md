@@ -89,10 +89,11 @@ settings**. Start with a Chrome, Firefox, or Safari preset and edit it as
 needed. Saving a blank value restores the Chrome for Windows preset. A User-Agent captured
 by the browser extension or specified for an MCP item takes precedence.
 
-For a built-in HTTP(S) item, set `proxy_mode` to `direct` to bypass the app
-and system proxies for that download. Use `inherit` or omit the field to
-follow the app's current settings. Set `user_agent` on the item for an
-individual override.
+MCP downloads run quietly by default. Follow progress in the main list or with `ndm_task_status`. Set `show_progress: true` on the batch or item for a separate window. Plugin download tools accept it too. Call `ndm_progress_window` with a task ID and `visible: true` or `false` to open or close that window while the task continues.
+
+For built-in HTTP(S), including HLS and DASH, select the default route in **Settings → Proxy and network**, or override it in **New download** or the MCP item's `proxy_mode`. Omit it or use `inherit` for the app default. `system_route` and legacy `direct` skip HTTP proxies and use normal OS routing, including an active TUN. `tun_direct` uses the configured exit for all transfer connections and fails if it is unavailable. Set `user_agent` for an individual UA override.
+
+For a DIRECT listener, configure your TUN client to listen for HTTP proxy connections on a dedicated IPv4 loopback port and route that inbound to DIRECT. Enter only the port in NDM Next. A normal mixed/proxy port follows its own rules. Linux and macOS also accept a physical interface name for TCP binding. DNS still uses the system resolver with an interface binding, and the OS or VPN can block the connection. Check `ndm_network_routes` for the configured exit type. Use the VPN client's connection log to verify its final outbound.
 
 `ndm_task_status` and `ndm_list_tasks` provide a redacted `error` for failed
 tasks. For built-in file downloads, look at `error.http_status`, `error.stage`,
@@ -182,9 +183,11 @@ AI 客户端可发起下载、查询状态、暂停与恢复。省略保存位�
 Chrome、Firefox 或 Safari 预设，再按需编辑。留空保存会恢复为 Windows 版 Chrome 的 UA。
 浏览器接管请求捕获的 User-Agent 和 MCP 单项指定的值优先于默认值。
 
-内置 HTTP(S) 任务可传入 `"proxy_mode":"direct"`，让该任务绕过 NDM Next
-和系统代理。传入 `inherit` 或省略该字段会沿用当前设置。单项也可以传入
-`user_agent`。
+AI 下载默认静默，进度可在主列表或 `ndm_task_status` 查看。批次或单项设置 `show_progress: true` 可弹出独立进度窗，插件专用工具也支持该参数。调用 `ndm_progress_window`，传入任务 ID 和 `visible: true` 或 `false` 可打开或关闭独立窗，任务继续运行。
+
+内置 HTTP(S)、HLS 和 DASH 在**设置 → 代理与网络**选择默认路由，也可在新建下载或 MCP 单项的 `proxy_mode` 中覆盖。省略或选 `inherit` 沿用应用默认。`system_route` 和旧值 `direct` 会跳过 HTTP 代理，跟随操作系统路由，包括活动 TUN。`tun_direct` 使用已配置的直连出口，出口不可用时下载失败。单项可用 `user_agent` 指定 UA。
+
+使用本地端口时，先在 TUN 客户端建立独立的 HTTP 代理入站，监听 IPv4 回环地址，并将这个入站路由到 DIRECT。在 NDM Next 填入端口号。普通混合端口仍遵循它自己的分流规则。Linux 和 macOS 也可以填物理网卡名称，绑定下载 TCP 连接；域名解析仍使用系统 DNS，系统或 VPN 策略可能阻止连接。用 `ndm_network_routes` 可查看已配置的出口类型，最终出站可在代理客户端的连接日志中核对。
 
 `ndm_task_status` 与 `ndm_list_tasks` 为失败任务返回脱敏的 `error`。
 内置文件下载会记录 `error.http_status`、`error.stage`、

@@ -170,6 +170,7 @@ impl Store {
                 size_verified INTEGER,
                 progress BLOB,
                 policy BLOB,
+                window_request INTEGER,
                 created_at INTEGER NOT NULL DEFAULT (unixepoch())
             );
             CREATE TABLE IF NOT EXISTS cache_workspaces (id TEXT PRIMARY KEY NOT NULL, root BLOB NOT NULL);
@@ -207,6 +208,7 @@ impl Store {
             ("size_verified", "INTEGER"),
             ("progress", "BLOB"),
             ("policy", "BLOB"),
+            ("window_request", "INTEGER"),
         ] {
             if !columns.iter().any(|column| column == name) {
                 tx.execute(
@@ -215,6 +217,7 @@ impl Store {
                 )?;
             }
         }
+        tx.execute("CREATE INDEX IF NOT EXISTS pending_progress_windows ON tasks(id) WHERE window_request IS NOT NULL", [])?;
         tx.pragma_update(None, "user_version", 4)?;
         tx.commit()?;
         Ok(store)
@@ -293,14 +296,65 @@ impl Store {
             }
             let request = secrets::protect(&serde_json::to_vec(request)?)?;
             let options = secrets::protect(&serde_json::to_vec(options)?)?;
+            // MCP opens are delivered explicitly, even if the task finishes before the UI wakes.
+            let window_request = policy.show_progress.filter(|show| *show);
             let policy = serde_json::to_vec(policy)?;
             tx.execute(
-                "INSERT INTO tasks (id, request, options, state, policy) VALUES (?1, ?2, ?3, 'queued', ?4)",
-                params![id.to_string(), request, options, policy],
+                "INSERT INTO tasks (id, request, options, state, policy, window_request) VALUES (?1, ?2, ?3, 'queued', ?4, ?5)",
+                params![id.to_string(), request, options, policy, window_request],
             )?;
         }
         tx.commit()?;
         Ok(())
+    }
+
+    pub fn request_progress_window(&self, id: TaskId, show: bool) -> Result<()> {
+        let changed = self.connection()?.execute(
+            "UPDATE tasks SET window_request = ?2 WHERE id = ?1 AND state != 'prepared'",
+            params![id.to_string(), show],
+        )?;
+        if changed == 0 {
+            return Err(Error::NotFound);
+        }
+        Ok(())
+    }
+
+    pub fn progress_window_requests(&self) -> Result<Vec<(TaskId, bool)>> {
+        let conn = self.connection()?;
+        let mut statement =
+            conn.prepare("SELECT id, window_request FROM tasks WHERE window_request IS NOT NULL")?;
+        let mut rows = statement.query([])?;
+        let mut requests = Vec::new();
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            requests.push((
+                id.parse().map_err(|_| Error::InvalidStoredState)?,
+                row.get(1)?,
+            ));
+        }
+        Ok(requests)
+    }
+
+    pub fn finish_progress_window_request(&self, id: TaskId, show: bool) -> Result<()> {
+        self.connection()?.execute(
+            "UPDATE tasks SET window_request = NULL WHERE id = ?1 AND window_request = ?2",
+            params![id.to_string(), show],
+        )?;
+        Ok(())
+    }
+
+    pub fn automatic_progress_window(&self, id: TaskId) -> Result<bool> {
+        let policy: Option<Vec<u8>> = self.connection()?.query_row(
+            "SELECT policy FROM tasks WHERE id = ?1",
+            [id.to_string()],
+            |row| row.get(0),
+        )?;
+        Ok(policy
+            .map(|bytes| serde_json::from_slice::<TaskPolicy>(&bytes))
+            .transpose()?
+            .unwrap_or_default()
+            .show_progress
+            .is_none())
     }
 
     pub fn download_limits(&self) -> Result<Option<DownloadLimits>> {
