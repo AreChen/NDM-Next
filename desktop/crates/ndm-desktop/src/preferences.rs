@@ -6,6 +6,7 @@ use std::{
 };
 
 pub use crate::language::Language;
+use crate::palette::{CLASSIC_ACCENTS, CustomPalette, DownloadColors, DownloadStatus};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Theme {
@@ -48,14 +49,14 @@ impl ColorScheme {
         language.text(zh, en)
     }
 
-    pub fn accents(self, custom: [u32; 2]) -> [u32; 2] {
+    pub fn accents(self, custom: CustomPalette) -> [u32; 2] {
         match self {
-            Self::Classic => [0x885dff, 0x37c9f5],
+            Self::Classic => CLASSIC_ACCENTS,
             Self::Silver => [0xc7c7c7, 0x909090],
             Self::Ocean => [0x367aed, 0x1ebbcf],
             Self::Forest => [0x23885c, 0x9bb548],
             Self::Sunset => [0xd95e74, 0xeaa64b],
-            Self::Custom => custom,
+            Self::Custom => custom.accents(),
         }
     }
 }
@@ -67,7 +68,8 @@ pub struct Preferences {
     pub language: Language,
     pub theme: Theme,
     pub color_scheme: ColorScheme,
-    pub custom_accents: [u32; 2],
+    pub custom_palette: CustomPalette,
+    pub download_colors: DownloadColors,
     pub sidebar_collapsed: bool,
     pub sidebar_width: u16,
     pub ui_animations: bool,
@@ -102,7 +104,8 @@ impl Default for Preferences {
             language: Language::system_default(),
             theme: Theme::System,
             color_scheme: ColorScheme::Classic,
-            custom_accents: [0x885dff, 0x37c9f5],
+            custom_palette: CustomPalette::default(),
+            download_colors: DownloadColors::default(),
             sidebar_collapsed: false,
             sidebar_width: crate::sidebar::DEFAULT_WIDTH as u16,
             ui_animations: true,
@@ -145,8 +148,32 @@ impl Preferences {
                         .get("use_system_download_dir")
                         .and_then(|value| value.as_bool()),
                 );
-                preferences.custom_accents =
-                    preferences.custom_accents.map(|value| value.min(0xffffff));
+                if value.get("custom_palette").is_none() {
+                    let accents = value
+                        .get("custom_accents")
+                        .map(|old| serde_json::from_value::<[u32; 2]>(old.clone()))
+                        .transpose()
+                        .map_err(std::io::Error::other)?;
+                    let [primary, secondary] = accents.unwrap_or(CLASSIC_ACCENTS);
+                    if preferences.color_scheme == ColorScheme::Custom
+                        || [primary, secondary] != CLASSIC_ACCENTS
+                    {
+                        preferences.custom_palette = CustomPalette {
+                            primary,
+                            secondary: Some(secondary),
+                            surface: None,
+                            legacy_surfaces: true,
+                        };
+                    }
+                }
+                let palette = &mut preferences.custom_palette;
+                palette.primary = palette.primary.min(0xffffff);
+                palette.secondary = palette.secondary.map(|color| color.min(0xffffff));
+                palette.surface = palette.surface.map(|color| color.min(0xffffff));
+                for status in DownloadStatus::ALL {
+                    let colors = &mut preferences.download_colors;
+                    colors.set(status, colors.get(status));
+                }
                 preferences.download_dir = directory;
                 preferences.sidebar_width =
                     crate::sidebar::valid_width(f32::from(preferences.sidebar_width)) as u16;
@@ -285,10 +312,19 @@ mod tests {
     fn preferences_round_trip_and_default_missing_fields() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("preferences.json");
+        let mut download_colors = DownloadColors::default();
+        download_colors.set(DownloadStatus::Completed, Some(0x3484d9));
+        download_colors.set(DownloadStatus::Paused, Some(0x000000));
         let preferences = Preferences {
             theme: Theme::Dark,
             color_scheme: ColorScheme::Custom,
-            custom_accents: [0x001144, 0xfd2034],
+            custom_palette: CustomPalette {
+                primary: 0x001144,
+                secondary: Some(0xfd2034),
+                surface: Some(0x445577),
+                legacy_surfaces: false,
+            },
+            download_colors,
             language: Language::English,
             auto_update: false,
             last_update_check: Some(1_000),
@@ -302,12 +338,49 @@ mod tests {
         let restored = Preferences::load(&path).unwrap();
         assert_eq!(restored.theme, Theme::Light);
         assert_eq!(restored.color_scheme, ColorScheme::Classic);
+        assert_eq!(restored.download_colors, DownloadColors::default());
         assert_eq!(restored.user_agent, None);
         assert_eq!(restored.max_connections, 16);
         assert_eq!(restored.start_at_login, None);
         assert!(restored.auto_update);
         assert_eq!(restored.last_update_check, None);
         assert_eq!(restored.available_update, None);
+    }
+
+    #[test]
+    fn migrates_saved_two_color_palettes_without_recoloring_existing_surfaces() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("preferences.json");
+        fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({
+                "color_scheme": "Custom", "custom_accents": [0x445566, 0xcc4455],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let preferences = Preferences::load(&path).unwrap();
+        let palette = preferences.custom_palette;
+        assert_eq!(palette.accents(), [0x445566, 0xcc4455]);
+        assert!(palette.legacy_surfaces);
+        for dark in [false, true] {
+            let tone = crate::palette::ThemeTone::new(
+                dark,
+                ColorScheme::Custom,
+                palette,
+                preferences.download_colors,
+            );
+            assert_eq!(
+                tone.surface(0x0c1120, 0xf4f6fb),
+                tone.rgb(0x0c1120, 0xf4f6fb)
+            );
+        }
+        preferences.save(&path).unwrap();
+        assert_eq!(Preferences::load(&path).unwrap().custom_palette, palette);
+        fs::write(&path, br#"{"color_scheme":"Custom"}"#).unwrap();
+        let default_legacy = Preferences::load(&path).unwrap().custom_palette;
+        assert!(default_legacy.legacy_surfaces);
+        assert_eq!(default_legacy.accents(), CLASSIC_ACCENTS);
     }
 
     #[test]

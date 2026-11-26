@@ -67,7 +67,8 @@ pub(crate) fn apply_theme(preferences: &Preferences, cx: &mut App) {
     let tone = palette::ThemeTone::new(
         mode.is_dark(),
         preferences.color_scheme,
-        preferences.custom_accents,
+        preferences.custom_palette,
+        preferences.download_colors,
     );
     cx.set_global(tone);
     if preferences.color_scheme != preferences::ColorScheme::Classic {

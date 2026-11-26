@@ -151,27 +151,9 @@ impl Desktop {
             }),
             TaskState::Failed => self.text("失败", "Failed"),
         };
-        let palette = |dark| match (state, dark) {
-            (TaskState::Running, true) => (0x252044, 0x183e69, 0x49418c, 0xb19bff),
-            (TaskState::Completed, true) => (0x172238, 0x124b40, 0x286055, 0x60e1bc),
-            (TaskState::Paused, true) => (0x222435, 0x443424, 0x62513c, 0xe7ba6f),
-            (TaskState::Failed, true) => (0x252237, 0x4c2836, 0x764052, 0xff929d),
-            (_, true) => (0x1a2134, 0x1c2b42, 0x303e59, 0x9facca),
-            (TaskState::Running, false) => (0xf0ebff, 0xdeefff, 0xc6c0f2, 0x6e4dcc),
-            (TaskState::Completed, false) => (0xf3f8fc, 0xdaf4e9, 0xb4dccc, 0x168262),
-            (TaskState::Paused, false) => (0xf8f7fc, 0xffefd7, 0xe7d3af, 0x9a651d),
-            (TaskState::Failed, false) => (0xf8f4fc, 0xffe2e8, 0xeabdc7, 0xb93752),
-            (_, false) => (0xffffff, 0xedf3fc, 0xdce4f1, 0x697c9c),
-        };
         let tone = crate::motion::ThemeTone::current(cx);
-        let d = palette(true);
-        let l = palette(false);
-        let (start, end, edge, accent) = (
-            tone.rgb(d.0, l.0),
-            tone.rgb(d.1, l.1),
-            tone.rgb(d.2, l.2),
-            tone.rgb(d.3, l.3),
-        );
+        let style = tone.download(state.into());
+        let accent = style.accent;
         let foreground = tone.rgb(0xf1f3ff, 0x22324b);
         let muted = tone.rgb(0xa0b0cc, 0x6c7b94);
         let size = total
@@ -336,11 +318,7 @@ impl Desktop {
                                 .h_full()
                                 .w(relative(ratio.unwrap_or(0.)))
                                 .rounded_full()
-                                .bg(linear_gradient(
-                                    90.,
-                                    linear_color_stop(rgb(tone.rgb(0x8958ff, 0x8958ff)), 0.),
-                                    linear_color_stop(rgb(tone.rgb(0x39cbf3, 0x39cbf3)), 1.),
-                                )),
+                                .bg(style.progress_background()),
                         ),
                 );
         } else {
@@ -406,13 +384,9 @@ impl Desktop {
                 .border_color(rgb(if self.selected_tasks.contains(&id) {
                     tone.rgb(0x967bff, 0x7656c9)
                 } else {
-                    edge
+                    style.edge
                 }))
-                .bg(linear_gradient(
-                    105.,
-                    linear_color_stop(rgb(start), 0.),
-                    linear_color_stop(rgb(end), 1.),
-                ))
+                .bg(style.row_background())
                 .child(
                     Button::new(SharedString::from(format!("select-task-{id}")))
                         .small()

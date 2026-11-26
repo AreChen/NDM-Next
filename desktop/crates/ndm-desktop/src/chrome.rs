@@ -145,7 +145,7 @@ pub(crate) fn main_toolbar(
         })
         .pl_3()
         .h(px(TOOLBAR_HEIGHT))
-        .bg(rgb(tone.rgb(0x111625, 0xf8f9fd)))
+        .bg(rgb(tone.surface(0x111625, 0xf8f9fd)))
         .border_color(rgb(tone.rgb(0x263247, 0xe5e9f2)))
         .child(
             div()
@@ -416,12 +416,12 @@ impl RenderOnce for MacWindowControls {
 }
 
 pub(crate) fn floating_surface(tone: impl Into<crate::motion::ThemeTone>) -> Background {
-    let tone = tone.into();
+    let [start, end] = tone.into().floating_background();
     // One static gradient, shared underneath header and body; no extra frames.
     linear_gradient(
         110.,
-        linear_color_stop(rgb(tone.rgb(0x151a2e, 0xf8f7ff)), 0.),
-        linear_color_stop(rgb(tone.rgb(0x101d27, 0xf2f8fb)), 1.),
+        linear_color_stop(rgb(start), 0.),
+        linear_color_stop(rgb(end), 1.),
     )
 }
 

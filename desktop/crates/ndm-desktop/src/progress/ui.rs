@@ -1,4 +1,5 @@
 use super::*;
+use crate::palette::DownloadStatus;
 use gpui_kit::component::{
     Disableable, IconName, Sizable,
     button::ButtonVariants,
@@ -43,13 +44,8 @@ impl Render for ProgressWindow {
             .as_ref()
             .map(|snapshot| snapshot.phase)
             .unwrap_or_default();
-        let accent = if state == TaskState::Completed {
-            0x44cda6
-        } else if state == TaskState::Failed {
-            0xef8b9a
-        } else {
-            tone.rgb(0x9c87ff, 0x7152b4)
-        };
+        let style = tone.download(state.into());
+        let accent = style.accent;
         let name = task
             .as_ref()
             .and_then(crate::filenames::display_name)
@@ -171,7 +167,7 @@ impl Render for ProgressWindow {
                 details = details.child(
                     div()
                         .text_xs()
-                        .text_color(rgb(0xee929d))
+                        .text_color(rgb(tone.download(DownloadStatus::Failed).accent))
                         .child(crate::failure::description(error, self.language).to_owned()),
                 );
             }
@@ -303,18 +299,7 @@ impl Render for ProgressWindow {
                 presentation.target().width_px().unwrap_or(0.).clamp(0., 1.),
             ))
             .rounded_full()
-            .bg(linear_gradient(
-                90.,
-                linear_color_stop(rgb(tone.rgb(0x885dff, 0x885dff)), 0.),
-                linear_color_stop(
-                    rgb(if state == TaskState::Completed {
-                        0x3ed4b2
-                    } else {
-                        tone.rgb(0x37c9f5, 0x37c9f5)
-                    }),
-                    1.,
-                ),
-            ));
+            .bg(style.progress_background());
         let fill = fill.opacity(
             if ratio.is_none() && state == TaskState::Running && !cx.reduce_motion() {
                 0.6 + 0.2 * (self.bar_epoch.elapsed().as_secs_f32() * 1.8).sin()

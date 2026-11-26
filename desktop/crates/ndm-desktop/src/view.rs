@@ -28,6 +28,7 @@ use std::{
 };
 
 mod ai_settings;
+mod color_editor;
 mod media;
 mod plugins;
 mod settings;
@@ -93,7 +94,7 @@ pub(crate) struct Desktop {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     extension_id_input: Entity<InputState>,
     speed_input: Entity<InputState>,
-    custom_accent_inputs: [Entity<InputState>; 2],
+    color_editor: Option<Entity<color_editor::ColorEditor>>,
     user_agent_input: Entity<InputState>,
     proxy_url_input: Entity<InputState>,
     tun_egress_input: Entity<InputState>,
@@ -245,13 +246,6 @@ impl Desktop {
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         let extension_id_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("chrome://extensions → ID"));
-        let custom_accent_inputs = preferences.custom_accents.map(|color| {
-            cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder("#RRGGBB")
-                    .default_value(format!("#{color:06X}"))
-            })
-        });
         cx.observe_window_appearance(window, |this, _, cx| {
             this.refresh_appearance(cx);
             cx.notify();
@@ -508,7 +502,7 @@ impl Desktop {
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             extension_id_input,
             speed_input,
-            custom_accent_inputs,
+            color_editor: None,
             user_agent_input,
             proxy_url_input,
             tun_egress_input,
@@ -659,6 +653,7 @@ impl Desktop {
             return;
         }
         self.in_tray = true;
+        self.dismiss_color_picker(cx);
         if self.theme_transition.take().is_some() {
             crate::apply_theme(&self.preferences, cx);
         }
@@ -1045,7 +1040,7 @@ impl Desktop {
                 self.show_progress(id, cx);
 
                 self.set_notice(self.text("下载已添加。", "Download added.").into(), cx);
-                self.section = Section::All;
+                self.select_section(Section::All, cx);
                 self.new_download_open = false;
                 self.task_route = ProxyMode::Inherit;
                 self.url_input
@@ -1720,6 +1715,13 @@ impl Desktop {
         cx.notify();
     }
 
+    fn select_section(&mut self, section: Section, cx: &mut Context<Self>) {
+        if self.section == Section::Settings && section != self.section {
+            self.dismiss_color_picker(cx);
+        }
+        self.section = section;
+    }
+
     fn nav_item(
         &self,
         label: &'static str,
@@ -1798,7 +1800,7 @@ impl Desktop {
                     this.cancel_file_inspection();
                     this.clear_notice();
                 }
-                this.section = section;
+                this.select_section(section, cx);
                 match section {
                     Section::Plugins => this.open_plugin_market(cx),
                     Section::Settings
@@ -1839,8 +1841,8 @@ impl Render for Desktop {
         }
         let dark = self.is_dark(cx);
         let tone = crate::motion::ThemeTone::current(cx);
-        let page = tone.rgb(0x0c1120, 0xf4f6fb);
-        let side = tone.rgb(0x111625, 0xf8f9fd);
+        let page = tone.surface(0x0c1120, 0xf4f6fb);
+        let side = tone.surface(0x111625, 0xf8f9fd);
         let fg = tone.rgb(0xf0f3ff, 0x19253b);
         let muted = tone.rgb(0x8999b4, 0x6e7d98);
         let border = tone.rgb(0x28344b, 0xe3e8f2);
@@ -2361,7 +2363,7 @@ impl Render for Desktop {
                     return;
                 }
                 if this.section == Section::Settings {
-                    this.section = Section::All;
+                    this.select_section(Section::All, cx);
                 }
                 let input = if this.section == Section::Plugins {
                     &this.market_search_input
