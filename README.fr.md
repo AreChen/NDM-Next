@@ -19,11 +19,11 @@
 
 ## Captures d’écran
 
-### Thème clair
+### Thème clair · Paramètres
 
-[![Quatre téléchargements terminés dans la liste des tâches d’OnesDM en mode clair.](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png)
+[![Les paramètres d’OnesDM en thème clair affichent les réglages de l’intégration de l’IA, de la langue, des connexions de téléchargement et du réseau.](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png)
 
-### Thème sombre
+### Thème sombre · Téléchargements
 
 [![Quatre téléchargements terminés dans la liste des tâches d’OnesDM en mode sombre.](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.png)
 

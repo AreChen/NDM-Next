@@ -19,11 +19,11 @@
 
 ## Bildschirmfotos
 
-### Helles Design
+### Helles Design · Einstellungen
 
-[![Vier abgeschlossene Downloads in der Aufgabenliste von OnesDM im hellen Design.](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png)
+[![Die OnesDM-Einstellungen im hellen Design zeigen KI-Integration, Sprache, Downloadverbindungen und Netzwerkoptionen.](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png)
 
-### Dunkles Design
+### Dunkles Design · Downloads
 
 [![Vier abgeschlossene Downloads in der Aufgabenliste von OnesDM im dunklen Design.](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.png)
 

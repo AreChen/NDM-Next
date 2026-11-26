@@ -19,11 +19,11 @@
 
 ## スクリーンショット
 
-### ライトテーマ
+### ライトテーマ · 設定
 
-[![ライトテーマの OnesDM のタスクリスト。完了したダウンロードが4件並んでいる。](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png)
+[![ライトテーマの OnesDM 設定画面。AI 連携、言語、ダウンロードのスレッド数、ネットワークの設定が並ぶ。](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png)
 
-### ダークテーマ
+### ダークテーマ · ダウンロード一覧
 
 [![ダークテーマの OnesDM のタスクリスト。完了したダウンロードが4件並んでいる。](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.png)
 

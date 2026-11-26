@@ -19,11 +19,11 @@
 
 ## Capturas de tela
 
-### Tema claro
+### Tema claro · Configurações
 
-[![Quatro downloads concluídos na lista de tarefas do OnesDM com o tema claro.](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png)
+[![O painel de configurações do OnesDM no tema claro mostra a integração com IA, o idioma, as conexões de download e os ajustes de rede.](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png)
 
-### Tema escuro
+### Tema escuro · Downloads
 
 [![Quatro downloads concluídos na lista de tarefas do OnesDM com o tema escuro.](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.png)
 

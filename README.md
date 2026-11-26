@@ -26,11 +26,11 @@
 
 ## Screenshots
 
-### Light theme
+### Light theme · Settings
 
-[![Four completed downloads in the OnesDM task list in light mode.](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png)
+[![The OnesDM settings center in light mode, showing AI integration, language, download threads and network settings.](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png)
 
-### Dark theme
+### Dark theme · Downloads
 
 [![Four completed downloads in the OnesDM task list in dark mode.](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.png)
 
