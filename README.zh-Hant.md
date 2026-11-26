@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/readme/hero.webp" width="1200" alt="OnesDM 下載箭頭與分段進度條。">
+  <img src="assets/readme/hero.webp" width="1200" alt="OnesDM，AI 原生下載管理員。一隻遊隼俯衝，身後劃出多道平行的下載分段。">
   <h1><picture><source media="(prefers-color-scheme: dark)" srcset="assets/onesdm.svg"><img src="assets/onesdm-light.svg" width="36" alt=""></picture> OnesDM</h1>
   <p>Ones Download Manager · PlayOnes · AI-Native Download Manager</p>
   <p><strong>Any Agent. All Downloads.</strong></p>
@@ -24,6 +24,16 @@
 | **媒體下載** — 支援 HLS、靜態 DASH，提供可搜尋的媒體資源視窗和批次下載。 | **任務管理** — 多語言搜尋、分類篩選、Shift 連續多選，以及快捷開啟檔案。 |
 | **儲存與網路** — 自定義下載及快取目錄、清理快取，為單個任務啟用代理。 | **原生介面** — 平滑動效、緊湊進度視窗、亮暗主題、九種介面語言。 |
 
+## 介面截圖
+
+### 淺色主題
+
+[![淺色介面下的 OnesDM 任務清單，顯示四筆已完成的下載。](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png)
+
+### 深色主題
+
+[![深色介面下的 OnesDM 任務清單，顯示四筆已完成的下載。](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.png)
+
 ## 下載
 
 前往 [**GitHub Releases 獲取安裝包 →**](https://github.com/AreChen/OnesDM/releases/latest)。
@@ -47,18 +57,9 @@
 
 安裝包內含 `onesdm`。可將其目錄加入 PATH，或用完整路徑呼叫。macOS 的命令位於 `OnesDM.app/Contents/MacOS`。使用 `onesdm download <URL>` 將 HTTP(S) 連結加入桌面佇列，`onesdm mcp` 啟動 stdio 服務，`onesdm --version` 檢視版本。
 
-## 介面截圖
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/downloads-dark.webp">
-  <img src="assets/readme/downloads-light.webp" width="1200" alt="OnesDM 下載列表中顯示四個已完成的安裝包。">
-</picture>
-
-[檢視深色原圖](assets/readme/downloads-dark.webp) · [檢視淺色原圖](assets/readme/downloads-light.webp)
-
 ## 外掛與 AI
 
-<img src="assets/readme/plugins-ai.webp" width="1200" alt="種子節點、流媒體和 AI 終端透過外掛將任務交給 OnesDM。">
+<img src="assets/readme/plugins-ai.webp" width="1200" alt="底片、音訊波形、點對點網路和終端機提示符號匯入同一束下載軌跡，落在一疊檔案上。">
 
 在[桌面外掛市場](https://github.com/AreChen/onesdm-plugin-market)安裝 **BitTorrent**，即可下載 `.torrent` 檔案和磁力連結。安裝 **Media Downloader**，即可下載受支援網站的流媒體影片、音訊和播放列表。
 

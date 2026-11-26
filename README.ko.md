@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/readme/hero.webp" width="1200" alt="OnesDM 다운로드 화살표와 병렬 전송 진행률 막대.">
+  <img src="assets/readme/hero.webp" width="1200" alt="AI 네이티브 다운로드 관리자 OnesDM. 급강하하는 매 뒤로 다운로드 조각들이 여러 줄의 궤적을 그린다.">
   <h1><picture><source media="(prefers-color-scheme: dark)" srcset="assets/onesdm.svg"><img src="assets/onesdm-light.svg" width="36" alt=""></picture> OnesDM</h1>
   <p>Ones Download Manager · PlayOnes · AI-Native Download Manager</p>
   <p><strong>Any Agent. All Downloads.</strong></p>
@@ -16,6 +16,16 @@
 - 이름, 출처, URL로 파일을 찾고 유형별로 필터링합니다. Shift로 여러 항목을 선택하거나 목록에서 파일을 바로 열 수 있습니다.
 - 다운로드 및 캐시 폴더를 설정하고, 캐시를 정리하거나 작업마다 다른 프록시를 쓸 수 있습니다.
 - 독립 진행 창과 밝은 테마, 어두운 테마를 제공합니다. 처음에는 시스템에서 선호하는 지원 언어를 사용하며, ‘설정 → 모양 및 언어’에서 9개 언어 중 하나를 선택할 수 있습니다.
+
+## 스크린샷
+
+### 라이트 테마
+
+[![밝은 테마의 OnesDM 작업 목록에 완료된 다운로드 4개가 표시되어 있다.](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png)
+
+### 다크 테마
+
+[![어두운 테마의 OnesDM 작업 목록에 완료된 다운로드 4개가 표시되어 있다.](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.png)
 
 ## 다운로드
 
@@ -44,18 +54,9 @@ onesdm download <URL>
 onesdm mcp
 ```
 
-## 스크린샷
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/downloads-dark.webp">
-  <img src="assets/readme/downloads-light.webp" width="1200" alt="완료한 설치 파일 네 개가 표시된 OnesDM 다운로드 목록.">
-</picture>
-
-[어두운 테마 원본 보기](assets/readme/downloads-dark.webp) · [밝은 테마 원본 보기](assets/readme/downloads-light.webp)
-
 ## 플러그인 및 AI
 
-<img src="assets/readme/plugins-ai.webp" width="1200" alt="토렌트 피어, 스트리밍 미디어, AI 터미널이 OnesDM으로 다운로드를 보내는 구조.">
+<img src="assets/readme/plugins-ai.webp" width="1200" alt="필름, 오디오 파형, 피어 네트워크와 터미널 프롬프트가 한 줄기 다운로드 흐름으로 모여 파일 더미에 닿는다.">
 
 플러그인 마켓에서 **BitTorrent**를 설치하면 .torrent와 마그넷 링크를 받을 수 있습니다. **Media Downloader**는 지원 사이트의 영상, 오디오, 재생목록을 다운로드합니다. [GitHub](https://github.com/AreChen/onesdm-plugin-market)
 

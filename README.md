@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/readme/hero.webp" width="1200" alt="OnesDM download arrow and parallel progress bars.">
+  <img src="assets/readme/hero.webp" width="1200" alt="OnesDM, AI-Native Download Manager. A diving peregrine trails parallel streams of download segments.">
   <h1><picture><source media="(prefers-color-scheme: dark)" srcset="assets/onesdm.svg"><img src="assets/onesdm-light.svg" width="36" alt=""></picture> OnesDM</h1>
   <p>Ones Download Manager · PlayOnes · AI-Native Download Manager</p>
   <p><strong>Any Agent. All Downloads.</strong></p>
@@ -24,6 +24,16 @@
 | **Media downloads** — HLS and static DASH, plus a searchable resource library and batch downloads. | **Organized tasks** — Multilingual search, category filters, Shift-click range selection, and quick file actions. |
 | **Storage & network** — Custom download/cache folders, cache cleanup and per-task proxy controls. | **Native interface** — Smooth motion, compact progress windows, light/dark themes, and nine interface languages. |
 
+## Screenshots
+
+### Light theme
+
+[![Four completed downloads in the OnesDM task list in light mode.](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png)
+
+### Dark theme
+
+[![Four completed downloads in the OnesDM task list in dark mode.](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.png)
+
 ## Download
 
 Get your installer from [**GitHub Releases →**](https://github.com/AreChen/OnesDM/releases/latest).
@@ -47,18 +57,9 @@ Choose a language under **Settings → Appearance and language**. A new profile 
 
 The installed desktop package includes `onesdm`. Add its folder to your shell PATH or run the executable by path. On macOS it is inside `OnesDM.app/Contents/MacOS`. Use `onesdm download <URL>` to queue an HTTP(S) link in the desktop, `onesdm mcp` for stdio integration, or `onesdm --version`.
 
-## Screenshots
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/downloads-dark.webp">
-  <img src="assets/readme/downloads-light.webp" width="1200" alt="Four completed installers in the OnesDM download list.">
-</picture>
-
-[View dark screenshot](assets/readme/downloads-dark.webp) · [View light screenshot](assets/readme/downloads-light.webp)
-
 ## Plugins and AI
 
-<img src="assets/readme/plugins-ai.webp" width="1200" alt="Torrent peers, streaming media and an AI terminal send downloads to OnesDM.">
+<img src="assets/readme/plugins-ai.webp" width="1200" alt="A filmstrip, audio waveform, peer network and terminal prompt converge into a stack of downloaded files.">
 
 Install **BitTorrent** for `.torrent` files and magnet links, or **Media Downloader** for streaming video, audio, and playlists from supported sites. Both engines are available in the [desktop plugin market](https://github.com/AreChen/onesdm-plugin-market).
 

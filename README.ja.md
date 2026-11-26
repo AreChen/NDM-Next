@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/readme/hero.webp" width="1200" alt="OnesDM のダウンロード矢印と並列転送の進捗バー。">
+  <img src="assets/readme/hero.webp" width="1200" alt="AI ネイティブのダウンロードマネージャー OnesDM。急降下するハヤブサの軌跡が並列ダウンロードの列に変わる。">
   <h1><picture><source media="(prefers-color-scheme: dark)" srcset="assets/onesdm.svg"><img src="assets/onesdm-light.svg" width="36" alt=""></picture> OnesDM</h1>
   <p>Ones Download Manager · PlayOnes · AI-Native Download Manager</p>
   <p><strong>Any Agent. All Downloads.</strong></p>
@@ -16,6 +16,16 @@
 - ファイル名・配信元・URL で検索でき、種類別の絞り込みや Shift による範囲選択、ファイルを開く操作ができます。
 - 保存先とキャッシュの場所を指定し、キャッシュの消去やタスク別のプロキシ設定ができます。
 - 独立した進捗ウィンドウとライト・ダークテーマを用意しています。初回はシステムの対応言語を使い、「設定 → 外観と言語」で 9 言語から選択できます。
+
+## スクリーンショット
+
+### ライトテーマ
+
+[![ライトテーマの OnesDM のタスクリスト。完了したダウンロードが4件並んでいる。](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png)
+
+### ダークテーマ
+
+[![ダークテーマの OnesDM のタスクリスト。完了したダウンロードが4件並んでいる。](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.png)
 
 ## ダウンロード
 
@@ -44,18 +54,9 @@ onesdm download <URL>
 onesdm mcp
 ```
 
-## スクリーンショット
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/downloads-dark.webp">
-  <img src="assets/readme/downloads-light.webp" width="1200" alt="OnesDM のダウンロード一覧に完了した 4 件のインストーラーが表示されています。">
-</picture>
-
-[ダークテーマの原寸画像](assets/readme/downloads-dark.webp) · [ライトテーマの原寸画像](assets/readme/downloads-light.webp)
-
 ## プラグインと AI
 
-<img src="assets/readme/plugins-ai.webp" width="1200" alt="トレントのピア、ストリーミング動画、AI 端末から OnesDM にダウンロードを渡す流れ。">
+<img src="assets/readme/plugins-ai.webp" width="1200" alt="フィルム、音声波形、ピアネットワーク、端末のプロンプトがダウンロードの流れに合流し、ファイルの束へ続く。">
 
 プラグインマーケットの **BitTorrent** は .torrent とマグネットリンクに、**Media Downloader** は対応サイトの動画・音声・プレイリストに対応します。 [GitHub](https://github.com/AreChen/onesdm-plugin-market)
 

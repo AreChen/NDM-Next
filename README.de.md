@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/readme/hero.webp" width="1200" alt="OnesDM-Downloadpfeil mit parallelen Fortschrittsbalken.">
+  <img src="assets/readme/hero.webp" width="1200" alt="OnesDM, ein KI-nativer Downloadmanager. Ein Wanderfalke im Sturzflug zieht parallele Downloadsegmente hinter sich her.">
   <h1><picture><source media="(prefers-color-scheme: dark)" srcset="assets/onesdm.svg"><img src="assets/onesdm-light.svg" width="36" alt=""></picture> OnesDM</h1>
   <p>Ones Download Manager · PlayOnes · AI-Native Download Manager</p>
   <p><strong>Any Agent. All Downloads.</strong></p>
@@ -16,6 +16,16 @@
 - Nach Dateiname, Quelle oder URL suchen, nach Kategorie filtern und mit der Umschalttaste einen Bereich auswählen. Dateien direkt aus der Liste öffnen.
 - Download- und Cache-Ordner wählen, Speicher freigeben und den Proxy für einzelne Aufträge festlegen.
 - Kompakte Fortschrittsfenster, helles und dunkles Design und neun Sprachen. Ein neues Profil übernimmt eine unterstützte Systemsprache. Die Auswahl lässt sich unter **Einstellungen → Darstellung und Sprache** ändern.
+
+## Bildschirmfotos
+
+### Helles Design
+
+[![Vier abgeschlossene Downloads in der Aufgabenliste von OnesDM im hellen Design.](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png)
+
+### Dunkles Design
+
+[![Vier abgeschlossene Downloads in der Aufgabenliste von OnesDM im dunklen Design.](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.png)
 
 ## Herunterladen
 
@@ -44,18 +54,9 @@ onesdm download <URL>
 onesdm mcp
 ```
 
-## Bildschirmfotos
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/downloads-dark.webp">
-  <img src="assets/readme/downloads-light.webp" width="1200" alt="OnesDM-Downloadliste mit vier fertig heruntergeladenen Installationspaketen.">
-</picture>
-
-[Bild im dunklen Design öffnen](assets/readme/downloads-dark.webp) · [Bild im hellen Design öffnen](assets/readme/downloads-light.webp)
-
 ## Plugins und KI
 
-<img src="assets/readme/plugins-ai.webp" width="1200" alt="Torrent-Peers, Streamingmedien und ein KI-Terminal übergeben Downloads an OnesDM.">
+<img src="assets/readme/plugins-ai.webp" width="1200" alt="Ein Filmstreifen, eine Audiowelle, ein Peer-Netz und eine Terminal-Eingabeaufforderung laufen in einem Stapel heruntergeladener Dateien zusammen.">
 
 Das Plugin **BitTorrent** verarbeitet .torrent-Dateien und Magnetlinks. **Media Downloader** lädt Videos, Audio und Wiedergabelisten von unterstützten Websites. Beide Engines sind im Plugin-Katalog erhältlich. [GitHub](https://github.com/AreChen/onesdm-plugin-market)
 

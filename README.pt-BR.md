@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/readme/hero.webp" width="1200" alt="Seta de download do OnesDM com barras de progresso paralelas.">
+  <img src="assets/readme/hero.webp" width="1200" alt="OnesDM, gerenciador de downloads com IA nativa. Um falcão-peregrino em mergulho deixa um rastro de segmentos de download paralelos.">
   <h1><picture><source media="(prefers-color-scheme: dark)" srcset="assets/onesdm.svg"><img src="assets/onesdm-light.svg" width="36" alt=""></picture> OnesDM</h1>
   <p>Ones Download Manager · PlayOnes · AI-Native Download Manager</p>
   <p><strong>Any Agent. All Downloads.</strong></p>
@@ -16,6 +16,16 @@
 - Pesquise por nome, origem ou URL, filtre por tipo e use Shift para selecionar um intervalo. Abra arquivos diretamente na lista.
 - Defina as pastas de downloads e cache, libere espaço e escolha o proxy de cada tarefa.
 - Janelas compactas de progresso, temas claros e escuros e nove idiomas. Um perfil novo usa um idioma compatível do sistema. Para mudar, abra **Configurações → Aparência e idioma**.
+
+## Capturas de tela
+
+### Tema claro
+
+[![Quatro downloads concluídos na lista de tarefas do OnesDM com o tema claro.](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png)
+
+### Tema escuro
+
+[![Quatro downloads concluídos na lista de tarefas do OnesDM com o tema escuro.](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.png)
 
 ## Baixar
 
@@ -44,18 +54,9 @@ onesdm download <URL>
 onesdm mcp
 ```
 
-## Capturas de tela
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/downloads-dark.webp">
-  <img src="assets/readme/downloads-light.webp" width="1200" alt="Lista de downloads do OnesDM com quatro instaladores concluídos.">
-</picture>
-
-[Ver captura no tema escuro](assets/readme/downloads-dark.webp) · [Ver captura no tema claro](assets/readme/downloads-light.webp)
-
 ## Plugins e IA
 
-<img src="assets/readme/plugins-ai.webp" width="1200" alt="Pares BitTorrent, mídia em streaming e um terminal de IA enviam downloads ao OnesDM.">
+<img src="assets/readme/plugins-ai.webp" width="1200" alt="Uma tira de filme, uma onda de áudio, uma rede de pares e um terminal convergem para uma pilha de arquivos baixados.">
 
 Instale **BitTorrent** no catálogo para baixar arquivos .torrent e links magnet. O **Media Downloader** baixa vídeos, áudios e playlists de sites compatíveis. [GitHub](https://github.com/AreChen/onesdm-plugin-market)
 
