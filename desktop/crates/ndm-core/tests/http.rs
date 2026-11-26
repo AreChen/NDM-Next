@@ -1089,13 +1089,24 @@ async fn changed_validator_discards_old_partial_content() {
         async move { download_http(&req, id, &HttpOptions::default(), cancel).await }
     });
     let part_dir = dir.path().join(format!(".ndm-next-{id}"));
+    let partial_bytes = || {
+        std::fs::read_dir(&part_dir)
+            .into_iter()
+            .flatten()
+            .filter_map(std::result::Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("segment-"))
+            .filter_map(|entry| entry.metadata().ok())
+            .map(|metadata| metadata.len())
+            .sum::<u64>()
+    };
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             assert!(
                 !pending.is_finished(),
-                "download stopped before sending a partial response"
+                "download stopped before writing a partial response"
             );
-            if server.sent_bytes.load(Ordering::SeqCst) >= 131_072 {
+            // The server can send a chunk before the client writes it to disk.
+            if partial_bytes() > 0 {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1105,14 +1116,8 @@ async fn changed_validator_discards_old_partial_content() {
     .unwrap();
     cancel.cancel();
     assert!(pending.await.unwrap().is_err());
-    let partial_bytes: u64 = std::fs::read_dir(&part_dir)
-        .unwrap()
-        .filter_map(std::result::Result::ok)
-        .filter(|e| e.file_name().to_string_lossy().starts_with("segment-"))
-        .map(|e| e.metadata().unwrap().len())
-        .sum();
     assert!(
-        partial_bytes > 0,
+        partial_bytes() > 0,
         "paused download should retain bytes already received"
     );
 

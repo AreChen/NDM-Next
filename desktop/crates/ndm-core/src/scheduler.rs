@@ -667,6 +667,13 @@ async fn run_one(inner: Arc<Inner>, task: Task, active: Active, done: watch::Sen
         {
             let _maintenance = inner.maintenance.read().unwrap();
             let preferred = inner.options.read().unwrap().cache_directory.clone();
+            let preferred = preferred.filter(|directory| {
+                // New media downloads on the default cache setting can finish
+                // on the destination volume. Keep custom caches and existing
+                // workspaces so paused tasks still resume.
+                !matches!(&task.options, TaskOptions::Plugin(plugin) if plugin.id == "yt-dlp")
+                    || *directory != crate::default_cache_directory().join("transfers")
+            });
             inner
                 .store
                 .assign_workspace(task.id, preferred.as_deref())?;

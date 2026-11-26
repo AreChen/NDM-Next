@@ -77,6 +77,18 @@ impl Render for ProgressWindow {
         } else {
             downloaded
         };
+        let estimate = self
+            .snapshot
+            .as_ref()
+            .filter(|_| {
+                state != TaskState::Completed
+                    && total.is_none()
+                    && phase == ProgressPhase::Downloading
+            })
+            .and_then(|value| value.estimated_total)
+            .map(|estimate| estimate.get());
+        total = total.or(estimate);
+        let approximate = if estimate.is_some() { "≈" } else { "" };
         let ratio = if state == TaskState::Completed {
             Some(1.)
         } else if state == TaskState::Running && phase == ProgressPhase::Finalizing {
@@ -92,7 +104,7 @@ impl Render for ProgressWindow {
                 .map(|total| (shown_bytes as f32 / total as f32).clamp(0., 0.999))
         };
         let percent = ratio
-            .map(|value| format!("{:.1}%", value * 100.))
+            .map(|value| format!("{approximate}{:.1}%", value * 100.))
             .unwrap_or_else(|| {
                 if state == TaskState::Running {
                     self.text("处理中", "Working").into()
@@ -101,7 +113,13 @@ impl Render for ProgressWindow {
                 }
             });
         let transferred = total
-            .map(|total| format!("{} / {}", format_bytes(shown_bytes), format_bytes(total)))
+            .map(|total| {
+                format!(
+                    "{} / {approximate}{}",
+                    format_bytes(shown_bytes),
+                    format_bytes(total)
+                )
+            })
             .unwrap_or_else(|| format_bytes(shown_bytes));
         let remaining = if state == TaskState::Running && phase == ProgressPhase::Finalizing {
             format_remaining(self.snapshot.as_ref().and_then(|snapshot| {

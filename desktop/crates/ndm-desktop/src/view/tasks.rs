@@ -101,6 +101,17 @@ impl Desktop {
         {
             total = progress.as_ref().and_then(|value| value.save_total);
         }
+        let estimate = progress
+            .as_ref()
+            .filter(|value| {
+                state != TaskState::Completed
+                    && total.is_none()
+                    && value.phase == ndm_core::ProgressPhase::Downloading
+            })
+            .and_then(|value| value.estimated_total)
+            .map(|estimate| estimate.get());
+        total = total.or(estimate);
+        let approximate = if estimate.is_some() { "≈" } else { "" };
         let done = progress
             .as_ref()
             .map(|value| {
@@ -157,7 +168,7 @@ impl Desktop {
         let foreground = tone.rgb(0xf1f3ff, 0x22324b);
         let muted = tone.rgb(0xa0b0cc, 0x6c7b94);
         let size = total
-            .map(format_bytes)
+            .map(|bytes| format!("{approximate}{}", format_bytes(bytes)))
             .unwrap_or_else(|| self.text("大小未知", "Unknown size").into());
         let speed = self.speed.get(&id).copied().unwrap_or(0);
         let error = task
@@ -295,7 +306,9 @@ impl Desktop {
                         .text_xs()
                         .child(
                             ratio
-                                .map(|value| format!("{}%", (value * 100.).floor() as u32))
+                                .map(|value| {
+                                    format!("{approximate}{}%", (value * 100.).floor() as u32)
+                                })
                                 .unwrap_or_else(|| "—".into()),
                         )
                         .child(div().text_color(rgb(muted)).child(

@@ -3,6 +3,13 @@ use crate::{library::normalize, motion::ThemeTone};
 use gpui_kit::assets::IconName;
 use ndm_core::plugins::{Localized, PluginManifest};
 
+const CARD_GAP: f32 = 12.;
+const CARD_MIN_WIDTH: f32 = 372.;
+
+fn market_columns(width: f32) -> usize {
+    (((width + CARD_GAP) / (CARD_MIN_WIDTH + CARD_GAP)) as usize).clamp(1, 3)
+}
+
 #[derive(Default)]
 pub(super) struct Market {
     pub(super) installed: Vec<InstalledPlugin>,
@@ -182,6 +189,8 @@ impl Desktop {
                         div()
                             .ml_1()
                             .flex_1()
+                            .min_w_0()
+                            .truncate()
                             .text_lg()
                             .font_weight(FontWeight::BOLD)
                             .child(self.display_text(self.text("插件市场", "Plugin market"))),
@@ -206,7 +215,7 @@ impl Desktop {
                             })),
                     ),
             )
-            .child(self.market_filters(tone, cx));
+            .child(self.market_filters(width, tone, cx));
 
         if let Some(package) = &market.package {
             panel = panel.child(self.package_progress(package, tone));
@@ -244,7 +253,8 @@ impl Desktop {
 
         let visible = Arc::clone(&market.visible);
         if !visible.is_empty() {
-            let columns = if width >= 656. { 2 } else { 1 };
+            let columns = market_columns(width);
+            let compact = width < CARD_MIN_WIDTH;
             panel = panel.child(
                 uniform_list(
                     "plugin-market-cards",
@@ -256,16 +266,13 @@ impl Desktop {
                                 let items = &visible[start..(start + columns).min(visible.len())];
                                 div()
                                     .w_full()
-                                    .h(px(164.))
-                                    .pb_3()
+                                    .h(px(176.))
+                                    .pb(px(CARD_GAP))
                                     .flex()
-                                    .gap_3()
-                                    .children(
-                                        items
-                                            .iter()
-                                            .map(|&index| this.market_card(index, tone, busy, cx)),
-                                    )
-                                    .when(items.len() < columns, |row| row.child(div().flex_1()))
+                                    .gap(px(CARD_GAP))
+                                    .children(items.iter().map(|&index| {
+                                        this.market_card(index, tone, busy, compact, cx)
+                                    }))
                                     .into_any_element()
                             })
                             .collect()
@@ -412,7 +419,7 @@ impl Desktop {
             })
     }
 
-    fn market_filters(&self, tone: ThemeTone, cx: &mut Context<Self>) -> Div {
+    fn market_filters(&self, width: f32, tone: ThemeTone, cx: &mut Context<Self>) -> Div {
         let market = &self.integration.market;
         let language = self.preferences.language;
         let all_categories = self.text("全部分类", "All categories");
@@ -436,15 +443,18 @@ impl Desktop {
         let dark = self.is_dark(cx);
         let input = self.market_search_input.clone();
         let page_focus = self.page_focus.clone();
+        let stacked = width < 500.;
         div()
             .flex()
-            .items_center()
+            .when(stacked, |bar| bar.flex_col())
+            .when(!stacked, |bar| bar.items_center())
             .flex_shrink_0()
             .gap_2()
             .child(
                 div()
                     .id("market-search-container")
-                    .flex_1()
+                    .when(stacked, |search| search.w_full().flex_none())
+                    .when(!stacked, |search| search.flex_1())
                     .min_w_0()
                     .on_mouse_down_out(move |_, window, cx| {
                         if input.read(cx).focus_handle(cx).is_focused(window) {
@@ -462,47 +472,53 @@ impl Desktop {
                     ),
             )
             .child(
-                Button::new("market-category")
-                    .small()
+                div()
+                    .flex()
                     .flex_shrink_0()
-                    .max_w(px(184.))
-                    .label(label)
-                    .dropdown_caret(true)
-                    .accessibility_label(self.text("插件分类", "Plugin category"))
-                    .dropdown_menu(move |menu, _, _| {
-                        categories.iter().cloned().fold(menu, |menu, (id, label)| {
-                            let view = view.clone();
-                            menu.item(
-                                crate::chrome::choice_item(label, id == current, dark).on_click(
-                                    move |_, _, cx| {
-                                        let _ = view.update(cx, |this, cx| {
-                                            this.integration.market.category = id.clone();
-                                            this.integration.market.refilter();
-                                            cx.notify();
-                                        });
-                                    },
-                                ),
-                            )
-                        })
-                    }),
-            )
-            .child(
-                Button::new("market-installed")
-                    .small()
-                    .flex_shrink_0()
-                    .icon(IconName::CircleCheck)
-                    .label(self.text("仅已安装", "Installed only"))
-                    .when(market.installed_only, |button| {
-                        button
-                            .bg(rgb(tone.rgb(0x302b50, 0xede9ff)))
-                            .text_color(rgb(tone.rgb(0xd9d1ff, 0x523fa7)))
-                    })
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        let market = &mut this.integration.market;
-                        market.installed_only = !market.installed_only;
-                        market.refilter();
-                        cx.notify();
-                    })),
+                    .flex_wrap()
+                    .gap_2()
+                    .child(
+                        Button::new("market-category")
+                            .small()
+                            .flex_shrink_0()
+                            .max_w(px(184.))
+                            .label(label)
+                            .dropdown_caret(true)
+                            .accessibility_label(self.text("插件分类", "Plugin category"))
+                            .dropdown_menu(move |menu, _, _| {
+                                categories.iter().cloned().fold(menu, |menu, (id, label)| {
+                                    let view = view.clone();
+                                    menu.item(
+                                        crate::chrome::choice_item(label, id == current, dark)
+                                            .on_click(move |_, _, cx| {
+                                                let _ = view.update(cx, |this, cx| {
+                                                    this.integration.market.category = id.clone();
+                                                    this.integration.market.refilter();
+                                                    cx.notify();
+                                                });
+                                            }),
+                                    )
+                                })
+                            }),
+                    )
+                    .child(
+                        Button::new("market-installed")
+                            .small()
+                            .flex_shrink_0()
+                            .icon(IconName::CircleCheck)
+                            .label(self.text("仅已安装", "Installed only"))
+                            .when(market.installed_only, |button| {
+                                button
+                                    .bg(rgb(tone.rgb(0x302b50, 0xede9ff)))
+                                    .text_color(rgb(tone.rgb(0xd9d1ff, 0x523fa7)))
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let market = &mut this.integration.market;
+                                market.installed_only = !market.installed_only;
+                                market.refilter();
+                                cx.notify();
+                            })),
+                    ),
             )
     }
 
@@ -511,6 +527,7 @@ impl Desktop {
         index: usize,
         tone: ThemeTone,
         busy: bool,
+        compact: bool,
         cx: &mut Context<Self>,
     ) -> Div {
         let market = &self.integration.market;
@@ -621,10 +638,11 @@ impl Desktop {
             )
             .child(
                 div()
-                    .h(px(34.))
+                    .h(px(51.))
+                    .flex_shrink_0()
                     .overflow_hidden()
                     .line_height(px(17.))
-                    .line_clamp(2)
+                    .line_clamp(3)
                     .text_sm()
                     .text_color(muted)
                     .child(summary),
@@ -633,16 +651,19 @@ impl Desktop {
                 div()
                     .mt_auto()
                     .flex()
+                    .flex_shrink_0()
                     .items_center()
                     .gap_2()
                     .child(
                         div()
                             .flex_1()
+                            .min_w_0()
+                            .truncate()
                             .text_xs()
                             .text_color(muted)
                             .child(format!("v{version}")),
                     )
-                    .child(self.market_actions(index, installed, listing, busy, cx)),
+                    .child(self.market_actions(index, installed, listing, busy, compact, cx)),
             )
     }
 
@@ -652,21 +673,45 @@ impl Desktop {
         installed: Option<&PluginManifest>,
         listing: Option<&CatalogPlugin>,
         busy: bool,
+        compact: bool,
         cx: &mut Context<Self>,
     ) -> Div {
-        let actions = div().flex().items_center().gap_2();
+        let actions = div().flex().flex_shrink_0().items_center().gap_2();
         let candidate = listing.filter(|plugin| plugin.artifact().is_some());
         if let Some(installed) = installed {
             let settings_id = installed.id.clone();
             let id = installed.id.clone();
+            let settings_label = self.text("设置", "Settings");
+            let uninstall_label = self.text("卸载", "Uninstall");
+            let settings = if compact {
+                crate::chrome::icon_button(
+                    ("plugin-settings", index),
+                    IconName::Settings2,
+                    settings_label,
+                )
+            } else {
+                Button::new(("plugin-settings", index))
+                    .small()
+                    .ghost()
+                    .icon(IconName::Settings2)
+                    .label(settings_label)
+            };
+            let uninstall = if compact {
+                crate::chrome::icon_button(
+                    ("remove-plugin", index),
+                    IconName::Trash,
+                    uninstall_label,
+                )
+            } else {
+                Button::new(("remove-plugin", index))
+                    .small()
+                    .ghost()
+                    .label(uninstall_label)
+            };
             return actions
                 .child(
-                    Button::new(("plugin-settings", index))
-                        .small()
-                        .ghost()
+                    settings
                         .disabled(busy)
-                        .icon(IconName::Settings2)
-                        .label(self.text("设置", "Settings"))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.open_plugin_defaults(&settings_id, window, cx);
                         })),
@@ -692,11 +737,8 @@ impl Desktop {
                     },
                 )
                 .child(
-                    Button::new(("remove-plugin", index))
-                        .small()
-                        .ghost()
+                    uninstall
                         .disabled(busy)
-                        .label(self.text("卸载", "Uninstall"))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.package_action(PackageAction::Remove(id.clone()), cx)
                         })),
@@ -744,10 +786,19 @@ fn market_icon(icon: IconName, cyan: bool, tone: ThemeTone) -> Div {
 
 #[cfg(test)]
 mod tests {
-    use super::Market;
+    use super::{Market, market_columns};
     use ndm_core::plugins::{InstalledPlugin, PluginManifest};
     use serde_json::json;
     use std::path::PathBuf;
+
+    #[test]
+    fn columns_allow_room_for_plugin_actions_and_descriptions() {
+        assert_eq!(market_columns(440.), 1);
+        assert_eq!(market_columns(720.), 1);
+        assert_eq!(market_columns(756.), 2);
+        assert_eq!(market_columns(1140.), 3);
+        assert_eq!(market_columns(1800.), 3);
+    }
 
     #[test]
     fn search_combines_both_languages_category_and_installation_filters() {

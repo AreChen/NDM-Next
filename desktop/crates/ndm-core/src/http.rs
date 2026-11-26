@@ -153,7 +153,7 @@ pub struct ProgressSnapshot {
     pub total: Option<u64>,
     /// Advisory total used for display. Keep size and integrity checks on exact values.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub estimated_total: Option<u64>,
+    pub estimated_total: Option<std::num::NonZeroU64>,
     pub merged: u64,
     pub saved: u64,
     pub save_total: Option<u64>,
@@ -240,10 +240,9 @@ impl DownloadProgress {
                 .total_known
                 .load(Ordering::Acquire)
                 .then(|| self.0.total.load(Ordering::Relaxed)),
-            estimated_total: match self.0.estimated_total.load(Ordering::Relaxed) {
-                0 => None,
-                bytes => Some(bytes),
-            },
+            estimated_total: std::num::NonZeroU64::new(
+                self.0.estimated_total.load(Ordering::Relaxed),
+            ),
             segments: self
                 .0
                 .segments
