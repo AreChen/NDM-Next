@@ -48,7 +48,7 @@ pub enum EngineOutcome {
 }
 
 pub(crate) enum EngineUpdate {
-    Progress(TransferProgress),
+    Progress(TransferProgress, Option<u64>),
     Task(TaskUpdate),
 }
 
@@ -88,7 +88,7 @@ impl PluginEngine {
         mut progress: impl FnMut(TransferProgress),
     ) -> Result<EngineOutcome, EngineError> {
         self.download_with_updates(request, cancel, |update| {
-            if let EngineUpdate::Progress(update) = update {
+            if let EngineUpdate::Progress(update, _) = update {
                 progress(update);
             }
         })
@@ -266,7 +266,10 @@ impl Channel {
     ) -> Result<Terminal, EngineError> {
         loop {
             match self.receive().await? {
-                EngineMessage::Progress { progress } => update(EngineUpdate::Progress(progress)),
+                EngineMessage::Progress {
+                    progress,
+                    estimated_total,
+                } => update(EngineUpdate::Progress(progress, estimated_total)),
                 EngineMessage::TaskUpdate { update: task } => update(EngineUpdate::Task(task)),
                 EngineMessage::Completed { files } => return Ok(Terminal::Completed(files)),
                 EngineMessage::Inspected { source } => return Ok(Terminal::Inspected(source)),

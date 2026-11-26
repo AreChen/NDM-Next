@@ -103,6 +103,7 @@ struct ProgressState {
     phase: AtomicU8,
     total: AtomicU64,
     total_known: AtomicBool,
+    estimated_total: AtomicU64,
     segments: RwLock<Vec<Arc<SegmentState>>>,
     peers: RwLock<Option<ndm_plugin_sdk::PeerStats>>,
     http: RwLock<Option<HttpDiagnostics>>,
@@ -150,6 +151,9 @@ pub struct ProgressSnapshot {
     /// Bytes actually received across attempts, including rereads and excluding restored data.
     pub transferred_total: u64,
     pub total: Option<u64>,
+    /// Advisory total used for display. Keep size and integrity checks on exact values.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub estimated_total: Option<u64>,
     pub merged: u64,
     pub saved: u64,
     pub save_total: Option<u64>,
@@ -190,7 +194,15 @@ impl DownloadProgress {
         *self.0.peers.write().unwrap() = Some(stats);
     }
 
-    pub(crate) fn engine_progress(&self, progress: ndm_plugin_sdk::TransferProgress) {
+    pub(crate) fn engine_progress(
+        &self,
+        progress: ndm_plugin_sdk::TransferProgress,
+        estimated_total: Option<u64>,
+    ) {
+        let estimate = estimated_total
+            .filter(|&bytes| progress.total.is_none() && bytes >= progress.downloaded)
+            .unwrap_or_default();
+        self.0.estimated_total.store(estimate, Ordering::Relaxed);
         self.set_total(progress.total);
         self.0
             .downloaded
@@ -228,6 +240,10 @@ impl DownloadProgress {
                 .total_known
                 .load(Ordering::Acquire)
                 .then(|| self.0.total.load(Ordering::Relaxed)),
+            estimated_total: match self.0.estimated_total.load(Ordering::Relaxed) {
+                0 => None,
+                bytes => Some(bytes),
+            },
             segments: self
                 .0
                 .segments

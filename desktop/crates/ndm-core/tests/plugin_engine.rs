@@ -131,6 +131,7 @@ fn fixture_engine() {
                         total: Some(9),
                         transferred: 9,
                     },
+                    estimated_total: None,
                 },
             )
             .unwrap();

@@ -24,9 +24,20 @@ impl Worker {
     }
 
     pub fn progress(&self, progress: TransferProgress) -> io::Result<()> {
+        self.progress_with_estimate(progress, None)
+    }
+
+    pub fn progress_with_estimate(
+        &self,
+        progress: TransferProgress,
+        estimated_total: Option<u64>,
+    ) -> io::Result<()> {
         write_message(
             &mut io::stdout().lock(),
-            &EngineMessage::Progress { progress },
+            &EngineMessage::Progress {
+                progress,
+                estimated_total,
+            },
         )
     }
 

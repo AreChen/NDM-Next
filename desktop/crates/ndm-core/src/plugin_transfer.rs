@@ -78,9 +78,9 @@ async fn transfer(
     let mut resolved = false;
     let outcome = engine
         .download_with_updates(request, cancel, |update| match update {
-            EngineUpdate::Progress(update) => {
+            EngineUpdate::Progress(update, estimated_total) => {
                 progress.resume_downloading();
-                progress.engine_progress(update);
+                progress.engine_progress(update, estimated_total);
             }
             EngineUpdate::Task(TaskUpdate::Finalizing) => progress.finalize(),
             EngineUpdate::Task(TaskUpdate::PeerStats(stats)) => progress.engine_peers(stats),
@@ -157,11 +157,14 @@ async fn transfer(
         )
         .await?
     };
-    progress.engine_progress(TransferProgress {
-        downloaded: bytes,
-        total: Some(bytes),
-        transferred: progress.snapshot().transferred,
-    });
+    progress.engine_progress(
+        TransferProgress {
+            downloaded: bytes,
+            total: Some(bytes),
+            transferred: progress.snapshot().transferred,
+        },
+        None,
+    );
     store.complete(id, &output, task.request.expected_size.is_some())?;
     if plugin.manifest.capabilities.share_completed
         && workspace

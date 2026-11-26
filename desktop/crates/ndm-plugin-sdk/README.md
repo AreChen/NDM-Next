@@ -18,7 +18,7 @@ interface.
 | OnesDM to engine | `{"type":"inspect","request":{…}}` | Resolve a file list in a disposable workspace. Only resolve metadata. |
 | Engine to OnesDM | `{"type":"inspected","source":{"revision":"…","files":[{"id":0,"path":"video.mp4","size":42}]}}` | Return file IDs, display paths, and sizes in bytes for an immutable source revision. |
 | OnesDM to engine | `{"type":"share","request":{…},"output":"/saved/output"}` | Verify and share available pieces from the published file or directory. Open output with read-only access. |
-| Engine to OnesDM | `{"type":"progress","progress":{"downloaded":42,"total":null,"transferred":42}}` | Report byte counts. Use `null` for the total if it is unknown. |
+| Engine to OnesDM | `{"type":"progress","progress":{"downloaded":42,"total":null,"transferred":42},"estimated_total":120}` | Report byte counts. Use `null` for unknown exact sizes and optionally call `Worker::progress_with_estimate` to include an estimate for display. |
 | Engine to OnesDM | `{"type":"task_update","update":{"kind":"title","title":"Example video"}}` | Report the resolved title once it is available. |
 | Engine to OnesDM | `{"type":"task_update","update":{"kind":"finalizing"}}` | Report local media processing. The next byte progress message returns the task to downloading. |
 | OnesDM to engine | `{"type":"stop"}` | Stop work and persist a checkpoint if the engine can resume. |

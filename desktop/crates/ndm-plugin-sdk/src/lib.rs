@@ -191,6 +191,9 @@ pub enum EngineMessage {
     },
     Progress {
         progress: TransferProgress,
+        /// Approximate byte count for display when the exact size is unavailable.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        estimated_total: Option<u64>,
     },
     TaskUpdate {
         update: TaskUpdate,
