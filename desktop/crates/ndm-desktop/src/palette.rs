@@ -154,6 +154,22 @@ impl ThemeTone {
         ]
     }
 
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+    pub fn browser_appearance(&self) -> ndm_host::appearance::Appearance {
+        use ndm_host::appearance::{Appearance, Mode};
+
+        Appearance {
+            mode: if self.darkness == 1. {
+                Mode::Dark
+            } else {
+                Mode::Light
+            },
+            primary: self.accents[0],
+            secondary: self.accents[1],
+            surface: self.surface(0x151b2c, 0xfcfdff),
+        }
+    }
+
     // Artwork uses violet for primary surfaces and cyan/blue for secondary ones.
     // Map each tint inside its original channel range to retain light/dark contrast.
     // Warm warning, red error and green completion colors keep their meaning.
@@ -240,6 +256,48 @@ fn contrasting_ink(background: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn browser_appearance_uses_the_effective_mode_and_selected_palette() {
+        use ndm_host::appearance::Mode;
+
+        let custom = CustomPalette {
+            primary: 0x912620,
+            secondary: Some(0x12bdee),
+            surface: Some(0xe0b120),
+            ..CustomPalette::default()
+        };
+        for (dark, mode) in [(true, Mode::Dark), (false, Mode::Light)] {
+            for scheme in ColorScheme::ALL {
+                let tone = ThemeTone::new(dark, scheme, custom, DownloadColors::default());
+                let appearance = tone.browser_appearance();
+                let [primary, secondary] = scheme.accents(custom);
+                assert_eq!(appearance.mode, mode);
+                assert_eq!(
+                    (appearance.primary, appearance.secondary),
+                    (primary, secondary)
+                );
+                assert_eq!(appearance.surface, tone.surface(0x151b2c, 0xfcfdff));
+            }
+        }
+        let automatic = ThemeTone::new(
+            false,
+            ColorScheme::Custom,
+            CustomPalette::default(),
+            DownloadColors::default(),
+        );
+        let changed = ThemeTone::new(
+            false,
+            ColorScheme::Custom,
+            custom,
+            DownloadColors::default(),
+        );
+        assert_ne!(
+            automatic.browser_appearance().surface,
+            changed.browser_appearance().surface
+        );
+    }
 
     #[test]
     fn silver_neutralizes_surfaces_and_preserves_semantic_colors_and_alpha() {

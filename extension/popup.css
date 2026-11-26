@@ -14,7 +14,7 @@ main { display: grid; gap: 10px; padding: 13px; }
 #siteState { margin-top: 3px; }
 .resource-action { display: flex; align-items: center; width: 100%; gap: 9px; margin-top: 10px; min-height: 36px; }
 .resource-action > span:first-child { margin-right: auto; }
-.resource-action .badge { background: #ffffff2e; color: #fff; }
+.resource-action .badge { background: transparent; border: 1px solid color-mix(in srgb, currentColor 45%, transparent); color: inherit; }
 .resources .page-actions { margin-top: 8px; }
 .recent { display: grid; margin-top: 7px; }
 .recent > div { display: flex; align-items: center; gap: 7px; padding: 4px 0; }
@@ -31,7 +31,7 @@ main { display: grid; gap: 10px; padding: 13px; }
 .switch > span { pointer-events: none; width: 100%; border-radius: 20px; background: var(--line); transition: background .16s; }
 .switch > span::before { content: ""; display: block; width: 13px; height: 13px; margin: 3px; border-radius: 50%; background: #fff; transition: transform .16s; }
 .switch input:checked + span { background: var(--primary); }
-.switch input:checked + span::before { transform: translateX(13px); }
+.switch input:checked + span::before { background: var(--primary-ink); transform: translateX(13px); }
 .switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
 .switch input:disabled + span { opacity: .48; }
 .disclosure summary { display: flex; align-items: center; gap: 8px; padding: 9px 11px; font-weight: 650; font-size: 13px; cursor: pointer; list-style: none; }

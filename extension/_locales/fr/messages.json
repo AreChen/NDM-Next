@@ -56,6 +56,15 @@
   "settings": {
     "message": "Paramètres"
   },
+  "appearance": {
+    "message": "Apparence"
+  },
+  "followDesktop": {
+    "message": "Suivre OnesDM"
+  },
+  "followSystem": {
+    "message": "Suivre le système"
+  },
   "versions": {
     "message": "Versions et extensions"
   },

@@ -11,10 +11,15 @@
   --success: light-dark(#15725e, #62dbc0);
   --error: light-dark(#b42949, #ff92a3);
   --primary: #6543cc;
+  --primary-ink: #fff;
+  --primary-hover: #7552db;
   font: 14px/1.42 system-ui, -apple-system, sans-serif;
   color: var(--text);
   background: var(--page);
 }
+:root[data-appearance="light"] { color-scheme: light; }
+:root[data-appearance="dark"] { color-scheme: dark; }
+:root[data-appearance] { --primary-hover: var(--primary); }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 body, h1, h2, p { margin: 0; }
@@ -39,10 +44,10 @@ button:disabled { opacity: .48; cursor: default; }
 input[type="checkbox"] { accent-color: var(--primary); margin: 0; }
 .primary {
   background: var(--primary);
-  color: #fff;
+  color: var(--primary-ink);
   border-color: transparent;
 }
-.primary:hover:not(:disabled) { background: #7552db; }
+.primary:hover:not(:disabled) { background: var(--primary-hover); }
 .quiet { background: var(--surface); }
 .surface { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
 .muted, .label, .small, .message, .version { color: var(--muted); }

@@ -56,6 +56,15 @@
   "settings": {
     "message": "설정"
   },
+  "appearance": {
+    "message": "디자인"
+  },
+  "followDesktop": {
+    "message": "OnesDM 설정 따르기"
+  },
+  "followSystem": {
+    "message": "시스템 설정 따르기"
+  },
   "versions": {
     "message": "버전 및 플러그인"
   },

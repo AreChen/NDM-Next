@@ -10,7 +10,7 @@
 <body>
 <main>
   <header class="app-header">
-    <picture><source media="(prefers-color-scheme: light)" srcset="icons/icon-light-128.png"><img src="icons/icon-48.png" width="36" height="36" alt=""></picture>
+    <picture><source data-light-icon media="(prefers-color-scheme: light)" srcset="icons/icon-light-128.png"><img src="icons/icon-48.png" width="36" height="36" alt=""></picture>
     <h1>OnesDM</h1>
     <span id="status" class="status" data-state="waiting" role="status" data-i18n="connecting">Connecting…</span>
   </header>
@@ -45,6 +45,7 @@
     <summary data-i18n="settings">Settings</summary>
     <div class="settings-body">
       <label class="field"><span data-i18n="language">Language</span><select id="language"></select></label>
+      <label class="field"><span data-i18n="appearance">Appearance</span><select id="appearance" disabled><option value="desktop" data-i18n="followDesktop">Follow OnesDM</option><option value="system" data-i18n="followSystem">Follow system</option></select></label>
       <label class="field"><span data-i18n="backend">Download manager</span><select id="backend"><option value="next">OnesDM</option><option value="neatdm">Neat Download Manager</option></select></label>
       <p class="muted small" data-i18n="backendHint">Neat Download Manager uses its original connection.</p>
       <label class="field"><span data-i18n="captureMode">Takeover mode</span><select id="captureMode"><option value="automatic" data-i18n="automatic">Automatic</option><option value="confirm" data-i18n="confirm">Ask for each download</option></select></label>
@@ -77,6 +78,7 @@
 </main>
 <script src="rules.js"></script>
 <script src="i18n.js"></script>
+<script src="appearance.js"></script>
 <script src="media-ui.js"></script>
 <script src="media-library.js"></script>
 <script src="popup.js"></script>

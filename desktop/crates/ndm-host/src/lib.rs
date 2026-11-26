@@ -11,6 +11,8 @@ use reqwest::Url;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+pub mod appearance;
 pub mod characters;
 pub mod harness;
 pub mod web;

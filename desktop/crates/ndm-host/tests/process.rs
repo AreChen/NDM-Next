@@ -243,6 +243,114 @@ fn host_process_exchanges_framed_messages_and_reopens_durable_storage() {
     assert!(child.wait().unwrap().success());
 }
 
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+#[test]
+fn native_appearance_queries_and_streams_only_the_running_desktop_palette() {
+    use ndm_host::appearance::{Appearance, Mode, Publisher};
+
+    #[cfg(target_os = "macos")]
+    let dir = tempfile::tempdir_in("/tmp").unwrap(); // Keep the Unix socket path short.
+    #[cfg(not(target_os = "macos"))]
+    let dir = tempfile::tempdir().unwrap();
+    let mut command = Command::new(HOST_BINARY);
+    #[cfg(target_os = "linux")]
+    let profile = {
+        command.env("XDG_DATA_HOME", dir.path());
+        dir.path().join("ndm-next")
+    };
+    #[cfg(target_os = "macos")]
+    let profile = {
+        command.env("HOME", dir.path());
+        dir.path().join("Library/Application Support/NDM Next")
+    };
+    #[cfg(windows)]
+    let profile = {
+        command.env("LOCALAPPDATA", dir.path());
+        dir.path().join("NDM Next")
+    };
+    command.stdin(Stdio::piped()).stdout(Stdio::piped());
+    let send = |stdin: &mut std::process::ChildStdin, kind: &str| {
+        write_frame(stdin, &serde_json::to_vec(&json!({"type":kind})).unwrap()).unwrap();
+    };
+    let receive = |stdout: &mut std::process::ChildStdout| -> Value {
+        serde_json::from_slice(&read_frame(stdout).unwrap().expect("native reply")).unwrap()
+    };
+    let unavailable = json!({"ok":false,"error":"appearance_unavailable"});
+    let mut host = command.spawn().unwrap();
+    let mut input = host.stdin.take().unwrap();
+    let mut output = host.stdout.take().unwrap();
+    send(&mut input, "appearance");
+    assert_eq!(receive(&mut output), unavailable);
+    assert!(
+        !profile.exists(),
+        "an appearance query must not create the profile"
+    );
+
+    fs::create_dir_all(&profile).unwrap();
+    let preferences = profile.join("preferences.json");
+    fs::write(
+        &preferences,
+        br#"{"proxy_password":"secret-test-value","theme":"Dark"}"#,
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_io()
+        .build()
+        .unwrap();
+    let initial = Appearance {
+        mode: Mode::Light,
+        primary: 0x367aed,
+        secondary: 0x1ebbcf,
+        surface: 0xf2f8fc,
+    };
+    let publisher = Publisher::start(&profile, &runtime, initial).unwrap();
+    send(&mut input, "appearance");
+    let response = json!({"ok":true,"appearance":{"mode":"light","primary":0x367aed,"secondary":0x1ebbcf,"surface":0xf2f8fc}});
+    assert_eq!(receive(&mut output), response);
+
+    send(&mut input, "watch_appearance");
+    assert_eq!(receive(&mut output), response);
+    publisher.update(initial);
+    let changed = Appearance {
+        mode: Mode::Dark,
+        primary: 0x102030,
+        secondary: 0xfbdec0,
+        surface: 0x202830,
+    };
+    publisher.update(changed);
+    assert_eq!(
+        receive(&mut output),
+        json!({"ok":true,"appearance":changed})
+    );
+
+    let mut second_host = command.spawn().unwrap();
+    let mut second_input = second_host.stdin.take().unwrap();
+    let mut second_output = second_host.stdout.take().unwrap();
+    send(&mut second_input, "watch_appearance");
+    assert_eq!(
+        receive(&mut second_output),
+        json!({"ok":true,"appearance":changed})
+    );
+    drop(second_input);
+    assert!(second_host.wait().unwrap().success());
+
+    drop(publisher);
+    assert_eq!(receive(&mut output), unavailable);
+    drop(input);
+    assert!(host.wait().unwrap().success());
+
+    // A stopped desktop and an older desktop without a publisher agree on fallback.
+    let mut host = command.spawn().unwrap();
+    let mut input = host.stdin.take().unwrap();
+    let mut output = host.stdout.take().unwrap();
+    send(&mut input, "watch_appearance");
+    assert_eq!(receive(&mut output), unavailable);
+    assert!(host.wait().unwrap().success());
+    assert!(!profile.join("tasks.db").exists());
+    assert!(!profile.join("updating.lock").exists());
+}
+
 #[cfg(windows)]
 #[test]
 fn process_status_detects_a_desktop_instance_for_the_same_profile() {

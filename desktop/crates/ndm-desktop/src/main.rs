@@ -48,6 +48,12 @@ fn application_assets() -> impl AssetSource {
     branding::Assets
 }
 
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+struct BrowserAppearance(ndm_host::appearance::Publisher);
+
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+impl Global for BrowserAppearance {}
+
 pub(crate) fn apply_theme(preferences: &Preferences, cx: &mut App) {
     let mode = match preferences.theme {
         Theme::Dark => ThemeMode::Dark,
@@ -73,6 +79,10 @@ pub(crate) fn apply_theme(preferences: &Preferences, cx: &mut App) {
     cx.set_global(tone);
     if preferences.color_scheme != preferences::ColorScheme::Classic {
         ComponentTheme::update(cx, |theme| tone.style_controls(&mut theme.colors));
+    }
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+    if let Some(publisher) = cx.try_global::<BrowserAppearance>() {
+        publisher.0.update(tone.browser_appearance());
     }
 }
 
@@ -219,6 +229,15 @@ fn main() {
             .detach();
         }
         apply_theme(&preferences, cx);
+        #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+        match ndm_host::appearance::Publisher::start(
+            &data_dir,
+            &runtime,
+            palette::ThemeTone::current(cx).browser_appearance(),
+        ) {
+            Ok(publisher) => cx.set_global(BrowserAppearance(publisher)),
+            Err(error) => eprintln!("Could not share desktop appearance: {error}"),
+        };
         let bounds = Bounds::centered(None, size(px(1000.), px(500.)), cx);
         // Keep browser-triggered launches in the background. Linux GPUI maps
         // the main window during creation, then the view minimizes it.

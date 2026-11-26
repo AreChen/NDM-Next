@@ -56,6 +56,15 @@
   "settings": {
     "message": "设置"
   },
+  "appearance": {
+    "message": "外观"
+  },
+  "followDesktop": {
+    "message": "跟随 OnesDM"
+  },
+  "followSystem": {
+    "message": "跟随系统"
+  },
   "versions": {
     "message": "版本与插件"
   },

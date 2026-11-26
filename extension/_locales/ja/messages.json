@@ -56,6 +56,15 @@
   "settings": {
     "message": "設定"
   },
+  "appearance": {
+    "message": "外観"
+  },
+  "followDesktop": {
+    "message": "OnesDM に合わせる"
+  },
+  "followSystem": {
+    "message": "システムに合わせる"
+  },
   "versions": {
     "message": "バージョンとプラグイン"
   },

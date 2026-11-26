@@ -57,31 +57,85 @@ fn configured_limits(data_dir: &std::path::Path) -> ndm_core::DownloadLimits {
 
 fn run() -> io::Result<()> {
     let data_dir = data_directory();
-    if ndm_core::desktop_installation_active(&data_dir)? {
-        return Err(io::Error::new(
-            io::ErrorKind::WouldBlock,
-            "installation is in progress",
-        ));
-    }
-    let store = Arc::new(Store::open(&data_dir.join("tasks.db")).map_err(io::Error::other)?);
+    let mut store = None;
     let executable = std::env::current_exe()?.with_file_name(if cfg!(windows) {
         "ndm-desktop.exe"
     } else {
         "ndm-desktop"
     });
     let mut input = io::stdin().lock();
-    let mut output = io::stdout().lock();
     while let Some(message) = read_frame(&mut input)? {
+        let request: Value = serde_json::from_slice(&message).unwrap_or(Value::Null);
+        #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+        if let Some(kind @ ("appearance" | "watch_appearance")) =
+            request.get("type").and_then(Value::as_str)
+        {
+            if request.as_object().is_some_and(|object| object.len() != 1) {
+                write_frame(
+                    &mut io::stdout().lock(),
+                    br#"{"ok":false,"error":"invalid_request"}"#,
+                )?;
+                continue;
+            }
+            if kind == "watch_appearance" {
+                return watch_appearance(&data_dir, &mut input);
+            }
+            let appearance = ndm_host::appearance::connect(&data_dir)
+                .and_then(|mut stream| ndm_host::appearance::read(&mut stream))
+                .ok()
+                .flatten();
+            write_appearance(&mut io::stdout().lock(), appearance)?;
+            continue;
+        }
         if ndm_core::desktop_installation_active(&data_dir)? {
             return Ok(());
         }
-        let host = Host::new(store.clone(), configured_downloads(&data_dir));
-        let request: Value = serde_json::from_slice(&message).unwrap_or(Value::Null);
+        let store = match &store {
+            Some(store) => store,
+            None => store.insert(Arc::new(
+                Store::open(&data_dir.join("tasks.db")).map_err(io::Error::other)?,
+            )),
+        };
+        let host = Host::new(Arc::clone(store), configured_downloads(&data_dir));
         let result = desktop_message(&host, &data_dir, &executable, request);
         let response = serde_json::to_vec(&result).map_err(io::Error::other)?;
-        write_frame(&mut output, &response)?;
+        write_frame(&mut io::stdout().lock(), &response)?;
     }
     Ok(())
+}
+
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+fn write_appearance(
+    output: &mut impl io::Write,
+    appearance: Option<ndm_host::appearance::Appearance>,
+) -> io::Result<()> {
+    let result = match appearance {
+        Some(value) => json!({"ok":true,"appearance":value}),
+        None => json!({"ok":false,"error":"appearance_unavailable"}),
+    };
+    write_frame(output, &serde_json::to_vec(&result)?)
+}
+
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+fn watch_appearance(profile: &std::path::Path, input: &mut impl io::Read) -> io::Result<()> {
+    let Ok(mut stream) = ndm_host::appearance::connect(profile) else {
+        return write_appearance(&mut io::stdout().lock(), None);
+    };
+    std::thread::Builder::new().spawn(move || {
+        let mut output = io::stdout().lock();
+        while let Ok(Some(appearance)) = ndm_host::appearance::read(&mut stream) {
+            if write_appearance(&mut output, Some(appearance)).is_err() {
+                return;
+            }
+        }
+        let _ = write_appearance(&mut output, None);
+    })?;
+    // Chrome closes stdin when the window disconnects. End this dedicated
+    // host session even if the desktop has no changes to send.
+    match input.read_exact(&mut [0]) {
+        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Ok(()),
+        result => result,
+    }
 }
 
 fn desktop_message(

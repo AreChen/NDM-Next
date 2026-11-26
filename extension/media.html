@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>OnesDM · Page resources</title>
   <link rel="icon" href="icons/icon-32.png">
-  <link rel="icon" media="(prefers-color-scheme: light)" href="icons/icon-light-128.png">
+  <link rel="icon" data-light-icon media="(prefers-color-scheme: light)" href="icons/icon-light-128.png">
   <link rel="stylesheet" href="ui.css">
   <link rel="stylesheet" href="media.css">
 </head>
 <body>
 <header class="header">
-  <picture><source media="(prefers-color-scheme: light)" srcset="icons/icon-light-128.png"><img src="icons/icon-48.png" width="30" height="30" alt=""></picture>
+  <picture><source data-light-icon media="(prefers-color-scheme: light)" srcset="icons/icon-light-128.png"><img src="icons/icon-48.png" width="30" height="30" alt=""></picture>
   <div class="heading"><h1 data-i18n="title">Page resources</h1><p id="source" class="muted"></p></div>
   <button id="refresh" class="quiet" type="button" data-i18n="refresh">Refresh</button>
 </header>
@@ -44,6 +44,7 @@
 </footer>
 <script src="rules.js"></script>
 <script src="i18n.js"></script>
+<script src="appearance.js"></script>
 <script src="media-ui.js"></script>
 <script src="media-library.js"></script>
 <script src="previews.js"></script>
