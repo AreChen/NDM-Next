@@ -18,7 +18,7 @@ const EDGE_EXTENSION_URL: &str =
     "https://microsoftedge.microsoft.com/addons/detail/ndm-next/hiblommiheggidolemmnnlocmocebckp";
 const EXTENSION_GUIDE_URL: &str =
     "https://github.com/AreChen/OnesDM/blob/main/docs/extension-install.md";
-const USER_AGENT_PRESETS: [(&str, &str); 3] = [
+const USER_AGENT_PRESETS: [(&str, &str); 5] = [
     ("Chrome · Windows", ndm_core::CHROME_USER_AGENT),
     (
         "Firefox · Windows",
@@ -27,6 +27,14 @@ const USER_AGENT_PRESETS: [(&str, &str); 3] = [
     (
         "Safari · macOS",
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15",
+    ),
+    (
+        "Safari · iPhone",
+        ndm_host::web::UserAgentProfile::IphoneSafari.value(),
+    ),
+    (
+        "Chrome · Android",
+        ndm_host::web::UserAgentProfile::AndroidChrome.value(),
     ),
 ];
 

@@ -1,6 +1,7 @@
 use super::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
@@ -12,16 +13,37 @@ pub struct SettingsPatch {
     pub ui_animations: Option<bool>,
     pub cache_retention_days: Option<u32>,
     pub download_directory: Option<String>,
+    pub cache_directory: Option<String>,
     pub download_route: Option<crate::ProxyMode>,
     pub tun_direct_exit: Option<String>,
+    pub tun_direct_port: Option<u16>,
     pub use_saved_proxy: Option<bool>,
+    pub proxy: Option<crate::ProxyOptions>,
     pub theme: Option<String>,
+    pub color_scheme: Option<String>,
+    pub theme_colors: Option<BTreeMap<String, Option<String>>>,
+    pub download_colors: Option<BTreeMap<String, Option<String>>>,
     pub language: Option<String>,
+    pub start_at_login: Option<bool>,
+    pub sidebar_collapsed: Option<bool>,
+    pub sidebar_width: Option<u16>,
 }
 
 pub const UI_LANGUAGES: [&str; 9] = [
     "en", "zh-CN", "zh-Hant", "ja", "ko", "es", "pt-BR", "fr", "de",
 ];
+pub const COLOR_SCHEMES: [&str; 6] = ["classic", "silver", "ocean", "forest", "sunset", "custom"];
+pub const THEME_COLOR_KEYS: [&str; 3] = ["primary", "secondary", "surface"];
+pub const DOWNLOAD_COLOR_KEYS: [&str; 5] =
+    ["completed", "failed", "paused", "downloading", "queued"];
+
+pub fn parse_rgb(value: &str) -> std::result::Result<u32, &'static str> {
+    let hex = value.strip_prefix('#').ok_or("Colors must use #RRGGBB.")?;
+    if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("Colors must use #RRGGBB.");
+    }
+    u32::from_str_radix(hex, 16).map_err(|_| "Colors must use #RRGGBB.")
+}
 
 impl SettingsPatch {
     pub fn validate(&self) -> std::result::Result<(), &'static str> {
@@ -45,6 +67,16 @@ impl SettingsPatch {
                 "Use an absolute download directory or an empty string for the system folder.",
             );
         }
+        if self.cache_directory.as_ref().is_some_and(|v| {
+            !v.is_empty() && (!Path::new(v).is_absolute() || v.chars().any(char::is_control))
+        }) {
+            return Err(
+                "Use an absolute cache directory or an empty string for the default cache.",
+            );
+        }
+        if self.tun_direct_exit.is_some() && self.tun_direct_port.is_some() {
+            return Err("Set either tun_direct_port or tun_direct_exit.");
+        }
         if self
             .tun_direct_exit
             .as_ref()
@@ -58,6 +90,52 @@ impl SettingsPatch {
             .is_some_and(|s| !matches!(s, "system" | "light" | "dark"))
         {
             return Err("Unknown theme.");
+        }
+        if self
+            .color_scheme
+            .as_deref()
+            .is_some_and(|s| !COLOR_SCHEMES.contains(&s))
+        {
+            return Err("Unknown color scheme.");
+        }
+        for (patch, keys) in [
+            (self.theme_colors.as_ref(), THEME_COLOR_KEYS.as_slice()),
+            (
+                self.download_colors.as_ref(),
+                DOWNLOAD_COLOR_KEYS.as_slice(),
+            ),
+        ] {
+            if let Some(patch) = patch {
+                for (key, value) in patch {
+                    if !keys.contains(&key.as_str()) {
+                        return Err("Unknown color role.");
+                    }
+                    if let Some(color) = value {
+                        parse_rgb(color)?;
+                    }
+                }
+            }
+        }
+        if self
+            .sidebar_width
+            .is_some_and(|n| !(160..=320).contains(&n))
+        {
+            return Err("Expanded sidebar width must be 160–320.");
+        }
+        if let Some(proxy) = &self.proxy {
+            let invalid_text =
+                |value: &str| value.len() > 1024 || value.chars().any(char::is_control);
+            if invalid_text(&proxy.url)
+                || proxy.username.as_deref().is_some_and(invalid_text)
+                || proxy.password.as_deref().is_some_and(invalid_text)
+                || if proxy.url.is_empty() {
+                    proxy.username.is_some() || proxy.password.is_some()
+                } else {
+                    proxy.validate().is_err()
+                }
+            {
+                return Err("Use an HTTP(S) proxy URL and provide credentials separately.");
+            }
         }
         if self
             .language

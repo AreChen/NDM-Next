@@ -20,8 +20,8 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     DownloadProgress, Error, NewTask, ProxyOptions, Result, Store, TaskId,
     http::{
-        RateLimiter, network_client, parse_content_range, publish_download, request_headers,
-        safe_filename, send,
+        RateLimiter, media_headers, network_client, parse_content_range, publish_download,
+        request_headers, safe_filename, send_media,
     },
     media::{LocalInput, LocalTools, remux_local},
 };
@@ -138,10 +138,10 @@ impl Network {
         limit: usize,
         etag: Option<&str>,
     ) -> Result<Fetched> {
-        let mut request = self.client.get(url.clone());
-        if url.origin() == self.origin.origin() {
-            request = request.headers(self.headers.clone());
-        }
+        let mut request =
+            self.client
+                .get(url.clone())
+                .headers(media_headers(&self.headers, &self.origin, url));
         if let Some((start, end)) = range {
             if end.saturating_sub(start) >= limit as u64 {
                 return Err(Error::Dash);
@@ -151,7 +151,7 @@ impl Network {
         if let Some(etag) = etag {
             request = request.header(header::IF_NONE_MATCH, etag);
         }
-        let response = send(&self.client, request, &self.cancel).await?;
+        let response = send_media(&self.client, request, &self.cancel).await?;
         if response.status() == StatusCode::NOT_MODIFIED && etag.is_some() {
             return Ok(Fetched {
                 bytes: Vec::new(),

@@ -49,13 +49,22 @@ fn register_in(config: &Path, executable: &Path, extra_ids: &[String]) -> io::Re
         fs::create_dir_all(&directory)?;
         let destinations = HOST_NAMES.map(|name| directory.join(format!("{name}.json")));
         let mut browser_ids = ids.clone();
+        let mut obsolete_manifest = false;
         for (name, destination) in HOST_NAMES.into_iter().zip(&destinations) {
-            if let Ok(bytes) = fs::read(destination)
+            if let Ok(metadata) = fs::symlink_metadata(destination)
+                && metadata.is_file()
+                && metadata.len() <= 64 * 1024
+                && let Ok(bytes) = fs::read(destination)
                 && let Ok(old) = serde_json::from_slice::<Value>(&bytes)
                 && old["name"] == name
                 && old["type"] == "stdio"
                 && let Some(origins) = old["allowed_origins"].as_array()
             {
+                obsolete_manifest |= name == LEGACY_BROWSER_HOST_NAME
+                    && old["path"]
+                        .as_str()
+                        .and_then(|path| Path::new(path).file_name())
+                        .is_some_and(|file| file == "ndm-host");
                 for origin in origins {
                     if let Some(id) = origin
                         .as_str()
@@ -71,11 +80,16 @@ fn register_in(config: &Path, executable: &Path, extra_ids: &[String]) -> io::Re
                 }
             }
         }
-        for (name, destination) in HOST_NAMES.into_iter().zip(destinations) {
-            let manifest = crate::native_manifest(name, &executable, &browser_ids)?;
-            let mut file = tempfile::NamedTempFile::new_in(&directory)?;
-            serde_json::to_writer_pretty(&mut file, &manifest).map_err(io::Error::other)?;
-            file.persist(destination).map_err(io::Error::other)?;
+        let manifest = crate::native_manifest(BROWSER_HOST_NAME, &executable, &browser_ids)?;
+        let mut file = tempfile::NamedTempFile::new_in(&directory)?;
+        serde_json::to_writer_pretty(&mut file, &manifest).map_err(io::Error::other)?;
+        file.persist(&destinations[0]).map_err(io::Error::other)?;
+        if obsolete_manifest {
+            match fs::remove_file(&destinations[1]) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
         }
     }
     Ok(())
@@ -111,27 +125,29 @@ mod tests {
         }
         register_in(home.path(), &new, &[]).unwrap();
         for browser in BROWSERS {
-            for name in HOST_NAMES {
-                let file = home
-                    .path()
-                    .join(browser)
-                    .join("NativeMessagingHosts")
-                    .join(format!("{name}.json"));
-                let manifest: Value = serde_json::from_slice(&fs::read(file).unwrap()).unwrap();
-                assert_eq!(manifest["name"], name);
-                for id in DEFAULT_IDS.into_iter().chain([extra.as_str()]) {
-                    assert!(
-                        manifest["allowed_origins"]
-                            .as_array()
-                            .unwrap()
-                            .contains(&Value::String(format!("chrome-extension://{id}/")))
-                    );
-                }
-                assert_eq!(
-                    manifest["path"],
-                    fs::canonicalize(&new).unwrap().to_str().unwrap()
+            let path = home.path().join(browser).join("NativeMessagingHosts");
+            let manifest: Value = serde_json::from_slice(
+                &fs::read(path.join(format!("{BROWSER_HOST_NAME}.json"))).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(manifest["name"], BROWSER_HOST_NAME);
+            for id in DEFAULT_IDS.into_iter().chain([extra.as_str()]) {
+                assert!(
+                    manifest["allowed_origins"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&Value::String(format!("chrome-extension://{id}/")))
                 );
             }
+            assert_eq!(
+                manifest["path"],
+                fs::canonicalize(&new).unwrap().to_str().unwrap()
+            );
+            assert!(
+                !path
+                    .join(format!("{LEGACY_BROWSER_HOST_NAME}.json"))
+                    .exists()
+            );
         }
         assert!(register_in(home.path(), &new, &["*".into()]).is_err());
         assert!(!new.with_file_name("native-messaging-host.json").exists());

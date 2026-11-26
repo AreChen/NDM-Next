@@ -14,7 +14,6 @@ $hostName = 'com.ndmnext.test' + [guid]::NewGuid().ToString('N')
 $legacyHostName = "$hostName.legacy"
 $nativeHosts = @{
     $hostName = 'onesdm-native-messaging-host.json'
-    $legacyHostName = 'native-messaging-host.json'
 }
 $nativeHostRoots = @(
     'HKCU:\Software\Google\Chrome\NativeMessagingHosts',
@@ -76,6 +75,11 @@ try {
     $unpackedId = 'abcdefghijklmnopabcdefghijklmnop'
     & rtk proxy "$old\ndm-host.exe" --write-manifest $legacyHostName $unpackedId
     if ($LASTEXITCODE -ne 0) { throw 'Could not create previous integration fixture' }
+    foreach ($root in $nativeHostRoots) {
+        $legacyKey = "$root\$legacyHostName"
+        New-Item -Path $legacyKey -Force | Out-Null
+        Set-Item -LiteralPath $legacyKey -Value "$old\native-messaging-host.json"
+    }
     Set-ItemProperty -LiteralPath "HKCU:\$uninstallKey" -Name DisplayIcon -Value ('"' + $old + '\ndm-desktop.exe",0')
     $env:NDM_TEST_DESKTOP_WAIT = '1'
     $legacyProcess = Start-Process -FilePath (Get-Command rtk).Source -ArgumentList @('proxy', "$old\ndm-desktop.exe") -PassThru -WindowStyle Hidden
@@ -95,6 +99,7 @@ try {
         if ($relocatedManifest.allowed_origins -notcontains "chrome-extension://$unpackedId/") { throw "Relocation lost the previous unpacked extension ID for $name" }
         if ($relocatedManifest.allowed_origins -notcontains 'chrome-extension://caegebfdojcdlkkiaiokeoadefdooamd/') { throw "Relocation lost the default extension ID for $name" }
         foreach ($root in $nativeHostRoots) {
+            if (Test-Path -LiteralPath "$root\$legacyHostName") { throw "Upgrade left the obsolete browser host" }
             $registration = Get-Item -LiteralPath "$root\$name"
             if ($registration.GetValue('') -ne $path) { throw "Incorrect native host registration for $name" }
         }
@@ -148,7 +153,7 @@ try {
         $fixtureProcess.Dispose()
     }
     foreach ($root in $nativeHostRoots) {
-        foreach ($name in $nativeHosts.Keys) {
+        foreach ($name in (@($nativeHosts.Keys) + $legacyHostName)) {
             $key = "$root\$name"
             if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -Recurse -Force }
         }

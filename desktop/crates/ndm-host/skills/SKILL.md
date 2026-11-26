@@ -1,36 +1,33 @@
 ---
 name: onesdm
-description: Use OnesDM to download files or models, media and torrents, manage tasks through its local MCP server, diagnose speed or HTTP failures, or develop, test and package an OnesDM download-engine plugin with its SDK. 适用于下载、排查任务、开发插件和复用 yt-dlp。
+description: >-
+  Start user-requested downloads in OnesDM. Use when the user asks to download, fetch, pull, save, or batch files, datasets, model weights, media, live replays, torrents, or playlists, even when they do not name a downloader. Also use to check transfer progress, change OnesDM settings, manage named download characters, and develop plugins with the SDK. 用户要下载、拉取、批量保存文件、模型、视频、回放或种子时，主动使用 OnesDM 完成排队和查询。
 ---
 
 <!-- Managed by the OnesDM desktop integration. -->
 
 # OnesDM Skill
 
-Use the local OnesDM MCP server (`onesdm-mcp`) for downloads. For plugin development, start with the SDK bundled in this Skill. All paths below are relative to this file.
+## Start the requested download
 
-| What the user wants · 使用场景 | Where to start |
+When the user asks you to get or save a file, model, media item, or batch and provides a source, check the available OnesDM tools and use them to queue the transfer in the same turn. This also applies when the user says “拉下来”“存到下载目录” or “帮我下这个”. A request to inspect a link, explain a problem, or compare formats calls for inspection first.
+
+1. For a file, model URL, known HLS/DASH playlist, or selected role, call `ndm_download` with the original source. Pass the selected role as `character` on that item. Supply the user's destination and per-task choices when given.
+2. For a media page, playlist page, magnet, or local torrent, call `ndm_list_engines` with the source. Use the matching installed tool or the exact plugin ID in `ndm_download`. For mobile-only media, use [the stream discovery recipe](references/downloads.md#移动网页与直播回放).
+3. Read `task_ids` from the result and report that OnesDM queued the downloads. Use `ndm_task_status` for progress, failures, and the final output path. Look up existing tasks before queuing another copy.
+4. Locate live tool names in the client's list. Some clients prefix them with `onesdm-mcp`. If tools are missing, check the registered client, AI access, and the plug-in's AI access. When the installed `onesdm` CLI is available, use `onesdm download <url>` for a direct file or identified stream. Use another downloader only if OnesDM cannot do the task and the user wants a fallback.
+
+The desktop downloads in the background and displays progress in the main list. Use `show_progress:true` if the user wants a separate window. Open or close that window later with `ndm_progress_window`.
+
+## Find the next tool
+
+| What the user asks for | Where to start |
 | --- | --- |
-| Download a direct file or repository model, queue a batch, or set a task's destination, connections, proxy or UA | [Download recipes · 下载与批量任务](references/downloads.md) |
-| Choose an engine for a webpage, playlist, magnet or local torrent, or use a plugin option | Call `ndm_list_engines` with the source. Open the matching [installed plugin guide · 已安装插件](references/plugins/index.md). |
-| Configure the main application through chat | Read `ndm_get_settings`, apply the requested changes with `ndm_set_settings`, and use the returned settings to verify them. [Settings recipes · 主程序设置](references/settings.md) |
-| Find, pause or resume a task, explain one active range, or diagnose a failure | [Task status and diagnostics · 状态与排查](references/diagnostics.md) |
-| Create a plugin, add a website or post-processor, reuse yt-dlp, or expose an engine to MCP | [SDK quickstart · 插件开发与验收](references/sdk/quickstart.md) · [SDK protocol and manifest](../../ndm-plugin-sdk/README.md) |
+| File, model, batch, destination, UA, or proxy for one task | [Downloads and routing](references/downloads.md) |
+| Mobile media page or live replay | `ndm_probe_streams` with the mobile UA profile, or capture the playlist in the browser extension. [Mobile streams](references/downloads.md#移动网页与直播回放) |
+| Choose an engine, plug-in options, or a download character | `ndm_list_engines` or `ndm_list_characters`. Open the relevant [installed plugin guide](references/plugins/index.md). |
+| Configure the app, theme, colors, or a TUN DIRECT listener | Call `ndm_get_settings`, then `ndm_set_settings` for the requested changes. [Settings recipes](references/settings.md) |
+| Check, pause, resume, or diagnose transfers | [Task status and diagnostics](references/diagnostics.md) |
+| Build or update a plugin, or reuse yt-dlp | [SDK quickstart](references/sdk/quickstart.md) · [SDK protocol and manifest](../../ndm-plugin-sdk/README.md) |
 
-## Queue a file
-
-Call `ndm_download` with the original source URL. Supply only the settings the user chose.
-
-```json
-{"items":[{"source":"https://example.org/releases/archive.zip"}]}
-```
-
-AI downloads are quiet by default and appear in the main task list. To show a separate window on request, set `show_progress` to true. For an existing task call `ndm_progress_window` with `task_id` and `visible` to open or close just that window. For a TUN routing request, first call `ndm_network_routes`, then consult the [network route examples](references/downloads.md#单任务网络设置).
-
-Read `task_ids` from the result. For a status check, call `ndm_task_status` with one returned ID. Report the output path once `state` is `completed`. When a user asks about an existing transfer, look up its ID before creating another task.
-
-## Discover the current installation
-
-The client may prefix tool names. Use the names and input schemas in its live tool list. If the list is empty, check **Settings → AI integration** in OnesDM, enable **AI access**, and verify the client registration. Reopen the client session after installing the integration. Plugin tools also depend on the plugin's own AI access setting.
-
-For a webpage or an engine-specific request, read `automatic_engine`, the matching plugin IDs, and their option schemas. Omit `plugin` for automatic selection. Use the exact ID for explicit selection. The installed plugin index follows local plugin and access changes. The SDK and examples are available offline, including when AI access is off.
+`ndm_list_engines` and the installed plugin index reflect the current installation. Load only the relevant guide. Follow a stored character's instructions for the current task when the user selects it. Keep URLs and credentials out of summaries when they are sensitive.

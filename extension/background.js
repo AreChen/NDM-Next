@@ -11,7 +11,6 @@ const inlineDismissedTabs = new Set();
 const SETTING_KEYS = new Set(Object.keys(DEFAULTS));
 const CAPTURE_KEYS = ['enabled', 'media', 'backend'];
 const HOST = 'com.onesdm.host';
-const LEGACY_HOST = 'com.ndmnext.host'; // Remove with legacy host registration in 0.9.0.
 const RECOVERY_ALARM = 'ndm-next-recover';
 let captureEnabled = false;
 let mediaEnabled = false;
@@ -161,16 +160,7 @@ chrome.storage.onChanged?.addListener((changes,area) => {
   }
   for (const id of tabIds) notifyMedia(id);
 });
-async function native(message) {
-  try {
-    return await chrome.runtime.sendNativeMessage(HOST, message);
-  } catch (error) {
-    // A missing host never received the operation. Communication failures may
-    // occur after delivery, so they must not cause a second prepare or commit.
-    if (error?.message !== 'Specified native messaging host not found.') throw error;
-    return chrome.runtime.sendNativeMessage(LEGACY_HOST, message);
-  }
-}
+function native(message) { return chrome.runtime.sendNativeMessage(HOST, message); }
 function scheduleRecovery() {
   try { chrome.alarms?.create(RECOVERY_ALARM, {delayInMinutes:1}); } catch {}
   if (!recoveryTimer) {

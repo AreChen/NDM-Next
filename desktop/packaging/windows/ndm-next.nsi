@@ -25,7 +25,7 @@ RequestExecutionLevel user
 !ifndef NDM_HOST_NAME
   !define NDM_HOST_NAME "com.onesdm.host"
 !endif
-; Keep the old host registration for extensions installed before 1.4.1.
+; Import authorized extension IDs from the obsolete native host during upgrade.
 !ifdef NDM_TEST_INSTALL
   !define NDM_LEGACY_HOST_NAME "${NDM_HOST_NAME}.legacy"
 !else
@@ -66,7 +66,7 @@ RequestExecutionLevel user
 
 !macro UnregisterNativeHost ROOT HOST MANIFEST
   ReadRegStr $0 HKCU "Software\${ROOT}\NativeMessagingHosts\${HOST}" ""
-  StrCmp $0 "$INSTDIR\${MANIFEST}" 0 +2
+  StrCmp $0 "${MANIFEST}" 0 +2
   DeleteRegKey HKCU "Software\${ROOT}\NativeMessagingHosts\${HOST}"
 !macroend
 
@@ -336,9 +336,16 @@ Section "Install"
   !insertmacro RegisterNativeHost "Google\Chrome" "${NDM_HOST_NAME}" "${NDM_HOST_MANIFEST}"
   !insertmacro RegisterNativeHost "Chromium" "${NDM_HOST_NAME}" "${NDM_HOST_MANIFEST}"
   !insertmacro RegisterNativeHost "Microsoft\Edge" "${NDM_HOST_NAME}" "${NDM_HOST_MANIFEST}"
-  !insertmacro RegisterNativeHost "Google\Chrome" "${NDM_LEGACY_HOST_NAME}" "${NDM_LEGACY_HOST_MANIFEST}"
-  !insertmacro RegisterNativeHost "Chromium" "${NDM_LEGACY_HOST_NAME}" "${NDM_LEGACY_HOST_MANIFEST}"
-  !insertmacro RegisterNativeHost "Microsoft\Edge" "${NDM_LEGACY_HOST_NAME}" "${NDM_LEGACY_HOST_MANIFEST}"
+  !insertmacro UnregisterNativeHost "Google\Chrome" "${NDM_LEGACY_HOST_NAME}" "$INSTDIR\${NDM_LEGACY_HOST_MANIFEST}"
+  !insertmacro UnregisterNativeHost "Chromium" "${NDM_LEGACY_HOST_NAME}" "$INSTDIR\${NDM_LEGACY_HOST_MANIFEST}"
+  !insertmacro UnregisterNativeHost "Microsoft\Edge" "${NDM_LEGACY_HOST_NAME}" "$INSTDIR\${NDM_LEGACY_HOST_MANIFEST}"
+  StrCmp $OldDesktop "" old_browser_host_migrated
+  ${GetParent} "$OldDesktop" $1
+  !insertmacro UnregisterNativeHost "Google\Chrome" "${NDM_LEGACY_HOST_NAME}" "$1\${NDM_LEGACY_HOST_MANIFEST}"
+  !insertmacro UnregisterNativeHost "Chromium" "${NDM_LEGACY_HOST_NAME}" "$1\${NDM_LEGACY_HOST_MANIFEST}"
+  !insertmacro UnregisterNativeHost "Microsoft\Edge" "${NDM_LEGACY_HOST_NAME}" "$1\${NDM_LEGACY_HOST_MANIFEST}"
+  old_browser_host_migrated:
+  Delete "$INSTDIR\${NDM_LEGACY_HOST_MANIFEST}"
 
   !ifndef NDM_TEST_INSTALL
     Delete "$SMPROGRAMS\NDM Next\NDM Next.lnk"
@@ -388,12 +395,12 @@ Section "Uninstall"
   Abort
   uninstall_not_running:
   ; Do not remove a registry entry if another installation replaced it.
-  !insertmacro UnregisterNativeHost "Google\Chrome" "${NDM_HOST_NAME}" "${NDM_HOST_MANIFEST}"
-  !insertmacro UnregisterNativeHost "Chromium" "${NDM_HOST_NAME}" "${NDM_HOST_MANIFEST}"
-  !insertmacro UnregisterNativeHost "Microsoft\Edge" "${NDM_HOST_NAME}" "${NDM_HOST_MANIFEST}"
-  !insertmacro UnregisterNativeHost "Google\Chrome" "${NDM_LEGACY_HOST_NAME}" "${NDM_LEGACY_HOST_MANIFEST}"
-  !insertmacro UnregisterNativeHost "Chromium" "${NDM_LEGACY_HOST_NAME}" "${NDM_LEGACY_HOST_MANIFEST}"
-  !insertmacro UnregisterNativeHost "Microsoft\Edge" "${NDM_LEGACY_HOST_NAME}" "${NDM_LEGACY_HOST_MANIFEST}"
+  !insertmacro UnregisterNativeHost "Google\Chrome" "${NDM_HOST_NAME}" "$INSTDIR\${NDM_HOST_MANIFEST}"
+  !insertmacro UnregisterNativeHost "Chromium" "${NDM_HOST_NAME}" "$INSTDIR\${NDM_HOST_MANIFEST}"
+  !insertmacro UnregisterNativeHost "Microsoft\Edge" "${NDM_HOST_NAME}" "$INSTDIR\${NDM_HOST_MANIFEST}"
+  !insertmacro UnregisterNativeHost "Google\Chrome" "${NDM_LEGACY_HOST_NAME}" "$INSTDIR\${NDM_LEGACY_HOST_MANIFEST}"
+  !insertmacro UnregisterNativeHost "Chromium" "${NDM_LEGACY_HOST_NAME}" "$INSTDIR\${NDM_LEGACY_HOST_MANIFEST}"
+  !insertmacro UnregisterNativeHost "Microsoft\Edge" "${NDM_LEGACY_HOST_NAME}" "$INSTDIR\${NDM_LEGACY_HOST_MANIFEST}"
   ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "NDM Next"
   StrCmp $0 '$\"$INSTDIR\ndm-desktop.exe$\" --background' 0 +2
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "NDM Next"

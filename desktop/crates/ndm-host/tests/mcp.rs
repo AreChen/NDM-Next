@@ -106,6 +106,139 @@ fn plugin_package(profile: &Path, version: &str, guide: Option<&str>) -> io::Res
     Ok(path)
 }
 
+#[cfg(unix)]
+#[test]
+fn download_characters_apply_to_tasks_and_survive_plugin_upgrades() {
+    use std::{io::Read, os::unix::net::UnixListener};
+
+    let profile = tempfile::tempdir().unwrap();
+    let store = Store::open(&profile.path().join("tasks.db")).unwrap();
+    store.set_ai_enabled(true).unwrap();
+    let registry = PluginRegistry::new(profile.path());
+    let install = |version: &str| {
+        let path = profile.path().join("characters.zip");
+        let mut zip = zip::ZipWriter::new(fs::File::create(&path).unwrap());
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("plugin.json", options).unwrap();
+        serde_json::to_writer(
+            &mut zip,
+            &json!({
+                "schema":3, "kind":"character_profiles", "id":"character", "version":version,
+                "name":{"en":"Download Characters"}, "description":{"en":"Reusable defaults"},
+                "skill":"SKILL.md",
+            }),
+        )
+        .unwrap();
+        zip.start_file("SKILL.md", options).unwrap();
+        zip.write_all(b"Download role tools").unwrap();
+        zip.finish().unwrap();
+        registry.import(&path).unwrap();
+    };
+    install("0.1.0");
+    let socket =
+        UnixListener::bind(ndm_core::unix_instance::socket_path(profile.path()).unwrap()).unwrap();
+    let desktop = std::thread::spawn(move || {
+        for command in *b"RW" {
+            let (mut stream, _) = socket.accept().unwrap();
+            let mut byte = [0];
+            stream.read_exact(&mut byte).unwrap();
+            assert_eq!(byte, [command]);
+            stream.write_all(&[1]).unwrap();
+        }
+    });
+    let mut mcp = Server::start(profile.path());
+    mcp.call("initialize", json!({}));
+    let definition = json!({
+        "id":"phone-replay", "name":"Phone replay", "description":"Mobile HLS replays",
+        "instructions":"Use when asked to save a replay.",
+        "defaults":{"media_type":"hls", "destination":profile.path(),
+            "user_agent_profile":"iphone_safari", "accept_language":"zh-CN",
+            "download_threads":4, "show_progress":true}
+    });
+    let saved = mcp.call(
+        "tools/call",
+        json!({"name":"ndm_save_character","arguments":definition}),
+    );
+    assert_eq!(saved["structuredContent"]["id"], "phone-replay", "{saved}");
+    assert_eq!(
+        mcp.call(
+            "tools/call",
+            json!({
+                "name":"ndm_save_character", "arguments":definition
+            })
+        )["isError"],
+        true
+    );
+    let skill = profile
+        .path()
+        .join("plugin-data/character/skills/phone-replay/SKILL.md");
+    assert!(
+        fs::read_to_string(&skill)
+            .unwrap()
+            .contains("Mobile HLS replays")
+    );
+    let updated = mcp.call(
+        "tools/call",
+        json!({"name":"ndm_save_character","arguments":{
+            "id":"phone-replay","replace":true,"defaults":{"download_threads":6}
+        }}),
+    );
+    assert_eq!(
+        updated["structuredContent"]["defaults"]["download_threads"],
+        6
+    );
+    let queued = mcp.call(
+        "tools/call",
+        json!({"name":"ndm_download","arguments":{
+            "items":[{"source":"https://example.org/stream", "character":"phone-replay",
+                "show_progress":false, "referer":"https://example.org/page#room"}]
+        }}),
+    );
+    let id: TaskId = serde_json::from_value(queued["structuredContent"]["task_ids"][0].clone())
+        .expect("queued task ID");
+    let task = store.get(id).unwrap().unwrap();
+    assert!(matches!(task.options, ndm_core::TaskOptions::Hls(_)));
+    assert_eq!(task.request.destination, profile.path());
+    assert_eq!(
+        task.request.headers["user-agent"],
+        ndm_host::web::UserAgentProfile::IphoneSafari.value()
+    );
+    assert_eq!(task.request.headers["accept-language"], "zh-CN");
+    assert_eq!(task.request.headers["referer"], "https://example.org/page");
+    assert_eq!(task.policy.download_threads, Some(6));
+    assert_eq!(task.policy.show_progress, Some(false));
+    desktop.join().unwrap();
+
+    let original = fs::read(&skill).unwrap();
+    install("0.2.0");
+    drop(mcp);
+    let mut mcp = Server::start(profile.path());
+    mcp.call("initialize", json!({}));
+    assert_eq!(fs::read(&skill).unwrap(), original);
+    assert_eq!(
+        mcp.call("tools/call", json!({"name":"ndm_list_characters"}))["structuredContent"]["characters"]
+            [0]["id"],
+        "phone-replay"
+    );
+    registry.set_ai_access("character", false).unwrap();
+    assert_eq!(
+        mcp.call("tools/call", json!({"name":"ndm_list_characters"}))["isError"],
+        true
+    );
+    assert!(skill.is_file());
+    registry.set_ai_access("character", true).unwrap();
+    assert_eq!(
+        mcp.call(
+            "tools/call",
+            json!({
+                "name":"ndm_delete_character", "arguments":{"id":"phone-replay"}
+            })
+        )["structuredContent"]["deleted"],
+        true
+    );
+    assert!(!skill.exists());
+}
+
 #[test]
 fn tools_follow_opt_in_and_current_plugin_registry() {
     let profile = tempfile::tempdir().unwrap();

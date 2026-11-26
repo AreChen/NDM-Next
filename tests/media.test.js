@@ -205,6 +205,22 @@ test('extension-based manifests are detected and stream fragments do not replace
   const result=await stream.send({action:'media',tabId:1});assert.equal(result.items.length,1);assert.match(result.items[0].url,/m3u8$/);
 });
 
+test('media detection hands an extensionless mobile playlist to OnesDM with its request headers',async()=>{
+  const t=setup('application/vnd.apple.mpegurl',{enabled:false,media:true});
+  await t.observe(1,'mobile','fixture=1',{requestHeaders:[
+    {name:'User-Agent',value:'Mobile Safari fixture'},
+    {name:'Referer',value:'https://page.test/1'},
+    {name:'Accept-Language',value:'zh-CN,zh;q=0.9'},
+  ]});
+  const {items}=await t.send({action:'media',tabId:1});
+  assert.equal(items.length,1);
+  assert.equal((await t.send({action:'send',tabId:1,id:items[0].id})).ok,true);
+  assert.equal(t.prepared[0].media_type,'application/vnd.apple.mpegurl');
+  assert.equal(t.prepared[0].headers['user-agent'],'Mobile Safari fixture');
+  assert.equal(t.prepared[0].headers.referer,'https://page.test/1');
+  assert.equal(t.prepared[0].headers['accept-language'],'zh-CN,zh;q=0.9');
+});
+
 test('blocking the site or turning off media detection hides resources and prevents sending',async()=>{
   const config={minBytes:0};const t=setup('video/mp4',config);await t.observe(1,'x','private=1');
   const {items}=await t.send({action:'media',tabId:1});assert.equal(items.length,1);

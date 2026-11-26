@@ -32,8 +32,8 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     DownloadProgress, Error, NewTask, ProxyOptions, Result, Store, TaskId,
     http::{
-        RateLimiter, network_client, parse_content_range, publish_download, request_headers,
-        safe_filename, send,
+        RateLimiter, media_headers, network_client, parse_content_range, publish_download,
+        request_headers, safe_filename, send_media,
     },
 };
 
@@ -139,10 +139,10 @@ impl NetworkSource {
                 "unsupported resource scheme",
             ));
         }
-        let mut builder = self.client.get(url.clone());
-        if url.origin() == self.origin.origin() {
-            builder = builder.headers(self.headers.clone());
-        }
+        let mut builder =
+            self.client
+                .get(url.clone())
+                .headers(media_headers(&self.headers, &self.origin, url));
         if let Some(range) = range {
             let end = range
                 .offset
@@ -151,7 +151,7 @@ impl NetworkSource {
                 .ok_or_else(|| hls_engine::Error::invalid("invalid resource range"))?;
             builder = builder.header(header::RANGE, format!("bytes={}-{end}", range.offset));
         }
-        let response = send(&self.client, builder, &self.cancel)
+        let response = send_media(&self.client, builder, &self.cancel)
             .await
             .map_err(|_| hls_engine::Error::Http("resource request failed".into()))?;
         if let Some(range) = range {

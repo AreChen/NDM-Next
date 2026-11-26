@@ -55,6 +55,11 @@ manifest are both checked before installation.
   Both use `engine_protocol` 1. Set a stable lowercase
   `id`, a semantic `version`, a relative `engine` path, and localized
   `name` and `description` objects. Use `en` and optionally `zh`.
+- OnesDM 0.9.0 supports the built-in `character_profiles` plugin kind in
+  manifest `schema` 3. The package uses ID `character` and a `skill` path.
+  It contains no engine, source matchers or runtime dependencies. The desktop
+  provides the MCP tools and saves the user's role Skills separately from
+  plugin package revisions. See the [Download Characters package](https://github.com/AreChen/onesdm-plugin-character).
 - `inputs` is a list of automatic matchers. Each matcher has `schemes`
   and can narrow matching with `hosts`, `suffixes` and `exclude_suffixes`.
   A domain matches itself and its subdomains. A local file uses the `file`

@@ -60,7 +60,15 @@ pub(crate) fn apply_settings(
 ) -> io::Result<Preferences> {
     preferences.use_system_download_dir = choice.follow_system;
     preferences.download_dir = choice.downloads;
-    if preferences.cache_dir != choice.cache
+    set_cache_directory(&mut preferences, choice.cache);
+    preferences.cache_retention_days = choice.days;
+    preferences.last_cache_cleanup = None;
+    preferences.save(path)?;
+    Ok(preferences)
+}
+
+pub(crate) fn set_cache_directory(preferences: &mut Preferences, directory: PathBuf) {
+    if preferences.cache_dir != directory
         && !preferences
             .previous_cache_dirs
             .contains(&preferences.cache_dir)
@@ -69,11 +77,10 @@ pub(crate) fn apply_settings(
             .previous_cache_dirs
             .push(preferences.cache_dir.clone());
     }
-    preferences.cache_dir = choice.cache;
-    preferences.cache_retention_days = choice.days;
-    preferences.last_cache_cleanup = None;
-    preferences.save(path)?;
-    Ok(preferences)
+    if preferences.cache_dir != directory {
+        preferences.cache_dir = directory;
+        preferences.last_cache_cleanup = None;
+    }
 }
 
 fn reparse(metadata: &fs::Metadata) -> bool {

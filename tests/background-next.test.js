@@ -225,14 +225,12 @@ test('a failed settings read during operation closes capture until a later succe
   await t.run();
   assert.deepEqual(t.calls,['prepare','cancel','commit','erase']);
 });
-test('new extensions support a desktop that only registers the old native host',async()=>{
+test('missing OnesDM host leaves the download in the browser',async()=>{
   const t=setup({nativeError:'Specified native messaging host not found.'});
   await t.run();
-  assert.deepEqual(t.calls,['prepare','cancel','commit','erase']);
-  assert.deepEqual(t.nativeAttempts,[
-    ['com.onesdm.host','prepare'],['com.ndmnext.host','prepare'],
-    ['com.onesdm.host','commit'],['com.ndmnext.host','commit'],
-  ]);
+  assert.deepEqual(t.calls,[]);
+  assert(t.nativeAttempts.some(([,type])=>type==='prepare'));
+  assert(t.nativeAttempts.every(([name])=>name==='com.onesdm.host'));
 });
 test('a communication failure does not retry a native operation under the legacy name',async()=>{
   const t=setup({nativeError:'Error when communicating with the native messaging host.'});

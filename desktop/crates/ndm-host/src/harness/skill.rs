@@ -8,7 +8,7 @@ use std::{
 
 use ndm_core::{
     Store,
-    plugins::{InstalledPlugin, OptionControl, PluginRegistry},
+    plugins::{InstalledPlugin, OptionControl, PluginKind, PluginRegistry},
 };
 
 const SKILL: &str = include_str!("../../skills/SKILL.md");
@@ -201,12 +201,19 @@ pub(super) fn remove(path: &Path) -> io::Result<()> {
 fn plugin_guide(plugin: &InstalledPlugin) -> String {
     let manifest = &plugin.manifest;
     let mut guide = format!(
-        "{OWNER}\n\n# {}\n\n{}\n\nEngine ID `{}`. Version `{}`.\n\n",
+        "{OWNER}\n\n# {}\n\n{}\n\nPlugin ID `{}`. Version `{}`.\n\n",
         one_line(&manifest.name.en),
         one_line(&manifest.description.en),
         manifest.id,
         manifest.version
     );
+    if manifest.kind == PluginKind::CharacterProfiles {
+        if let Ok(Some(authored)) = plugin.read_skill() {
+            guide.push_str(authored.trim());
+            guide.push('\n');
+        }
+        return guide;
+    }
     guide.push_str(
         "Use `ndm_list_engines` with the source to check compatibility and obtain the current options. \
          For a batch, pass this engine ID in each applicable `ndm_download` item. \

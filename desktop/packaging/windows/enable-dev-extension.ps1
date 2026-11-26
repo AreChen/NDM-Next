@@ -8,7 +8,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$hostNames = @('com.onesdm.host', 'com.ndmnext.host')
+$hostNames = @('com.onesdm.host')
 $manifests = @(if ($ManifestPath) {
     [pscustomobject]@{ Name = $null; Path = $ManifestPath }
 } else {

@@ -37,6 +37,14 @@ impl ColorScheme {
         Self::Custom,
     ];
 
+    pub fn key(self) -> &'static str {
+        ndm_core::COLOR_SCHEMES[self as usize]
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|scheme| scheme.key() == key)
+    }
+
     pub fn label(self, language: Language) -> &'static str {
         let (zh, en) = match self {
             Self::Classic => ("经典紫", "Classic violet"),

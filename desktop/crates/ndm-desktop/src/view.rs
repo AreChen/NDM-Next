@@ -2580,6 +2580,43 @@ mod tray_tests {
                         this.process_ai_settings(window, cx);
                         assert_eq!(store.settings_reply(id).unwrap().unwrap()["error"], "tun");
                         assert_eq!(this.preferences.max_kib_per_second, 512);
+                        let patch: ndm_core::SettingsPatch =
+                            serde_json::from_value(serde_json::json!({
+                                "tun_direct_port":18086, "download_route":"tun_direct",
+                                "theme_colors":{"primary":"#244DEF","secondary":"#F98412"},
+                                "download_colors":{"downloading":"#A53BA0","failed":"#BC160A"},
+                                "proxy":{"url":"http://127.0.0.1:8080",
+                                    "username":"fixture","password":"example"}
+                            }))
+                            .unwrap();
+                        let id = store.request_settings(Some(&patch)).unwrap();
+                        this.process_ai_settings(window, cx);
+                        let configured = store.settings_reply(id).unwrap().unwrap();
+                        assert_eq!(configured["tun_direct_port"], 18086);
+                        assert_eq!(configured["color_scheme"], "custom");
+                        assert_eq!(configured["theme_colors"]["primary"], "#244DEF");
+                        assert_eq!(configured["download_colors"]["downloading"], "#A53BA0");
+                        assert_eq!(configured["proxy_has_credentials"], true);
+                        assert_eq!(configured["proxy_url"], "http://127.0.0.1:8080");
+                        assert!(!configured.to_string().contains("fixture"));
+                        assert!(!configured.to_string().contains("example"));
+                        let loaded = Preferences::load(&this.preferences_path).unwrap();
+                        assert_eq!(loaded.tun_egress, this.preferences.tun_egress);
+                        assert_eq!(loaded.custom_palette, this.preferences.custom_palette);
+                        assert_eq!(loaded.download_colors, this.preferences.download_colors);
+                        let reset: ndm_core::SettingsPatch =
+                            serde_json::from_value(serde_json::json!({
+                                "tun_direct_port":0,"download_route":"system_route",
+                                "theme_colors":{"secondary":null},"download_colors":{"failed":null}
+                            }))
+                            .unwrap();
+                        let id = store.request_settings(Some(&reset)).unwrap();
+                        this.process_ai_settings(window, cx);
+                        let reset = store.settings_reply(id).unwrap().unwrap();
+                        assert!(reset["tun_direct_port"].is_null());
+                        assert!(reset["theme_colors"]["secondary"].is_null());
+                        assert!(reset["download_colors"]["failed"].is_null());
+                        assert_eq!(reset["download_colors"]["downloading"], "#A53BA0");
                     });
                     window.draw(cx).clear(cx);
                 })

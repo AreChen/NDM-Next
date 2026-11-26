@@ -12,7 +12,7 @@ use std::{
 use futures_util::StreamExt;
 pub use ndm_plugin_sdk::{
     Choice, DownloadTool, Localized, OptionControl, OptionField, OptionValueError, Panel,
-    PluginManifest, SourceFiles, SourceSelection, TextEditor, normalize_proxy_address,
+    PluginKind, PluginManifest, SourceFiles, SourceSelection, TextEditor, normalize_proxy_address,
     selected_text_values,
 };
 use ndm_plugin_sdk::{InputMatcher, MANIFEST_FILE, valid_identifier, valid_package_path};
@@ -172,6 +172,9 @@ impl InstalledPlugin {
     }
 
     pub(crate) fn engine(&self) -> io::Result<crate::plugin_engine::PluginEngine> {
+        if self.manifest.kind != PluginKind::DownloadEngine {
+            return Err(invalid("package is not a download engine"));
+        }
         let mut engine = crate::plugin_engine::PluginEngine::new(self.executable())?;
         if !self.manifest.runtime_dependencies.is_empty() {
             // Installed package layout is registry / plugin id / immutable revision.
@@ -710,11 +713,14 @@ impl PluginRegistry {
         if expected.is_some_and(|(id, version)| manifest.id != id || &manifest.version != version) {
             return Err(invalid("plugin package does not match catalog"));
         }
-        let engine = staging.path().join(&manifest.engine);
-        if !fs::metadata(&engine)?.is_file()
-            || (cfg!(windows) && !manifest.engine.ends_with(".exe"))
-        {
-            return Err(invalid("missing plugin executable"));
+        if manifest.kind == PluginKind::DownloadEngine {
+            let engine = staging.path().join(&manifest.engine);
+            if !fs::metadata(&engine)?.is_file()
+                || (cfg!(windows) && !manifest.engine.ends_with(".exe"))
+            {
+                return Err(invalid("missing plugin executable"));
+            }
+            make_executable(&engine)?;
         }
         if let Some(panel) = &manifest.panel {
             bounded_file(&staging.path().join(panel), 64 * 1024)?;
@@ -722,7 +728,6 @@ impl PluginRegistry {
         if let Some(skill) = &manifest.skill {
             read_skill(staging.path(), skill)?;
         }
-        make_executable(&engine)?;
         let _lock = self.mutation_lock()?;
         let mut snapshot = self.load()?;
         let revision = crate::TaskId::new_v4().to_string();

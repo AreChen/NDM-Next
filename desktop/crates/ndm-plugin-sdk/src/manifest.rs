@@ -5,7 +5,7 @@ use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-pub const MANIFEST_VERSION: u32 = 2;
+pub const MANIFEST_VERSION: u32 = 3;
 pub const MANIFEST_FILE: &str = "plugin.json";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -36,12 +36,18 @@ pub struct PluginManifest {
     pub version: Version,
     pub name: Localized,
     pub description: Localized,
+    #[serde(default)]
+    pub kind: PluginKind,
+    #[serde(default)]
     pub engine: String,
+    #[serde(default)]
     pub engine_protocol: u32,
+    #[serde(default)]
     pub inputs: Vec<InputMatcher>,
     /// Inputs offered only when a caller explicitly selects this engine.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub manual_inputs: Vec<InputMatcher>,
+    #[serde(default)]
     pub limits: EngineLimits,
     #[serde(default)]
     pub capabilities: EngineCapabilities,
@@ -57,6 +63,14 @@ pub struct PluginManifest {
     /// Executables supplied by a compatible version of another installed package.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runtime_dependencies: Vec<RuntimeDependency>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginKind {
+    #[default]
+    DownloadEngine,
+    CharacterProfiles,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -90,7 +104,7 @@ pub struct InputMatcher {
     pub exclude_suffixes: Vec<String>,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct EngineLimits {
     pub active_tasks: u32,
     /// Omit when the engine does not have a per-task thread setting.
@@ -195,12 +209,38 @@ pub struct PanelField {
 
 impl PluginManifest {
     pub fn validate(&self) -> io::Result<()> {
+        let valid_kind = match self.kind {
+            PluginKind::DownloadEngine => {
+                self.id != "character"
+                    && self.engine_protocol == crate::ENGINE_PROTOCOL_VERSION
+                    && valid_package_path(&self.engine)
+                    && !(self.inputs.is_empty() && self.manual_inputs.is_empty())
+                    && (1..=32).contains(&self.limits.active_tasks)
+            }
+            PluginKind::CharacterProfiles => {
+                self.schema >= 3
+                    && self.id == "character"
+                    && self.engine.is_empty()
+                    && self.engine_protocol == 0
+                    && self.inputs.is_empty()
+                    && self.manual_inputs.is_empty()
+                    && self.limits.active_tasks == 0
+                    && self.limits.download_threads.is_none()
+                    && self.skill.is_some()
+                    && self.panel.is_none()
+                    && self.options.is_empty()
+                    && self.tools.is_empty()
+                    && self.runtime_dependencies.is_empty()
+                    && !self.capabilities.browser_page
+                    && !self.capabilities.inspect_files
+                    && !self.capabilities.share_completed
+            }
+        };
         if !(1..=MANIFEST_VERSION).contains(&self.schema)
-            || self.engine_protocol != crate::ENGINE_PROTOCOL_VERSION
+            || !valid_kind
             || !valid_identifier(&self.id)
             || !self.name.valid(128)
             || !self.description.valid(1024)
-            || !valid_package_path(&self.engine)
             || self
                 .panel
                 .as_ref()
@@ -209,12 +249,10 @@ impl PluginManifest {
                 .skill
                 .as_ref()
                 .is_some_and(|p| !valid_package_path(p) || !p.ends_with(".md"))
-            || (self.inputs.is_empty() && self.manual_inputs.is_empty())
             || self.inputs.len() > 32
             || self.inputs.iter().any(|input| !input.valid())
             || self.manual_inputs.len() > 32
             || self.manual_inputs.iter().any(|input| !input.valid())
-            || !(1..=32).contains(&self.limits.active_tasks)
             || self
                 .limits
                 .download_threads
@@ -231,6 +269,7 @@ impl PluginManifest {
                 !valid_identifier(&dep.name)
                     || !valid_identifier(&dep.plugin)
                     || dep.plugin == self.id
+                    || dep.plugin == "character"
                     || !valid_package_path(&dep.path)
                     || !runtimes.insert(&dep.name)
             })

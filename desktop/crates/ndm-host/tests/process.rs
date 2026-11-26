@@ -135,20 +135,17 @@ fn relocating_integration_preserves_only_the_identified_installations_valid_orig
         serde_json::to_vec(&own).unwrap(),
     )
     .unwrap();
-    let manifest_paths = [
-        (name, new.join("native-messaging-host.json")),
-        (primary, new.join("onesdm-native-messaging-host.json")),
-    ];
+    let primary_manifest = new.join("onesdm-native-messaging-host.json");
     let check_manifests = |origins: Value| {
-        for (name, path) in &manifest_paths {
-            let manifest: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
-            assert_eq!(manifest["name"], *name);
-            assert_eq!(
-                fs::canonicalize(manifest["path"].as_str().unwrap()).unwrap(),
-                fs::canonicalize(&host).unwrap()
-            );
-            assert_eq!(manifest["allowed_origins"], origins);
-        }
+        let manifest: Value =
+            serde_json::from_slice(&fs::read(&primary_manifest).unwrap()).unwrap();
+        assert_eq!(manifest["name"], primary);
+        assert_eq!(
+            fs::canonicalize(manifest["path"].as_str().unwrap()).unwrap(),
+            fs::canonicalize(&host).unwrap()
+        );
+        assert_eq!(manifest["allowed_origins"], origins);
+        assert!(!new.join("native-messaging-host.json").exists());
     };
     assert!(requested().success());
     check_manifests(json!([
@@ -164,9 +161,7 @@ fn relocating_integration_preserves_only_the_identified_installations_valid_orig
         let mut unrelated = initial.clone();
         unrelated[field] = value;
         fs::write(&prior_manifest, serde_json::to_vec(&unrelated).unwrap()).unwrap();
-        for (_, path) in &manifest_paths {
-            fs::remove_file(path).unwrap();
-        }
+        fs::remove_file(&primary_manifest).unwrap();
         assert!(requested().success());
         check_manifests(json!([format!("chrome-extension://{default}/")]));
     }

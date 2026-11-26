@@ -28,17 +28,31 @@
 
 从返回的 `plugins[].tools` 选择专用工具并使用其实际参数。专用工具直接接收 `source`，通用 `ndm_download` 则接收 `items` 数组。若某引擎的 `automatic_match` 为 `false`，使用专用工具，或在相应下载项中指定该插件 ID。结合插件指南和实时选项 schema 选择格式、字幕或其他设置。省略未指定的选项，让插件沿用用户已保存的值。[本机插件指南](plugins/index.md)
 
-HTTP(S)、FTP(S)、SFTP、HLS、静态 DASH 是内置引擎支持的来源。媒体网页、磁力链接和本地种子的能力取决于已安装的引擎。本地来源使用桌面端可访问的绝对路径。MCP 返回的 `builtin` 是发现结果，下载项的 `plugin` 参数用于已安装插件的 ID。
+HTTP(S)、FTP(S)、SFTP、HLS、静态 DASH 是内置引擎支持的来源。媒体网页、磁力链接和本地种子的能力取决于已安装的引擎。本地来源使用桌面端可访问的绝对路径。下载项的 `plugin` 可指定已安装引擎的 ID，也可填 `builtin` 强制使用内置引擎。
 
 ## 单任务网络设置
 
-省略 `proxy_mode` 或使用 `inherit` 沿用桌面设置。用户要按默认 TUN 分流时选 `system_route`。它和旧的 `direct` 都跳过 HTTP 代理，连接仍服从系统路由。用户要在 TUN 开启时使用直连出口，先调用 `ndm_network_routes`。若 `tun_direct_exit` 为空，请用户在「设置 → 代理与网络」配置出口。已有出口时使用以下参数。
+省略 `proxy_mode` 或使用 `inherit` 沿用桌面设置。用户要按默认 TUN 分流时选 `system_route`。它和旧的 `direct` 都跳过 HTTP 代理，连接仍服从系统路由。用户要在 TUN 开启时使用直连出口，先调用 `ndm_network_routes`。若未配置出口，用户给出本地 DIRECT 入站端口时，调用 `ndm_set_settings` 保存 `tun_direct_port`（例如 18086），端口由用户或代理客户端提供。只为单次下载选择直连时保留当前全局路由。已有出口时使用以下参数。
 
 ```json
 {"items":[{"source":"https://example.org/models/weights.bin","proxy_mode":"tun_direct"}]}
 ```
 
-`bound_interface` 表示绑定网卡（Linux/macOS），DNS 仍使用系统解析器。`local_direct_listener` 表示发送到用户在代理客户端配置为 DIRECT 的本地 HTTP 入站（三个平台均支持）。这些值描述下载器的连接方式，代理客户端日志可以确认最终出站。出口不可用时报告失败，不自动切换线路。单项路由和 `user_agent` 用于内置 HTTP(S)，包括 HLS 和 DASH。插件选项以其实时 schema 为准。
+`bound_interface` 表示绑定网卡（Linux/macOS），DNS 仍使用系统解析器。`local_direct_listener` 表示发送到用户在代理客户端配置为 DIRECT 的本地 HTTP 入站（三个平台均支持）。这些值描述下载器的连接方式，代理客户端日志可以确认最终出站。出口不可用时报告失败，不自动切换线路。单项路由用于内置 HTTP(S)，包括 HLS 和 DASH。HTTP(S) 任务可传 `user_agent` 或 `user_agent_profile`、`referer`、`accept_language`。选择 yt-dlp 时也可传这些请求头；插件选项以实时 schema 为准。
+
+## 移动网页与直播回放
+
+已有播放清单时直接下载。没有 .m3u8 后缀的 HLS 清单可用 `media_type:"hls"` 指定原生引擎，DASH 用 `media_type:"dash"`。将页面要求的 UA、Referer 和语言一并传入。
+
+```json
+{"items":[{"source":"https://cdn.example.org/replay/playlist","media_type":"hls","user_agent_profile":"iphone_safari","referer":"https://live.example.org/","accept_language":"zh-CN,zh;q=0.9"}]}
+```
+
+也可以运行 `onesdm download "<播放清单 URL>" --media-type hls --ua-profile iphone_safari --referer "<播放页 URL>"`。OnesDM 自己下载播放清单和分片，再用 FFmpeg 封装本地轨道。HLS 跨源请求延续 UA、语言和页面来源，认证头只送到原来源。
+
+只有网页链接时，先用 `ndm_probe_streams` 读取一次页面或公开 JSON。识别出播放清单后，核对候选并把选中的 `items` 交给 `ndm_download`。如果返回 `browser_capture_needed`，在已有浏览器打开网页，启用浏览器自带的手机设备模式，播放后从 OnesDM 扩展的「打开网页资源」发送 HLS/DASH。扩展会沿用实际请求中的 UA 和 Referer。脚本动态生成的地址以浏览器观察到的结果为准。
+
+京东直播一类网页会额外检查 `navigator.platform`。Chromium 的 DevTools Protocol Monitor 可对该页执行 `Emulation.setUserAgentOverride` 并传入手机 `userAgent`、`platform:"iPhone"`，配合设备工具栏重载。使用浏览器实际捕获的回放清单，含 `#/…` 的网页地址用于打开页面。
 
 ## 静默下载与进度窗口
 

@@ -10,9 +10,11 @@ jsonc-parser = { version = "0.34", features = ["cst"] }
 ndm-core = { path = "../ndm-core" }
 ndm-plugin-sdk = { path = "../ndm-plugin-sdk" }
 reqwest.workspace = true
+regex = "1"
 serde.workspace = true
 serde_json.workspace = true
 tempfile = "3"
+tokio.workspace = true
 toml_edit = "0.25"
 yaml-edit = { version = "0.3.6", default-features = false }
 
@@ -20,7 +22,6 @@ yaml-edit = { version = "0.3.6", default-features = false }
 embed-resource = "3.0.12"
 
 [dev-dependencies]
-tokio.workspace = true
 zip = { version = "9.8.1", default-features = false }
 
 [target.'cfg(windows)'.dev-dependencies]

@@ -11,7 +11,10 @@ use ndm_core::{
     BatchLimit, DownloadFailure, NewTask, ProxyMode, Store, Task, TaskCommand, TaskId, TaskOptions,
     TaskPolicy, TaskState,
     plugins::{InstalledPlugin, PluginRegistry, built_in_source, parse_source},
-    validate_user_agent,
+};
+use ndm_host::{
+    characters::{self, CharacterDefaults},
+    web::{self, MediaType, UserAgentProfile},
 };
 use ndm_plugin_sdk::{read_message, write_message};
 use serde::Deserialize;
@@ -78,7 +81,8 @@ pub fn run(profile: PathBuf) -> io::Result<()> {
                         };
                         Ok(json!({
                             "protocolVersion":version, "capabilities":{"tools":{"listChanged":true}},
-                            "serverInfo":{"name":"onesdm-mcp","title":"OnesDM MCP","version":env!("CARGO_PKG_VERSION")}
+                            "serverInfo":{"name":"onesdm-mcp","title":"OnesDM MCP","version":env!("CARGO_PKG_VERSION")},
+                            "instructions":"When the user asks to download, fetch, or save files, models or media, use ndm_download to start the requested transfers in OnesDM. Use ndm_list_engines for a media page or plugin source and ndm_probe_streams for a mobile media page with an unknown playlist. Track returned task IDs via ndm_task_status."
                         }))
                     }
                     Some("ping") => Ok(json!({})),
@@ -132,13 +136,14 @@ impl Server {
         if !self.store.ai_enabled().unwrap_or(false) {
             return Vec::new();
         }
+        let characters = characters::available(&self.registry);
         let task_id = json!({"task_id":{"type":"string","format":"uuid"}});
         let mut tools = vec![
             tool(
                 "ndm_download",
-                "Queue downloads in OnesDM. Omit destination to use the configured download directory. Batch settings apply only to these items.",
+                "Start the user's requested downloads in OnesDM and return task IDs for tracking. Use for files, models, known HLS/DASH streams and installed engines. Omit destination for the application's download directory.",
                 json!({
-                    "items":{"type":"array","minItems":1,"maxItems":128,"items":object(item_fields(), &["source"])},
+                    "items":{"type":"array","minItems":1,"maxItems":128,"items":object(item_fields(characters), &["source"])},
                     "destination":{"type":"string","description":"Absolute directory"},
                     "show_progress":{"type":"boolean","default":false,"description":"Open an independent progress window per item. Omit for quiet downloads in the main list."},
                     "batch_active_tasks":task_limit(),
@@ -161,6 +166,12 @@ impl Server {
                 "Discover download engines available to AI, their options and tool names. Pass a source to check matches and the automatic selection without contacting the source.",
                 json!({"source":{"type":"string","description":SOURCE_SCHEMA}}),
                 &[],
+            ),
+            tool(
+                "ndm_probe_streams",
+                "Find HLS/DASH links in a public page or JSON response with a single bounded GET. Supports phone User-Agent profiles. Use when a mobile media page does not provide a known stream URL.",
+                probe_fields(),
+                &["source"],
             ),
             tool(
                 "ndm_task_status",
@@ -205,11 +216,20 @@ impl Server {
                     "speed_limit_kib_s":{"type":"integer","minimum":0,"maximum":1000000,"description":"KiB/s; zero is unlimited"},
                     "user_agent":{"type":"string","maxLength":1024,"description":"Empty restores the default Chrome UA"},
                     "download_directory":{"type":"string","description":"Absolute folder for new tasks. Empty restores the system downloads folder."},
+                    "cache_directory":{"type":"string","description":"Absolute transfer cache directory. Empty restores the default; existing partial files can resume in their previous cache."},
                     "cache_retention_days":{"type":"integer","minimum":0,"maximum":3650,"description":"Zero disables automatic cleanup"},
                     "auto_resume":{"type":"boolean"},"auto_update":{"type":"boolean","description":"Automatically check for updates"},"ui_animations":{"type":"boolean"},
                     "theme":{"type":"string","enum":["system","light","dark"]},"language":{"type":"string","enum":ndm_core::UI_LANGUAGES},
+                    "color_scheme":{"type":"string","enum":ndm_core::COLOR_SCHEMES},
+                    "theme_colors":color_fields(&ndm_core::THEME_COLOR_KEYS,"Set selected interface colors. Null restores the default primary or automatic companion color. Selects Custom unless color_scheme is specified."),
+                    "download_colors":color_fields(&ndm_core::DOWNLOAD_COLOR_KEYS,"Set selected task state colors across all themes. Null restores the default for that state."),
+                    "start_at_login":{"type":"boolean"},
+                    "sidebar_collapsed":{"type":"boolean"},
+                    "sidebar_width":{"type":"integer","minimum":160,"maximum":320},
                     "download_route":{"type":"string","enum":["inherit","system_route","tun_direct","direct"]},
                     "tun_direct_exit":{"type":"string","description":"Local DIRECT HTTP port or Linux/macOS interface name. Empty clears the exit."},
+                    "tun_direct_port":{"type":"integer","minimum":0,"maximum":65535,"description":"Port of the user's local HTTP DIRECT listener. Zero clears the exit. Use instead of tun_direct_exit."},
+                    "proxy":object(json!({"url":{"type":"string","description":"HTTP(S) proxy URL. Empty removes the saved proxy."},"username":{"type":"string"},"password":{"type":"string"}}), &["url"]),
                     "use_saved_proxy":{"type":"boolean","description":"Enable an already configured application proxy for new downloads"}
                 }),
                 &[],
@@ -227,6 +247,15 @@ impl Server {
                 &[],
             ),
         ];
+        if characters {
+            let id = json!({"id":{"type":"string","description":"Exact saved character ID"}});
+            tools.extend([
+                tool("ndm_list_characters", "Find saved download characters before selecting one for a user request.", json!({}), &[]),
+                tool("ndm_get_character", "Read the requested character's Skill instructions and reusable defaults.", id.clone(), &["id"]),
+                tool("ndm_save_character", "Create a reusable download character only when requested. Set replace true to patch an existing character; unspecified fields are preserved.", character_fields(), &["id"]),
+                tool("ndm_delete_character", "Delete the named character Skill only when the user explicitly asks to delete it.", id, &["id"]),
+            ]);
+        }
         for plugin in self
             .registry
             .list()
@@ -235,9 +264,9 @@ impl Server {
             .filter(|p| p.ai_enabled)
         {
             for action in &plugin.manifest.tools {
-                let mut fields = item_fields();
+                let mut fields = item_fields(characters);
                 let fields_object = fields.as_object_mut().expect("tool fields are an object");
-                for key in ["plugin", "proxy_mode", "user_agent"] {
+                for key in ["plugin", "proxy_mode", "media_type"] {
                     fields_object.remove(key);
                 }
                 fields["options"] = plugin.option_schema(action);
@@ -271,6 +300,11 @@ impl Server {
             .unwrap_or_else(|| json!({}));
         match name {
             "ndm_download" => self.download(parse_arguments(args)?),
+            "ndm_probe_streams" => web::probe_streams(parse_arguments(args)?),
+            "ndm_list_characters"
+            | "ndm_get_character"
+            | "ndm_save_character"
+            | "ndm_delete_character" => self.character_action(name, args),
             "ndm_list_engines" => self.engines(parse_arguments(args)?),
             "ndm_list_tasks" => {
                 let args: List = parse_arguments(args)?;
@@ -394,6 +428,91 @@ impl Server {
         }
     }
 
+    fn character_action(&self, name: &str, args: Value) -> Result<Value, &'static str> {
+        if !characters::available(&self.registry) {
+            return Err("Install and enable AI access for the Download Characters plugin.");
+        }
+        match name {
+            "ndm_list_characters" => {
+                if args.as_object().is_none_or(|args| !args.is_empty()) {
+                    return Err("Listing characters takes no arguments.");
+                }
+                let records =
+                    characters::list(&self.profile).map_err(|_| "Could not list characters.")?;
+                let list: Vec<_> = records.into_iter().map(|character| json!({
+                    "id":character.id, "name":character.name, "description":character.description
+                })).collect();
+                Ok(json!({"characters":list}))
+            }
+            "ndm_save_character" => {
+                let args: SaveCharacter = parse_arguments(args)?;
+                let character =
+                    characters::save(&self.profile, args.id, args.replace, |character| {
+                        if let Some(name) = args.name {
+                            character.name = name;
+                        }
+                        if let Some(description) = args.description {
+                            character.description = description;
+                        }
+                        if let Some(instructions) = args.instructions {
+                            character.instructions = instructions;
+                        }
+                        if let Some(mut patch) = args.defaults {
+                            let mut previous = serde_json::to_value(&character.defaults)
+                                .map_err(|_| "Invalid character defaults.")?;
+                            let previous = previous
+                                .as_object_mut()
+                                .expect("character defaults are an object");
+                            if patch
+                                .get("plugin")
+                                .is_some_and(|plugin| Some(plugin) != previous.get("plugin"))
+                            {
+                                previous.remove("options");
+                            }
+                            if let Some(options) = patch.remove("options") {
+                                if options.is_null() {
+                                    previous.remove("options");
+                                } else if let Value::Object(values) = options {
+                                    let entry = previous
+                                        .entry("options")
+                                        .or_insert_with(|| json!({}))
+                                        .as_object_mut()
+                                        .expect("options are an object");
+                                    for (key, value) in values {
+                                        if value.is_null() {
+                                            entry.remove(&key);
+                                        } else {
+                                            entry.insert(key, value);
+                                        }
+                                    }
+                                } else {
+                                    return Err("Character plugin options must be an object.");
+                                }
+                            }
+                            previous.extend(patch);
+                            character.defaults =
+                                parse_arguments(Value::Object(std::mem::take(previous)))?;
+                        }
+                        Ok(())
+                    })?;
+                Ok(character.preview())
+            }
+            "ndm_get_character" | "ndm_delete_character" => {
+                let args: CharacterArgument = parse_arguments(args)?;
+                if name == "ndm_get_character" {
+                    Ok(characters::read(&self.profile, &args.id)
+                        .map_err(|_| "Character not found.")?
+                        .preview())
+                } else {
+                    characters::delete(&self.profile, &args.id)
+                        .map_err(|_| "Could not delete that character Skill.")?;
+                    Ok(json!({"id":args.id, "deleted":true}))
+                }
+            }
+            _ => unreachable!("registered character tool"),
+        }
+    }
+
     fn engines(&self, query: EngineQuery) -> Result<Value, &'static str> {
         let source = query
             .source
@@ -473,28 +592,63 @@ impl Server {
         let tun_configured = super::read_preferences(&self.profile)
             .and_then(|p| p.tun_egress)
             .is_some();
-        for item in batch.items {
+        let mut characters = std::collections::BTreeMap::new();
+        for mut item in batch.items {
+            if let Some(id) = item.character.take() {
+                if !characters::available(&self.registry) {
+                    return Err("Install and enable AI access for the Download Characters plugin.");
+                }
+                let defaults = match characters.entry(id) {
+                    std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                    std::collections::btree_map::Entry::Vacant(entry) => {
+                        let character = characters::read(&self.profile, entry.key())
+                            .map_err(|_| "Download character not found.")?;
+                        entry.insert(character.defaults)
+                    }
+                };
+                item.apply_character(defaults.clone());
+            }
             let source = parse_source(&item.source).map_err(|_| "Invalid download source.")?;
-            let options = self
-                .registry
-                .ai_task_options(&source, item.plugin.as_deref(), item.options)
-                .map_err(|_| "Plugin or plugin options do not match the source.")?;
+            let web_source = matches!(source.scheme(), "http" | "https");
+            let explicit_builtin = item.plugin.as_deref() == Some("builtin");
+            let options = if item.media_type.is_some() || explicit_builtin {
+                if !built_in_source(&source)
+                    || (item.media_type.is_some() && !web_source)
+                    || (item.plugin.is_some() && !explicit_builtin)
+                    || !item.options.is_empty()
+                {
+                    return Err(
+                        "Explicit HLS/DASH requires a built-in HTTP(S) source and no plugin options.",
+                    );
+                }
+                item.media_type.map(MediaType::task_options)
+            } else {
+                self.registry
+                    .ai_task_options(&source, item.plugin.as_deref(), item.options)
+                    .map_err(|_| "Plugin or plugin options do not match the source.")?
+            };
             if options.is_none() && !built_in_source(&source) {
                 return Err("No installed download engine handles this source.");
             }
             let proxy_mode = item.proxy_mode.unwrap_or_default();
-            if (proxy_mode != ProxyMode::Inherit || item.user_agent.is_some())
-                && (options.is_some() || !matches!(source.scheme(), "http" | "https"))
+            if proxy_mode != ProxyMode::Inherit
+                && (!web_source || matches!(options, Some(TaskOptions::Plugin(_))))
             {
-                return Err("Proxy and User-Agent overrides apply to built-in HTTP(S) downloads.");
+                return Err("Per-task routing applies to built-in HTTP(S) downloads.");
             }
             if proxy_mode == ProxyMode::TunDirect && !tun_configured {
-                return Err("Configure a TUN direct exit in Settings > Proxy and network first.");
+                return Err(
+                    "Set the user's DIRECT HTTP listener port with ndm_set_settings before using tun_direct.",
+                );
             }
-            let mut headers = std::collections::BTreeMap::new();
-            if let Some(user_agent) = item.user_agent {
-                validate_user_agent(&user_agent).map_err(|_| "Invalid User-Agent.")?;
-                headers.insert("user-agent".into(), user_agent);
+            let headers = web::headers(
+                item.user_agent.as_deref(),
+                item.user_agent_profile,
+                item.referer.as_deref(),
+                item.accept_language.as_deref(),
+            )?;
+            if !headers.is_empty() && !web_source {
+                return Err("User-Agent, Referer and Accept-Language require an HTTP(S) source.");
             }
             let destination = item.destination.unwrap_or_else(|| directory.clone());
             let threads = item.download_threads.or(batch.download_threads);
@@ -539,14 +693,23 @@ impl Server {
         patch: Option<ndm_core::SettingsPatch>,
     ) -> Result<Value, &'static str> {
         self.ensure_desktop()?;
-        if let Some(folder) = patch
-            .as_ref()
-            .and_then(|p| p.download_directory.as_ref())
-            .filter(|s| !s.is_empty())
-        {
-            std::fs::create_dir_all(folder)
-                .and_then(|()| tempfile::tempfile_in(folder))
-                .map_err(|_| "Download directory is not writable.")?;
+        if let Some(patch) = &patch {
+            for (folder, error) in [
+                (
+                    patch.download_directory.as_ref(),
+                    "Download directory is not writable.",
+                ),
+                (
+                    patch.cache_directory.as_ref(),
+                    "Cache directory is not writable.",
+                ),
+            ] {
+                if let Some(folder) = folder.filter(|s| !s.is_empty()) {
+                    std::fs::create_dir_all(folder)
+                        .and_then(|()| tempfile::tempfile_in(folder))
+                        .map_err(|_| error)?;
+                }
+            }
         }
         let id = self
             .store
@@ -561,6 +724,9 @@ impl Server {
                         Some("proxy") => "Configure a saved proxy in OnesDM first.",
                         Some("tun") => "Set a TUN direct exit before selecting that route.",
                         Some("disabled") => "AI integration is disabled.",
+                        Some("startup") => {
+                            "OnesDM could not update the operating system's startup setting."
+                        }
                         Some("busy") => {
                             "Storage settings are busy. Retry after the operation finishes."
                         }
@@ -638,13 +804,60 @@ struct Batch {
 struct Item {
     show_progress: Option<bool>,
     source: String,
+    character: Option<String>,
     destination: Option<PathBuf>,
     plugin: Option<String>,
     download_threads: Option<u32>,
     proxy_mode: Option<ProxyMode>,
     user_agent: Option<String>,
+    user_agent_profile: Option<UserAgentProfile>,
+    referer: Option<String>,
+    accept_language: Option<String>,
+    media_type: Option<MediaType>,
     #[serde(default)]
     options: Map<String, Value>,
+}
+
+impl Item {
+    fn apply_character(&mut self, mut defaults: CharacterDefaults) {
+        self.destination = self.destination.take().or(defaults.destination);
+        self.download_threads = self.download_threads.or(defaults.download_threads);
+        self.proxy_mode = self.proxy_mode.or(defaults.proxy_mode);
+        self.show_progress = self.show_progress.or(defaults.show_progress);
+        self.accept_language = self.accept_language.take().or(defaults.accept_language);
+        if self.user_agent.is_none() && self.user_agent_profile.is_none() {
+            self.user_agent = defaults.user_agent;
+            self.user_agent_profile = defaults.user_agent_profile;
+        }
+        let explicit_media_overrides_plugin = self.media_type.is_some()
+            && defaults.plugin.as_deref().is_some_and(|id| id != "builtin");
+        if !explicit_media_overrides_plugin
+            && (self.plugin.is_none() || self.plugin == defaults.plugin)
+        {
+            self.plugin = self.plugin.take().or(defaults.plugin);
+            self.media_type = self.media_type.or(defaults.media_type);
+            defaults.options.append(&mut self.options);
+            self.options = defaults.options;
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CharacterArgument {
+    id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SaveCharacter {
+    id: String,
+    name: Option<String>,
+    description: Option<String>,
+    instructions: Option<String>,
+    defaults: Option<Map<String, Value>>,
+    #[serde(default)]
+    replace: bool,
 }
 
 #[derive(Deserialize)]
@@ -737,21 +950,77 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> 
     json!({"name":name,"description":description,"inputSchema":object(properties, required)})
 }
 
-fn item_fields() -> Value {
-    json!({
+fn item_fields(characters: bool) -> Value {
+    let mut fields = json!({
         "show_progress":{"type":"boolean","description":"Override the batch window choice for this item. Defaults to quiet."},
         "source":{"type":"string","description":SOURCE_SCHEMA},
         "destination":{"type":"string","description":"Absolute download directory. Omit to use OnesDM's default."},
-        "plugin":{"type":"string","description":"Optional installed plugin ID"},
+        "plugin":{"type":"string","description":"Installed engine ID, or builtin to select the native engine. Omit for automatic selection."},
         "options":{"type":"object","description":"Options declared by the selected plugin"},
         "download_threads":thread_limit(),
         "proxy_mode":{"type":"string","enum":["inherit","direct","system_route","tun_direct"],"description":"Built-in HTTP(S) only. inherit uses desktop settings. system_route (or legacy direct) skips HTTP proxies and follows OS routing including TUN. tun_direct requires the configured network interface or local DIRECT listener."},
-        "user_agent":{"type":"string","maxLength":1024,"description":"Optional User-Agent for this built-in HTTP(S) item. Omit to use app defaults."}
+        "user_agent":{"type":"string","maxLength":1024,"description":"Custom User-Agent for an HTTP(S) download or a media plugin that accepts HTTP headers."},
+        "user_agent_profile":{"type":"string","enum":["desktop_chrome","iphone_safari","android_chrome"],"description":"Device User-Agent for the requests. Use either a profile or user_agent."},
+        "referer":{"type":"string","description":"HTTP(S) page URL used as Referer for this download."},
+        "accept_language":{"type":"string","maxLength":256,"description":"HTTP Accept-Language, for example zh-CN,zh;q=0.9."},
+        "media_type":{"type":"string","enum":["hls","dash"],"description":"Force the built-in stream engine for an already identified playlist, including a URL without a file extension."}
+    });
+    if characters {
+        fields["character"] = json!({"type":"string","description":"Apply this saved download character. Explicit item fields win."});
+    }
+    fields
+}
+
+fn character_fields() -> Value {
+    let mut defaults = item_fields(false);
+    let map = defaults.as_object_mut().unwrap();
+    map.remove("source");
+    map.remove("referer");
+    for value in map.values_mut() {
+        if let Some(kind) = value["type"].as_str() {
+            value["type"] = json!([kind, "null"]);
+        }
+        if let Some(values) = value["enum"].as_array_mut() {
+            values.push(Value::Null);
+        }
+    }
+    json!({
+        "id":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,39}$"},
+        "name":{"type":"string","description":"Display name. Required for new characters."},
+        "description":{"type":"string","description":"When to use this role. Required for new characters."},
+        "instructions":{"type":"string","description":"Optional user-authored download guidance. Keep credentials and expiring URLs outside the Skill."},
+        "defaults":object(defaults, &[]),
+        "replace":{"type":"boolean","default":false},
     })
+}
+
+fn probe_fields() -> Value {
+    let mut fields = item_fields(false);
+    fields.as_object_mut().unwrap().retain(|field, _| {
+        matches!(
+            field.as_str(),
+            "source" | "user_agent" | "user_agent_profile" | "referer" | "accept_language"
+        )
+    });
+    fields
 }
 
 fn task_limit() -> Value {
     json!({"type":"integer","minimum":1,"maximum":32})
+}
+fn color_fields(keys: &[&str], description: &str) -> Value {
+    let fields: Map<String, Value> = keys
+        .iter()
+        .map(|&key| {
+            (
+                key.into(),
+                json!({"type":["string","null"],"pattern":"^#[a-fA-F0-9]{6}$"}),
+            )
+        })
+        .collect();
+    let mut schema = object(json!(fields), &[]);
+    schema["description"] = json!(description);
+    schema
 }
 fn thread_limit() -> Value {
     json!({"type":"integer","minimum":1,"maximum":256})

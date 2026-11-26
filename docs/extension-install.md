@@ -27,7 +27,7 @@ On Windows, the bundled helper allows a custom developer ID:
 pwsh -File .\enable-dev-extension.ps1 -ExtensionId <extension-id>
 ```
 
-The desktop updater updates the desktop app. Unpacked extensions must be updated manually from the matching release ZIP. OnesDM 0.8.2 registers `com.onesdm.host` and the legacy alias `com.ndmnext.host`. Extension 1.4.1 uses the new name first and can still connect to older desktop versions. The legacy alias is scheduled for removal in 0.9.0.
+The desktop updater updates the desktop app. Unpacked extensions must be updated manually from the matching release ZIP. OnesDM 0.9.0 uses the `com.onesdm.host` native messaging registration. Update the desktop and companion extension together if your extension still uses the legacy host. Setup carries forward valid extension IDs.
 
 GitHub Actions tests and packages changes to the extension on the main branch.
 Use **Run workflow** to build a ZIP on demand and download the
@@ -66,7 +66,7 @@ Linux 用户从解压目录启动桌面应用一次，即可注册原生宿主�
 
 macOS 或 Linux 若要继续使用旧扩展，可复制扩展 ID，粘贴到 **OnesDM → 设置 → 浏览器扩展 → 修复连接**。Windows 自定义开发者 ID 可使用 ZIP 内的 `enable-dev-extension.ps1`。
 
-桌面自动更新只更新桌面程序。解压加载的扩展需手动下载对应 Release ZIP 更新。OnesDM 0.8.2 同时注册 `com.onesdm.host` 和旧名 `com.ndmnext.host`。扩展 1.4.1 优先使用新名，也能连接旧版桌面端。旧名计划在 0.9.0 移除。
+桌面自动更新只更新桌面程序。解压加载的扩展需手动下载对应 Release ZIP 更新。OnesDM 0.9.0 使用 `com.onesdm.host`。仍使用旧宿主的扩展需与桌面端一起更新，安装时会继承有效的扩展授权。
 
 主分支的扩展改动会触发 GitHub Actions 测试和打包，也可以点 **Run workflow** 手动构建。
 构建完成后，在对应运行中下载 `ndm-next-extension` 产物。桌面发布附有同一标签构建的扩展 ZIP。

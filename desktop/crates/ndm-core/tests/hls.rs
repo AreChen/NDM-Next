@@ -13,7 +13,7 @@ use axum::{
     body::Body,
     extract::{Path as AxumPath, State},
     http::StatusCode,
-    response::Response,
+    response::{Redirect, Response},
     routing::get,
 };
 use ndm_core::{
@@ -689,23 +689,38 @@ async fn live_playlist_is_refreshed_until_endlist() {
 }
 
 #[tokio::test]
-async fn cross_origin_segments_do_not_receive_browser_credentials() {
+async fn redirected_hls_segments_keep_mobile_headers_without_browser_credentials() {
     let leaked = Arc::new(AtomicBool::new(false));
+    let hints = Arc::new(AtomicUsize::new(0));
     let fixture = Arc::new(Fixture {
         root: Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hls"),
         missing: false,
     });
     let external_handler = {
         let leaked = leaked.clone();
+        let hints = hints.clone();
         move |headers: axum::http::HeaderMap, AxumPath(path): AxumPath<String>| {
             let fixture = fixture.clone();
             let leaked = leaked.clone();
+            let hints = hints.clone();
             async move {
                 if headers.contains_key("cookie")
                     || headers.contains_key("authorization")
                     || headers.contains_key("x-private")
                 {
                     leaked.store(true, Ordering::SeqCst);
+                }
+                if headers
+                    .get("user-agent")
+                    .is_some_and(|value| value == "iPhone test")
+                    && headers
+                        .get("accept-language")
+                        .is_some_and(|value| value == "zh-CN")
+                    && headers
+                        .get("referer")
+                        .is_some_and(|value| value == "http://page.example/")
+                {
+                    hints.fetch_add(1, Ordering::SeqCst);
                 }
                 serve(State(fixture), AxumPath(path)).await
             }
@@ -735,16 +750,24 @@ async fn cross_origin_segments_do_not_receive_browser_credentials() {
                 )
                 .await
                 .unwrap();
-                content.replace("seg", &format!("http://{external_address}/ts/seg"))
+                content.replace("seg", "hop/seg")
             }
         }
     };
     let original = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let original_address = original.local_addr().unwrap();
     tokio::spawn(async move {
-        axum::serve(original, Router::new().route("/index.m3u8", get(handler)))
-            .await
-            .unwrap();
+        let redirect = move |AxumPath(file): AxumPath<String>| async move {
+            Redirect::temporary(&format!("http://{external_address}/ts/{file}"))
+        };
+        axum::serve(
+            original,
+            Router::new()
+                .route("/index.m3u8", get(handler))
+                .route("/hop/{file}", get(redirect)),
+        )
+        .await
+        .unwrap();
     });
     let dir = TempDir::new().unwrap();
     let mut task = request(dir.path(), format!("http://{original_address}/index.m3u8"));
@@ -753,6 +776,14 @@ async fn cross_origin_segments_do_not_receive_browser_credentials() {
     task.headers
         .insert("Authorization".into(), "Bearer private".into());
     task.headers.insert("X-Private".into(), "private".into());
+    task.headers
+        .insert("User-Agent".into(), "iPhone test".into());
+    task.headers
+        .insert("Accept-Language".into(), "zh-CN".into());
+    task.headers.insert(
+        "Referer".into(),
+        "http://page.example/room?session=private".into(),
+    );
     download_hls(
         &task,
         TaskId::new_v4(),
@@ -764,4 +795,5 @@ async fn cross_origin_segments_do_not_receive_browser_credentials() {
     .unwrap();
     assert!(original_saw_credentials.load(Ordering::SeqCst));
     assert!(!leaked.load(Ordering::SeqCst));
+    assert_eq!(hints.load(Ordering::SeqCst), 3);
 }

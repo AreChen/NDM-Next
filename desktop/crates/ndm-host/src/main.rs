@@ -144,18 +144,18 @@ fn cli(arguments: &[String]) -> io::Result<()> {
             println!("OnesDM {}", env!("CARGO_PKG_VERSION"))
         }
         [flag] if flag == "--help" || flag == "-h" => println!(
-            "Ones Download Manager\nUsage: onesdm [download <http(s)-url> | mcp | --version]"
+            "Ones Download Manager\nUsage: onesdm [download <http(s)-url> [options] | mcp | --version]\nDownload options: --media-type hls|dash, --ua-profile iphone_safari|android_chrome|desktop_chrome, --user-agent UA, --referer URL, --accept-language LANG"
         ),
         [cmd] if cmd == "mcp" => return mcp::run(data_directory()),
-        [cmd, url] if cmd == "download" => {
+        [cmd, url, flags @ ..] if cmd == "download" => {
+            let id = ndm_core::TaskId::new_v4();
+            let task = parse_cli_download(url, flags, id)?;
             let profile = data_directory();
             if ndm_core::desktop_installation_active(&profile)? {
                 return Err(io::Error::other("installation is in progress"));
             }
             let store = Arc::new(Store::open(&profile.join("tasks.db")).map_err(io::Error::other)?);
             let host = Host::new(store, configured_downloads(&profile));
-            let id = ndm_core::TaskId::new_v4();
-            let task = json!({"type":"prepare","id":id,"task":{"url":url}});
             if desktop_message(&host, &profile, &sibling, task)["ok"] != true {
                 return Err(io::Error::other("could not prepare download"));
             }
@@ -175,6 +175,42 @@ fn cli(arguments: &[String]) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+fn parse_cli_download(url: &str, flags: &[String], id: ndm_core::TaskId) -> io::Result<Value> {
+    let (pairs, remainder) = flags.as_chunks::<2>();
+    if !remainder.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Download option requires a value.",
+        ));
+    }
+    let mut options = std::collections::BTreeMap::new();
+    for [flag, value] in pairs {
+        if !matches!(
+            flag.as_str(),
+            "--media-type" | "--ua-profile" | "--user-agent" | "--referer" | "--accept-language"
+        ) || options.insert(flag.as_str(), value.as_str()).is_some()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Invalid or repeated download option.",
+            ));
+        }
+    }
+    let media: Option<ndm_host::web::MediaType> =
+        serde_json::from_value(json!(options.get("--media-type")))?;
+    let profile = serde_json::from_value(json!(options.get("--ua-profile")))?;
+    let headers = ndm_host::web::headers(
+        options.get("--user-agent").copied(),
+        profile,
+        options.get("--referer").copied(),
+        options.get("--accept-language").copied(),
+    )
+    .map_err(io::Error::other)?;
+    Ok(
+        json!({"type":"prepare","id":id,"task":{"url":url,"media_type":media.map(ndm_host::web::MediaType::mime),"headers":headers}}),
+    )
 }
 
 fn data_directory() -> PathBuf {
@@ -475,15 +511,15 @@ fn main() {
             let directory = executable
                 .parent()
                 .ok_or_else(|| io::Error::other("missing installation directory"))?;
-            for (name, filename) in manifests {
-                let manifest = ndm_host::native_manifest(name, &executable, &ids)?;
-                let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
-                serde_json::to_writer_pretty(&mut temporary, &manifest)
-                    .map_err(io::Error::other)?;
-                temporary
-                    .persist(directory.join(filename))
-                    .map_err(io::Error::other)?;
-            }
+            // With --primary-host, the original name is only a source of
+            // previous extension authorizations.
+            let &(name, filename) = manifests.last().expect("one requested host");
+            let manifest = ndm_host::native_manifest(name, &executable, &ids)?;
+            let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
+            serde_json::to_writer_pretty(&mut temporary, &manifest).map_err(io::Error::other)?;
+            temporary
+                .persist(directory.join(filename))
+                .map_err(io::Error::other)?;
             Ok(())
         })();
         if result.is_err() {

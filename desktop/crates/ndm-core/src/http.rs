@@ -13,7 +13,7 @@ use std::{
 use crate::diagnostics::{SegmentFailure, SegmentIssue};
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use reqwest::{
-    Client, Response, StatusCode,
+    Client, Response, StatusCode, Url,
     header::{self, HeaderMap, HeaderName, HeaderValue},
 };
 use serde::{Deserialize, Serialize};
@@ -469,6 +469,7 @@ impl HttpTrace<'_> {
             builder,
             cancel,
             &mut retries,
+            false,
             |url, response, redirects| {
                 let status = response.map(Response::status);
                 if stage == HttpStage::RangeProbe
@@ -1102,12 +1103,47 @@ pub(crate) fn request_headers(request: &NewTask) -> Result<HeaderMap> {
     Ok(headers)
 }
 
-pub(crate) async fn send(
+/// Keep device and language hints for media CDNs, while scoping credentials to
+/// the source origin. Referer across origins contains only the page origin.
+pub(crate) fn media_headers(headers: &HeaderMap, source: &Url, target: &Url) -> HeaderMap {
+    if target.origin() == source.origin() {
+        return headers.clone();
+    }
+    let mut safe = HeaderMap::new();
+    for name in [header::USER_AGENT, header::ACCEPT_LANGUAGE] {
+        if let Some(value) = headers.get(&name) {
+            safe.insert(name, value.clone());
+        }
+    }
+    if let Some(page) = headers
+        .get(header::REFERER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| Url::parse(value).ok())
+        .filter(|page| {
+            page.scheme() == "http" || page.scheme() == "https" && target.scheme() == "https"
+        })
+        && let Ok(origin) =
+            HeaderValue::from_str(&format!("{}/", page.origin().ascii_serialization()))
+    {
+        safe.insert(header::REFERER, origin);
+    }
+    safe
+}
+
+pub(crate) async fn send_media(
     client: &Client,
     builder: reqwest::RequestBuilder,
     cancel: &CancellationToken,
 ) -> Result<Response> {
-    send_observed(client, builder, cancel, &mut 0, |_, _, _| {}).await
+    send_observed(client, builder, cancel, &mut 0, true, |_, _, _| {}).await
+}
+
+async fn send(
+    client: &Client,
+    builder: reqwest::RequestBuilder,
+    cancel: &CancellationToken,
+) -> Result<Response> {
+    send_observed(client, builder, cancel, &mut 0, false, |_, _, _| {}).await
 }
 
 async fn send_observed(
@@ -1115,6 +1151,7 @@ async fn send_observed(
     builder: reqwest::RequestBuilder,
     cancel: &CancellationToken,
     retries: &mut u32,
+    media: bool,
     mut observe: impl FnMut(&reqwest::Url, Option<&Response>, u8),
 ) -> Result<Response> {
     let mut request = builder.build().map_err(network)?;
@@ -1145,7 +1182,11 @@ async fn send_observed(
             return Err(Error::InvalidHttpResponse);
         }
         if next.origin() != previous.origin() {
-            let mut safe = HeaderMap::new();
+            let mut safe = if media {
+                media_headers(next_request.headers(), &previous, &next)
+            } else {
+                HeaderMap::new()
+            };
             for name in [
                 header::RANGE,
                 header::IF_RANGE,

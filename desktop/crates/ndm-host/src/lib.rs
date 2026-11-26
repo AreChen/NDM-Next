@@ -11,10 +11,12 @@ use reqwest::Url;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+pub mod characters;
 pub mod harness;
+pub mod web;
 
 pub const BROWSER_HOST_NAME: &str = "com.onesdm.host";
-// Remove the compatibility alias and its manifests in 0.9.0.
+// Identity of the obsolete manifest, used only to migrate extension authorization.
 pub const LEGACY_BROWSER_HOST_NAME: &str = "com.ndmnext.host";
 
 /// Chromium accepts at most 1 MiB from a native host; apply the same limit both ways.
