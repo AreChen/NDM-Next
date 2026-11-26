@@ -20,6 +20,10 @@ on:
         description: 'Optional Actions run containing the release artifacts'
         required: false
         type: string
+      extension_run_id:
+        description: 'Optional Actions run containing a companion extension built from the release commit'
+        required: false
+        type: string
       macos_arm64_run_id:
         description: 'Optional Actions run containing a rebuilt macOS arm64 package'
         required: false
@@ -81,16 +85,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id || github.run_id }}
           ARM64_RUN_ID: ${{ inputs.macos_arm64_run_id || inputs.artifact_run_id || github.run_id }}
+          EXTENSION_RUN_ID: ${{ inputs.extension_run_id || inputs.artifact_run_id || github.run_id }}
         run: |
           set -euo pipefail
           [[ "$RELEASE_TAG" =~ ^desktop-v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          [[ "$ARTIFACT_RUN_ID" =~ ^[0-9]+$ && "$ARM64_RUN_ID" =~ ^[0-9]+$ ]]
-          run_sha=$(gh api "repos/$GH_REPO/actions/runs/$ARTIFACT_RUN_ID" --jq '.head_sha')
-          [[ "$run_sha" == "$(git rev-parse HEAD)" ]]
-          if [[ "$ARM64_RUN_ID" != "$ARTIFACT_RUN_ID" ]]; then
-            arm64_sha=$(gh api "repos/$GH_REPO/actions/runs/$ARM64_RUN_ID" --jq '.head_sha')
-            [[ "$arm64_sha" == "$run_sha" ]]
-          fi
+          release_sha=$(git rev-parse HEAD)
+          for run_id in "$ARTIFACT_RUN_ID" "$ARM64_RUN_ID" "$EXTENSION_RUN_ID"; do
+            [[ "$run_id" =~ ^[0-9]+$ ]]
+            run_sha=$(gh api "repos/$GH_REPO/actions/runs/$run_id" --jq '.head_sha')
+            [[ "$run_sha" == "$release_sha" ]]
+          done
       - name: Download Windows artifact
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
@@ -119,7 +123,7 @@ jobs:
           name: ndm-next-extension
           path: release-assets
           github-token: ${{ github.token }}
-          run-id: ${{ inputs.artifact_run_id || github.run_id }}
+          run-id: ${{ inputs.extension_run_id || inputs.artifact_run_id || github.run_id }}
       - name: Download Linux artifact
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
