@@ -25,6 +25,7 @@ function setup(type, config={}, options={}) {
   vm.createContext(ctx); vm.runInContext(fs.readFileSync('extension/background.js','utf8'),ctx);
   const send=(message,sender={id:'extension',url:'chrome-extension://extension/popup.html'})=>new Promise(resolve=>listeners.message(message,sender,resolve));
   return {prepared,localWrites,windowCalls,nativeCalls,send,pauseTab:()=>pauseTab=true,releaseTab:()=>releaseTab(),navigate:()=>listeners.navigation(1,{status:'loading'}),remove:()=>listeners.removed(1),observe:async (tabId,requestId,cookie,extra={})=>{
+    await vm.runInContext('captureReady',ctx);
     const url=extra.url || 'https://video.test/playlist?id=42';
     listeners.headers({requestId,tabId,url,frameId:extra.frameId??0,documentId:extra.requestDocumentId??extra.documentId,method:'GET',requestHeaders:[{name:'Cookie',value:cookie},...(extra.requestHeaders||[])]});
     await listeners.media({requestId,tabId,url,frameId:extra.frameId??0,documentId:extra.documentId,method:'GET',statusCode:extra.statusCode??200,responseHeaders:[{name:'Content-Type',value:extra.type || type},{name:'Content-Length',value:'512'},...(extra.responseHeaders||[])]});
@@ -43,6 +44,16 @@ test('small images show up independently of the takeover threshold and stream ca
   const image=items.find(item=>item.type==='image/webp');
   assert.equal((await t.send({action:'send',tabId:1,id:image.id})).ok,true);
   assert.equal(t.prepared[0].expected_size,512);
+});
+
+test('media detection can find and send a resource while browser download takeover is disabled',async()=>{
+  const t=setup('video/mp4',{enabled:false,media:true});
+  await t.observe(1,'media-only','media=1',{url:'https://video.test/video.mp4'});
+  const {items,detecting}=await t.send({action:'media',tabId:1});
+  assert.equal(detecting,true);
+  assert.equal(items.length,1);
+  assert.equal((await t.send({action:'send',tabId:1,id:items[0].id})).ok,true);
+  assert.equal(t.prepared[0].headers.cookie,'media=1');
 });
 
 test('desktop capabilities offer a page action scoped to its original tab',async()=>{
@@ -194,10 +205,10 @@ test('extension-based manifests are detected and stream fragments do not replace
   const result=await stream.send({action:'media',tabId:1});assert.equal(result.items.length,1);assert.match(result.items[0].url,/m3u8$/);
 });
 
-test('blocking the site or disabling capture/media hides existing media and prevents sending',async()=>{
+test('blocking the site or turning off media detection hides resources and prevents sending',async()=>{
   const config={minBytes:0};const t=setup('video/mp4',config);await t.observe(1,'x','private=1');
   const {items}=await t.send({action:'media',tabId:1});assert.equal(items.length,1);
-  for(const change of [{blockedDomains:['page.test']},{enabled:false},{media:false}]) {
+  for(const change of [{blockedDomains:['page.test']},{media:false}]) {
     Object.assign(config,{blockedDomains:[],enabled:true,media:true},change);
     assert.equal((await t.send({action:'media',tabId:1})).items.length,0);
     assert.equal((await t.send({action:'send',tabId:1,id:items[0].id})).ok,false);

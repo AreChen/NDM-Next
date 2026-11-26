@@ -53,6 +53,15 @@ test('popup inline toggle persists immediately without saving other settings',as
   assert.equal(t.saved.length,1);assert.equal(t.saved[0].inlineMedia,false);assert.deepEqual(Object.keys(t.saved[0]),['inlineMedia']);
 });
 
+test('turning off download takeover leaves media detection editable',async()=>{
+  const t=setup();await t.ready();
+  await t.get('enabled').onchange({target:{checked:false}});
+  assert.equal(t.get('media').checked,true);
+  assert.notEqual(t.get('media').disabled,true);
+  await t.get('media').onchange({target:{checked:false}});
+  assert.deepEqual(t.saved.map(value=>Object.keys(value)),[['enabled'],['media']]);
+});
+
 test('popup lists the extension, desktop and installed plugin versions separately',async()=>{
   const t=setup();await t.ready();
   assert.equal(t.get('browserVersion').textContent,'v1.2.0');

@@ -405,8 +405,21 @@ fn main() {
             let name = arguments
                 .get(1)
                 .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing host name"))?;
-            let destination = executable.with_file_name("native-messaging-host.json");
+            let mut manifests = vec![(name.as_str(), "native-messaging-host.json")];
             let mut index = 2;
+            if arguments
+                .get(index)
+                .is_some_and(|arg| arg == "--primary-host")
+            {
+                let primary = arguments
+                    .get(index + 1)
+                    .filter(|primary| *primary != name)
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidInput, "invalid primary host name")
+                    })?;
+                manifests.push((primary.as_str(), "onesdm-native-messaging-host.json"));
+                index += 2;
+            }
             let preserve = arguments
                 .get(index)
                 .is_some_and(|arg| arg == "--preserve-origins");
@@ -436,26 +449,41 @@ fn main() {
             };
             let mut ids = arguments[index..].to_vec();
             // Validate the requested configuration even if an existing file is present.
-            ndm_host::native_manifest(name, &executable, &ids)?;
+            for &(name, _) in &manifests {
+                ndm_host::native_manifest(name, &executable, &ids)?;
+            }
             if preserve {
-                preserve_manifest_origins(&destination, name, &executable, &mut ids);
-                if let Some(host) = migrated_host {
+                for &(name, filename) in &manifests {
                     preserve_manifest_origins(
-                        &host.with_file_name("native-messaging-host.json"),
+                        &executable.with_file_name(filename),
                         name,
-                        &host,
+                        &executable,
                         &mut ids,
                     );
                 }
+                if let Some(host) = migrated_host {
+                    for &(name, filename) in &manifests {
+                        preserve_manifest_origins(
+                            &host.with_file_name(filename),
+                            name,
+                            &host,
+                            &mut ids,
+                        );
+                    }
+                }
             }
-            let manifest = ndm_host::native_manifest(name, &executable, &ids)?;
-            let mut temporary = tempfile::NamedTempFile::new_in(
-                destination
-                    .parent()
-                    .ok_or_else(|| io::Error::other("missing installation directory"))?,
-            )?;
-            serde_json::to_writer_pretty(&mut temporary, &manifest).map_err(io::Error::other)?;
-            temporary.persist(destination).map_err(io::Error::other)?;
+            let directory = executable
+                .parent()
+                .ok_or_else(|| io::Error::other("missing installation directory"))?;
+            for (name, filename) in manifests {
+                let manifest = ndm_host::native_manifest(name, &executable, &ids)?;
+                let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
+                serde_json::to_writer_pretty(&mut temporary, &manifest)
+                    .map_err(io::Error::other)?;
+                temporary
+                    .persist(directory.join(filename))
+                    .map_err(io::Error::other)?;
+            }
             Ok(())
         })();
         if result.is_err() {

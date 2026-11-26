@@ -35,7 +35,6 @@ function renderSite() {
   $('blockSite').textContent = text(blocked ? 'unblockSite' : 'blockSite');
   $('blockSite').disabled = !domain;
   $('openMedia').disabled = !domain;
-  $('media').disabled = !config.enabled;
 }
 
 async function renderResources() {

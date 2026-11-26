@@ -1,4 +1,4 @@
-use super::{ThemeTone, luminance, mix_rgb};
+use super::{CLASSIC_ACCENTS, ThemeTone, luminance, mix_rgb};
 use crate::language::Language;
 use gpui_kit::{Background, linear_color_stop, linear_gradient, rgb};
 use ndm_core::TaskState;
@@ -139,17 +139,18 @@ impl DownloadStyle {
                 [0xffffff, 0xedf3fc, 0xdce4f1, 0x697c9c],
             ),
         };
-        let [start, end, edge, accent] = std::array::from_fn(|i| tone.rgb(dark[i], light[i]));
+        let [start, end, edge, accent] =
+            std::array::from_fn(|i| mix_rgb(light[i], dark[i], tone.darkness));
         Self {
             background: [start, end],
             edge,
             accent,
             progress: [
-                tone.rgb(0x885dff, 0x885dff),
+                CLASSIC_ACCENTS[0],
                 match status {
                     DownloadStatus::Completed => 0x3ed4b2,
                     DownloadStatus::Failed | DownloadStatus::Paused => accent,
-                    _ => tone.rgb(0x37c9f5, 0x37c9f5),
+                    _ => CLASSIC_ACCENTS[1],
                 },
             ],
         }
@@ -225,6 +226,33 @@ fn status_ink(color: u32, tone: &ThemeTone, row: [u32; 2]) -> u32 {
 mod tests {
     use super::*;
     use crate::{palette::CustomPalette, preferences::ColorScheme};
+
+    #[test]
+    fn download_states_keep_their_default_colors_in_every_preset() {
+        for dark in [false, true] {
+            let tone = |scheme| {
+                ThemeTone::new(
+                    dark,
+                    scheme,
+                    CustomPalette {
+                        primary: 0x777777,
+                        secondary: Some(0xaaaaaa),
+                        ..CustomPalette::default()
+                    },
+                    DownloadColors::default(),
+                )
+            };
+            let classic = tone(ColorScheme::Classic);
+            for scheme in ColorScheme::ALL {
+                for status in DownloadStatus::ALL {
+                    assert_eq!(tone(scheme).download(status), classic.download(status));
+                }
+            }
+            let running = tone(ColorScheme::Silver).download(TaskState::Running.into());
+            assert_eq!(running.progress, CLASSIC_ACCENTS);
+            assert_eq!(running.accent, if dark { 0xb19bff } else { 0x6e4dcc });
+        }
+    }
 
     #[test]
     fn overrides_affect_only_the_selected_state_and_follow_theme_transitions() {

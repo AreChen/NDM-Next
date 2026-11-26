@@ -34,7 +34,9 @@ function isMediaSegment(item) {
 function normalizeDomain(value) { try { return new URL(value.includes('://') ? value : `https://${value}`).hostname.toLowerCase().replace(/\.$/, ''); } catch { return ''; } }
 function domainMatches(host, blocked) { host = normalizeDomain(host); blocked = normalizeDomain(blocked); return !!host && !!blocked && (host === blocked || host.endsWith('.' + blocked)); }
 function shouldSkip(item, settings = DEFAULTS) {
-  if (!settings.enabled) return true;
+  return settings.enabled !== true || isExcluded(item, settings);
+}
+function isExcluded(item, settings) {
   let url; try { url = new URL(item.url); } catch { return true; }
   if (!['http:', 'https:'].includes(url.protocol)) return true;
   if ((settings.blockedDomains || []).some(d => domainMatches(url.hostname, d) || domainMatches(item.pageUrl || '', d))) return true;

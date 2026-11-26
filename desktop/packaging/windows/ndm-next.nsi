@@ -23,8 +23,17 @@ RequestExecutionLevel user
   !define NDM_VERSION_QUAD "0.1.0.0"
 !endif
 !ifndef NDM_HOST_NAME
-  !define NDM_HOST_NAME "com.ndmnext.host"
+  !define NDM_HOST_NAME "com.onesdm.host"
 !endif
+; Keep the old host registration for extensions installed before 1.4.1.
+!ifdef NDM_TEST_INSTALL
+  !define NDM_LEGACY_HOST_NAME "${NDM_HOST_NAME}.legacy"
+!else
+  !define NDM_LEGACY_HOST_NAME "com.ndmnext.host"
+!endif
+!define NDM_HOST_ARGS '"${NDM_LEGACY_HOST_NAME}" --primary-host "${NDM_HOST_NAME}"'
+!define NDM_HOST_MANIFEST "onesdm-native-messaging-host.json"
+!define NDM_LEGACY_HOST_MANIFEST "native-messaging-host.json"
 !ifndef NDM_UNINSTALL_KEY
   !define NDM_UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\NDM Next"
 !endif
@@ -50,6 +59,16 @@ RequestExecutionLevel user
 !else
   !define NDM_DATA_DIR "$LOCALAPPDATA\NDM Next"
 !endif
+
+!macro RegisterNativeHost ROOT HOST MANIFEST
+  WriteRegStr HKCU "Software\${ROOT}\NativeMessagingHosts\${HOST}" "" "$INSTDIR\${MANIFEST}"
+!macroend
+
+!macro UnregisterNativeHost ROOT HOST MANIFEST
+  ReadRegStr $0 HKCU "Software\${ROOT}\NativeMessagingHosts\${HOST}" ""
+  StrCmp $0 "$INSTDIR\${MANIFEST}" 0 +2
+  DeleteRegKey HKCU "Software\${ROOT}\NativeMessagingHosts\${HOST}"
+!macroend
 
 Name "OnesDM"
 OutFile "${NDM_OUTPUT}"
@@ -298,25 +317,28 @@ Section "Install"
   StrCmp $OldDesktop "$INSTDIR\ndm-desktop.exe" manifest_without_migration
   ; Migration is explicitly tied to the registered previous desktop image.
   !ifdef NDM_EDGE_ID
-    nsExec::ExecToStack '"$INSTDIR\ndm-host.exe" --write-manifest "${NDM_HOST_NAME}" --preserve-origins --migrate-origins-from "$OldDesktop" "${NDM_CHROME_ID}" "${NDM_EDGE_ID}" "${NDM_UNPACKED_ID}"'
+    nsExec::ExecToStack '"$INSTDIR\ndm-host.exe" --write-manifest ${NDM_HOST_ARGS} --preserve-origins --migrate-origins-from "$OldDesktop" "${NDM_CHROME_ID}" "${NDM_EDGE_ID}" "${NDM_UNPACKED_ID}"'
   !else
-    nsExec::ExecToStack '"$INSTDIR\ndm-host.exe" --write-manifest "${NDM_HOST_NAME}" --preserve-origins --migrate-origins-from "$OldDesktop" "${NDM_CHROME_ID}" "${NDM_UNPACKED_ID}"'
+    nsExec::ExecToStack '"$INSTDIR\ndm-host.exe" --write-manifest ${NDM_HOST_ARGS} --preserve-origins --migrate-origins-from "$OldDesktop" "${NDM_CHROME_ID}" "${NDM_UNPACKED_ID}"'
   !endif
   Goto manifest_result
   manifest_without_migration:
   !ifdef NDM_EDGE_ID
-    nsExec::ExecToStack '"$INSTDIR\ndm-host.exe" --write-manifest "${NDM_HOST_NAME}" --preserve-origins "${NDM_CHROME_ID}" "${NDM_EDGE_ID}" "${NDM_UNPACKED_ID}"'
+    nsExec::ExecToStack '"$INSTDIR\ndm-host.exe" --write-manifest ${NDM_HOST_ARGS} --preserve-origins "${NDM_CHROME_ID}" "${NDM_EDGE_ID}" "${NDM_UNPACKED_ID}"'
   !else
-    nsExec::ExecToStack '"$INSTDIR\ndm-host.exe" --write-manifest "${NDM_HOST_NAME}" --preserve-origins "${NDM_CHROME_ID}" "${NDM_UNPACKED_ID}"'
+    nsExec::ExecToStack '"$INSTDIR\ndm-host.exe" --write-manifest ${NDM_HOST_ARGS} --preserve-origins "${NDM_CHROME_ID}" "${NDM_UNPACKED_ID}"'
   !endif
   manifest_result:
   Pop $0
   Pop $1
   StrCmp $0 "0" 0 install_error
 
-  WriteRegStr HKCU "Software\Google\Chrome\NativeMessagingHosts\${NDM_HOST_NAME}" "" "$INSTDIR\native-messaging-host.json"
-  WriteRegStr HKCU "Software\Chromium\NativeMessagingHosts\${NDM_HOST_NAME}" "" "$INSTDIR\native-messaging-host.json"
-  WriteRegStr HKCU "Software\Microsoft\Edge\NativeMessagingHosts\${NDM_HOST_NAME}" "" "$INSTDIR\native-messaging-host.json"
+  !insertmacro RegisterNativeHost "Google\Chrome" "${NDM_HOST_NAME}" "${NDM_HOST_MANIFEST}"
+  !insertmacro RegisterNativeHost "Chromium" "${NDM_HOST_NAME}" "${NDM_HOST_MANIFEST}"
+  !insertmacro RegisterNativeHost "Microsoft\Edge" "${NDM_HOST_NAME}" "${NDM_HOST_MANIFEST}"
+  !insertmacro RegisterNativeHost "Google\Chrome" "${NDM_LEGACY_HOST_NAME}" "${NDM_LEGACY_HOST_MANIFEST}"
+  !insertmacro RegisterNativeHost "Chromium" "${NDM_LEGACY_HOST_NAME}" "${NDM_LEGACY_HOST_MANIFEST}"
+  !insertmacro RegisterNativeHost "Microsoft\Edge" "${NDM_LEGACY_HOST_NAME}" "${NDM_LEGACY_HOST_MANIFEST}"
 
   !ifndef NDM_TEST_INSTALL
     Delete "$SMPROGRAMS\NDM Next\NDM Next.lnk"
@@ -366,15 +388,12 @@ Section "Uninstall"
   Abort
   uninstall_not_running:
   ; Do not remove a registry entry if another installation replaced it.
-  ReadRegStr $0 HKCU "Software\Google\Chrome\NativeMessagingHosts\${NDM_HOST_NAME}" ""
-  StrCmp $0 "$INSTDIR\native-messaging-host.json" 0 +2
-  DeleteRegKey HKCU "Software\Google\Chrome\NativeMessagingHosts\${NDM_HOST_NAME}"
-  ReadRegStr $0 HKCU "Software\Chromium\NativeMessagingHosts\${NDM_HOST_NAME}" ""
-  StrCmp $0 "$INSTDIR\native-messaging-host.json" 0 +2
-  DeleteRegKey HKCU "Software\Chromium\NativeMessagingHosts\${NDM_HOST_NAME}"
-  ReadRegStr $0 HKCU "Software\Microsoft\Edge\NativeMessagingHosts\${NDM_HOST_NAME}" ""
-  StrCmp $0 "$INSTDIR\native-messaging-host.json" 0 +2
-  DeleteRegKey HKCU "Software\Microsoft\Edge\NativeMessagingHosts\${NDM_HOST_NAME}"
+  !insertmacro UnregisterNativeHost "Google\Chrome" "${NDM_HOST_NAME}" "${NDM_HOST_MANIFEST}"
+  !insertmacro UnregisterNativeHost "Chromium" "${NDM_HOST_NAME}" "${NDM_HOST_MANIFEST}"
+  !insertmacro UnregisterNativeHost "Microsoft\Edge" "${NDM_HOST_NAME}" "${NDM_HOST_MANIFEST}"
+  !insertmacro UnregisterNativeHost "Google\Chrome" "${NDM_LEGACY_HOST_NAME}" "${NDM_LEGACY_HOST_MANIFEST}"
+  !insertmacro UnregisterNativeHost "Chromium" "${NDM_LEGACY_HOST_NAME}" "${NDM_LEGACY_HOST_MANIFEST}"
+  !insertmacro UnregisterNativeHost "Microsoft\Edge" "${NDM_LEGACY_HOST_NAME}" "${NDM_LEGACY_HOST_MANIFEST}"
   ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "NDM Next"
   StrCmp $0 '$\"$INSTDIR\ndm-desktop.exe$\" --background' 0 +2
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "NDM Next"
@@ -387,7 +406,8 @@ Section "Uninstall"
     RMDir "$SMPROGRAMS\OnesDM"
   skip_shortcuts:
   !endif
-  Delete "$INSTDIR\native-messaging-host.json"
+  Delete "$INSTDIR\${NDM_HOST_MANIFEST}"
+  Delete "$INSTDIR\${NDM_LEGACY_HOST_MANIFEST}"
   Delete "$INSTDIR\LICENSE.txt"
   Delete "$INSTDIR\THIRD-PARTY-LICENSES.html"
   Delete "$INSTDIR\LICENSE-LUCIDE.txt"

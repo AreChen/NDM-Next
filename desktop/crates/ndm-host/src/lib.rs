@@ -13,6 +13,10 @@ use serde_json::{Value, json};
 
 pub mod harness;
 
+pub const BROWSER_HOST_NAME: &str = "com.onesdm.host";
+// Remove the compatibility alias and its manifests in 0.9.0.
+pub const LEGACY_BROWSER_HOST_NAME: &str = "com.ndmnext.host";
+
 /// Chromium accepts at most 1 MiB from a native host; apply the same limit both ways.
 pub const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 

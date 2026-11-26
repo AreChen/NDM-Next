@@ -9,11 +9,13 @@ const mediaOpenings = new Map();
 const pageContexts = new Map();
 const inlineDismissedTabs = new Set();
 const SETTING_KEYS = new Set(Object.keys(DEFAULTS));
-const HOST = 'com.ndmnext.host';
+const CAPTURE_KEYS = ['enabled', 'media', 'backend'];
+const HOST = 'com.onesdm.host';
+const LEGACY_HOST = 'com.ndmnext.host'; // Remove with legacy host registration in 0.9.0.
 const RECOVERY_ALARM = 'ndm-next-recover';
 let captureEnabled = false;
-let captureInitialized = false;
-let mediaEnabled = true;
+let mediaEnabled = false;
+let captureRevision = 0;
 let expiryTimer;
 let recoveryTimer;
 let mediaSequence = 0;
@@ -26,15 +28,42 @@ let mediaDirty = false;
 let mediaPersistTimer;
 let mediaPersistTail = Promise.resolve();
 
-async function settings() { return { ...DEFAULTS, ...(await chrome.storage.local.get(DEFAULTS)) }; }
-function setCaptureEnabled(config) {
-  captureEnabled = config.backend === 'next' && config.enabled;
-  mediaEnabled = config.enabled && config.media;
-  captureInitialized = true;
-  if (!captureEnabled && !mediaEnabled) requests.clear();
-  if (!mediaEnabled) { mediaByTab.clear(); scheduleMediaPersist(); }
+async function settings() {
+  const revision = captureRevision;
+  try {
+    const stored = await chrome.storage.local.get(DEFAULTS);
+    if (!stored || typeof stored !== 'object' || Array.isArray(stored)) throw new Error('Settings unavailable');
+    const config = { ...DEFAULTS, ...stored };
+    if (revision === captureRevision) applyCaptureSettings(config);
+    return config;
+  } catch (error) {
+    if (revision === captureRevision) {
+      ++captureRevision;
+      applyCaptureSettings(null);
+    }
+    throw error;
+  }
 }
-const captureReady = settings().then(setCaptureEnabled).catch(() => {});
+
+function clearCapturedRequests() {
+  requests.clear();
+  clearTimeout(expiryTimer);
+  expiryTimer = undefined;
+}
+
+function applyCaptureSettings(config) {
+  captureEnabled = config?.backend === 'next' && config.enabled === true;
+  mediaEnabled = config?.media === true;
+  if (!captureEnabled && !mediaEnabled) clearCapturedRequests();
+  if (!mediaEnabled && mediaByTab.size) { mediaByTab.clear(); scheduleMediaPersist(); }
+}
+
+function refreshCaptureSettings() {
+  ++captureRevision;
+  return settings().catch(() => {});
+}
+
+let captureReady = refreshCaptureSettings();
 const mediaReady = restoreMedia();
 
 function currentMedia(entry, now = Date.now()) {
@@ -54,14 +83,16 @@ async function restoreMedia() {
   const session=chrome.storage.session;
   if (!session?.get || !session?.set) return;
   try {
+    await captureReady;
     // session is trusted-only by default; explicitly retain that boundary on
     // browsers supporting access levels. Never expose replay headers to pages.
     await session.setAccessLevel?.({accessLevel:'TRUSTED_CONTEXTS'});
     mediaSessionTrusted=true;
+    if (!mediaEnabled) { scheduleMediaPersist(); return; }
+    const revision = captureRevision;
     const saved=(await session.get(MEDIA_SESSION_KEY))?.[MEDIA_SESSION_KEY];
     if (saved) scheduleMediaPersist(); // Rewrite away expired or invalid entries.
-    await captureReady;
-    if (!mediaEnabled || saved?.version !== 1 || !Array.isArray(saved.entries)) return;
+    if (!mediaEnabled || revision !== captureRevision || saved?.version !== 1 || !Array.isArray(saved.entries)) return;
     const tabs=new Map();
     for (const entry of saved.entries.slice(0,500)) {
       const {tabId,item,capture}=entry || {};
@@ -70,7 +101,8 @@ async function restoreMedia() {
         || typeof item.id !== 'string' || !Number.isInteger(item.frameId) || item.frameId < 0
         || !reliablePage(item.url) || !reliablePage(item.pageUrl) || invalidatedMediaTabs.has(tabId)) continue;
       if (!tabs.has(tabId)) tabs.set(tabId,await chrome.tabs.get(tabId).catch(()=>null));
-      if (!mediaEnabled || invalidatedMediaTabs.has(tabId) || tabs.get(tabId)?.url !== item.pageUrl) continue;
+      if (!mediaEnabled || revision !== captureRevision) return;
+      if (invalidatedMediaTabs.has(tabId) || tabs.get(tabId)?.url !== item.pageUrl) continue;
       let replay=null;
       if (capture) {
         if (capture.tabId !== tabId || capture.url !== item.url || capture.frameId !== item.frameId
@@ -116,15 +148,29 @@ function persistMedia() {
   return mediaPersistTail;
 }
 chrome.storage.onChanged?.addListener((changes,area) => {
-  if (area === 'local' && Object.keys(changes).some(key=>SETTING_KEYS.has(key))) settings().then(config => {
-    const tabIds=[...mediaByTab.keys()];
-    pageContexts.clear();
-    if (changes.inlineMedia?.newValue === true) inlineDismissedTabs.clear();
-    setCaptureEnabled(config);
-    for (const id of tabIds) notifyMedia(id);
-  }).catch(() => {});
+  if (area !== 'local' || !Object.keys(changes).some(key=>SETTING_KEYS.has(key))) return;
+  const tabIds=[...mediaByTab.keys()];
+  pageContexts.clear();
+  if (changes.inlineMedia?.newValue === true) inlineDismissedTabs.clear();
+  if (CAPTURE_KEYS.some(key => Object.hasOwn(changes, key))) {
+    // Close the gate immediately, even if the storage read is delayed.
+    captureEnabled = false;
+    mediaEnabled = false;
+    clearCapturedRequests();
+    captureReady = refreshCaptureSettings();
+  }
+  for (const id of tabIds) notifyMedia(id);
 });
-function native(message) { return chrome.runtime.sendNativeMessage(HOST, message); }
+async function native(message) {
+  try {
+    return await chrome.runtime.sendNativeMessage(HOST, message);
+  } catch (error) {
+    // A missing host never received the operation. Communication failures may
+    // occur after delivery, so they must not cause a second prepare or commit.
+    if (error?.message !== 'Specified native messaging host not found.') throw error;
+    return chrome.runtime.sendNativeMessage(LEGACY_HOST, message);
+  }
+}
 function scheduleRecovery() {
   try { chrome.alarms?.create(RECOVERY_ALARM, {delayInMinutes:1}); } catch {}
   if (!recoveryTimer) {
@@ -147,15 +193,16 @@ chrome.alarms?.onAlarm.addListener(alarm => {
 handoff.recover().catch(() => {});
 
 chrome.webRequest.onBeforeSendHeaders?.addListener(details => {
-    // Store synchronously: response observers must not race storage initialization.
-    if (details.initiator?.startsWith('chrome-extension://')) return;
-    if (captureInitialized && !captureEnabled && !mediaEnabled) return;
+    // Store synchronously only after the settings for this worker were read.
+    if ((!captureEnabled && !mediaEnabled) || details.initiator?.startsWith('chrome-extension://')) return;
+    if (!captureEnabled && details.method !== 'GET') return;
     const now = Date.now();
     for (const [id,entry] of requests) if (now-entry.when > 120000) requests.delete(id);
     // Keep unsafe requests as markers so a simultaneous safe request for the
     // same URL cannot be mistaken for a POST or a request with custom headers.
-    const entry = captureRequest(details) || {requestId:details.requestId,url:details.url,tabId:details.tabId,frameId:details.frameId ?? 0,documentId:details.documentId,headers:null};
-    requests.set(details.requestId,{...entry,mediaCapture:captureRequest(details,{media:true}),when:now});
+    const capture = captureEnabled ? captureRequest(details) : null;
+    const entry = capture || {requestId:details.requestId,url:details.url,tabId:details.tabId,frameId:details.frameId ?? 0,documentId:details.documentId,headers:null};
+    requests.set(details.requestId,{...entry,mediaCapture:mediaEnabled ? captureRequest(details,{media:true}) : null,when:now});
     if (requests.size > 256) requests.delete(requests.keys().next().value);
     if (!expiryTimer) {
       expiryTimer = setTimeout(() => { requests.clear(); expiryTimer = undefined; },120000);
@@ -186,7 +233,7 @@ function extensionLanguage(config) {
 }
 
 function allowResource(item, config) {
-  return config.media && !shouldSkip({...item, size: undefined}, config)
+  return config.media === true && !isExcluded({...item, size: undefined}, config)
     && (!config.blockedDomains?.length || !!reliablePage(item.pageUrl));
 }
 
@@ -373,6 +420,7 @@ chrome.downloads.onCreated.addListener(async download => {
     item.url = current.finalUrl || item.url;
     if (shouldSkip(item,config)) return;
     if (config.backend === 'next') {
+      if (!captureEnabled) return;
       const task = browserTask(item,current,undefined,download.url,config);
       if (!task) return;
       if (config.captureMode === 'confirm') await askToTakeOver(current,task,config);
@@ -386,28 +434,28 @@ chrome.downloads.onCreated.addListener(async download => {
 chrome.downloads.onChanged?.addListener(delta => { if (delta.state || delta.error) handoff.recover().catch(scheduleRecovery); });
 
 chrome.webRequest.onHeadersReceived.addListener(async details => {
-  if (details.tabId < 0 || details.method !== 'GET' || details.initiator?.startsWith('chrome-extension://')) return;
+  if (!mediaEnabled || details.tabId < 0 || details.method !== 'GET' || details.initiator?.startsWith('chrome-extension://')) return;
   if (details.statusCode && (details.statusCode < 200 || details.statusCode >= 300)) return;
   const headers = Object.fromEntries((details.responseHeaders || []).map(h => [h.name.toLowerCase(), h.value || '']));
   const type = (headers['content-type'] || '').split(';')[0].trim().toLowerCase();
   if (!mediaKind({url:details.url,type})) return;
   const epoch = tabEpochs.get(details.tabId);
+  const revision = captureRevision;
   const captured = requests.get(details.requestId);
   const replay = captured?.mediaCapture;
   const capture = replay?.url === details.url && replay?.tabId === details.tabId && replay?.frameId === (details.frameId ?? 0)
     && (!details.documentId || !replay.documentId || details.documentId === replay.documentId)
     ? {...replay,when:captured.when} : null;
   await mediaReady;
-  await captureReady;
   const sequence = ++mediaSequence;
   try {
-    const config = await settings(); if (!config.media) return;
+    const config = await settings(); if (config.media !== true) return;
     const tab = await chrome.tabs.get(details.tabId);
+    if (!mediaEnabled || revision !== captureRevision || tabEpochs.get(details.tabId) !== epoch) return;
     const item = {id:`media-${sequence}`,url:details.url,pageUrl:tab.url,size:mediaSize(details,headers),type,frameId:details.frameId ?? 0,documentId:details.documentId || captured?.documentId};
     if (isMediaManifest(item)) item.size = undefined; // Manifest length is not the resulting media length.
     if (isMediaSegment(item)) item.size = undefined;
     if (!allowResource(item, config)) return;
-    if (tabEpochs.get(details.tabId) !== epoch) return;
     pruneMedia();
     const previous = mediaByTab.get(details.tabId) || [];
     // A stream may request thousands of segments. Keep its manifest selectable
@@ -521,7 +569,7 @@ chrome.runtime.onMessage.addListener((message,sender,reply) => {
       return {
         items: current ? entries.map(({item}) => ({...item, poster: posters[item.id]})) : [],
         inlineMedia: config.inlineMedia && !inlineDismissedTabs.has(tabId),
-        detecting: config.enabled && config.media,
+        detecting: config.media === true,
         language: config.language,
         labels,
         source: source && {title: source.title, url: source.url},

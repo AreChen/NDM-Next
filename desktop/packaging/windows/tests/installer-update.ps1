@@ -11,6 +11,16 @@ $media = Join-Path $testRoot 'media'
 $data = Join-Path $testRoot 'data'
 $install = Join-Path $testRoot 'install'
 $hostName = 'com.ndmnext.test' + [guid]::NewGuid().ToString('N')
+$legacyHostName = "$hostName.legacy"
+$nativeHosts = @{
+    $hostName = 'onesdm-native-messaging-host.json'
+    $legacyHostName = 'native-messaging-host.json'
+}
+$nativeHostRoots = @(
+    'HKCU:\Software\Google\Chrome\NativeMessagingHosts',
+    'HKCU:\Software\Chromium\NativeMessagingHosts',
+    'HKCU:\Software\Microsoft\Edge\NativeMessagingHosts'
+)
 $uninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\NDM-Installer-Test-' + [guid]::NewGuid().ToString('N')
 New-Item -ItemType Directory -Path $bin,"$media\bin","$media\source",$data -Force | Out-Null
 Copy-Item -LiteralPath $HostExecutable -Destination "$bin\ndm-host.exe"
@@ -64,7 +74,7 @@ try {
     Copy-Item -LiteralPath "$bin\ndm-desktop.exe" -Destination "$old\ndm-desktop.exe"
     Copy-Item -LiteralPath "$bin\ndm-host.exe" -Destination "$old\ndm-host.exe"
     $unpackedId = 'abcdefghijklmnopabcdefghijklmnop'
-    & rtk proxy "$old\ndm-host.exe" --write-manifest $hostName $unpackedId
+    & rtk proxy "$old\ndm-host.exe" --write-manifest $legacyHostName $unpackedId
     if ($LASTEXITCODE -ne 0) { throw 'Could not create previous integration fixture' }
     Set-ItemProperty -LiteralPath "HKCU:\$uninstallKey" -Name DisplayIcon -Value ('"' + $old + '\ndm-desktop.exe",0')
     $env:NDM_TEST_DESKTOP_WAIT = '1'
@@ -78,9 +88,17 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Update could not close registered custom installation' }
     if (-not $legacyProcess.WaitForExit(5000)) { throw 'Registered desktop did not exit' }
     if (-not (Test-Path -LiteralPath "$old\fixture.shutdown")) { throw 'Registered custom installation did not receive graceful shutdown' }
-    $relocatedManifest = Get-Content -LiteralPath "$install\native-messaging-host.json" -Raw | ConvertFrom-Json
-    if ($relocatedManifest.allowed_origins -notcontains "chrome-extension://$unpackedId/") { throw 'Relocation lost the previous unpacked extension ID' }
-    if ($relocatedManifest.allowed_origins -notcontains 'chrome-extension://caegebfdojcdlkkiaiokeoadefdooamd/') { throw 'Relocation lost the requested default extension ID' }
+    foreach ($name in $nativeHosts.Keys) {
+        $path = Join-Path $install $nativeHosts[$name]
+        $relocatedManifest = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+        if ($relocatedManifest.name -ne $name -or $relocatedManifest.path -ne "$install\ndm-host.exe") { throw "Incorrect manifest for $name" }
+        if ($relocatedManifest.allowed_origins -notcontains "chrome-extension://$unpackedId/") { throw "Relocation lost the previous unpacked extension ID for $name" }
+        if ($relocatedManifest.allowed_origins -notcontains 'chrome-extension://caegebfdojcdlkkiaiokeoadefdooamd/') { throw "Relocation lost the default extension ID for $name" }
+        foreach ($root in $nativeHostRoots) {
+            $registration = Get-Item -LiteralPath "$root\$name"
+            if ($registration.GetValue('') -ne $path) { throw "Incorrect native host registration for $name" }
+        }
+    }
     if ((Get-Content -LiteralPath "$install\launches.log") -contains 'guard-held') { throw 'Relaunch saw active installer guard' }
     if ((Get-Content -LiteralPath "$data\preferences.json") -ne '{"keep":true}') { throw 'Installer changed preferences' }
     if ((Get-Content -LiteralPath "$data\tasks.db") -ne 'preserve existing task database') { throw 'Installer changed task database' }
@@ -111,6 +129,12 @@ try {
     & rtk proxy "$install\Uninstall.exe" /S "_?=$install"
     if ($LASTEXITCODE -ne 0) { throw 'Isolated uninstall failed' }
     if (Test-Path -LiteralPath "$install\ndm-desktop.exe") { throw 'Uninstaller left installed executable' }
+    foreach ($name in $nativeHosts.Keys) {
+        if (Test-Path -LiteralPath (Join-Path $install $nativeHosts[$name])) { throw "Uninstaller left the manifest for $name" }
+        foreach ($root in $nativeHostRoots) {
+            if (Test-Path -LiteralPath "$root\$name") { throw "Uninstaller left the registration for $name" }
+        }
+    }
     if (-not (Test-Path -LiteralPath "$data\preferences.json")) { throw 'Uninstaller removed preferences by default' }
     if (-not (Test-Path -LiteralPath "$data\tasks.db")) { throw 'Uninstaller removed history by default' }
     Write-Output "PASS: launch, guard, registered custom-path shutdown, replacement, data preservation, uninstall; artifacts $testRoot"
@@ -123,7 +147,11 @@ try {
         if (-not $fixtureProcess.HasExited) { $fixtureProcess.Kill(); $fixtureProcess.WaitForExit() }
         $fixtureProcess.Dispose()
     }
-    foreach ($key in @("HKCU:\Software\Google\Chrome\NativeMessagingHosts\$hostName", "HKCU:\Software\Chromium\NativeMessagingHosts\$hostName", "HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\$hostName", "HKCU:\$uninstallKey")) {
-        if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -Recurse -Force }
+    foreach ($root in $nativeHostRoots) {
+        foreach ($name in $nativeHosts.Keys) {
+            $key = "$root\$name"
+            if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -Recurse -Force }
+        }
     }
+    if (Test-Path -LiteralPath "HKCU:\$uninstallKey") { Remove-Item -LiteralPath "HKCU:\$uninstallKey" -Recurse -Force }
 }

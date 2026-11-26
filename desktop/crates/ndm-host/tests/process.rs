@@ -101,7 +101,8 @@ fn relocating_integration_preserves_only_the_identified_installations_valid_orig
     stage_host(&host);
     let old_desktop = old.join("ndm-desktop.exe");
     fs::write(&old_desktop, b"identified desktop installation").unwrap();
-    let name = "com.ndmnext.host";
+    let name = ndm_host::LEGACY_BROWSER_HOST_NAME;
+    let primary = ndm_host::BROWSER_HOST_NAME;
     let default = "caegebfdojcdlkkiaiokeoadefdooamd";
     let prior = "abcdefghijklmnopabcdefghijklmnop";
     let existing = "pdkhpmalkocjfkfopjhmopikegpmcbcf";
@@ -111,6 +112,8 @@ fn relocating_integration_preserves_only_the_identified_installations_valid_orig
             .args([
                 "--write-manifest",
                 name,
+                "--primary-host",
+                primary,
                 "--preserve-origins",
                 "--migrate-origins-from",
             ])
@@ -126,23 +129,33 @@ fn relocating_integration_preserves_only_the_identified_installations_valid_orig
         .unwrap()
         .push(json!("*"));
     fs::write(&prior_manifest, serde_json::to_vec(&imported).unwrap()).unwrap();
-    let own = ndm_host::native_manifest(name, &host, &[existing.into()]).unwrap();
+    let own = ndm_host::native_manifest(primary, &host, &[existing.into()]).unwrap();
     fs::write(
-        new.join("native-messaging-host.json"),
+        new.join("onesdm-native-messaging-host.json"),
         serde_json::to_vec(&own).unwrap(),
     )
     .unwrap();
+    let manifest_paths = [
+        (name, new.join("native-messaging-host.json")),
+        (primary, new.join("onesdm-native-messaging-host.json")),
+    ];
+    let check_manifests = |origins: Value| {
+        for (name, path) in &manifest_paths {
+            let manifest: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+            assert_eq!(manifest["name"], *name);
+            assert_eq!(
+                fs::canonicalize(manifest["path"].as_str().unwrap()).unwrap(),
+                fs::canonicalize(&host).unwrap()
+            );
+            assert_eq!(manifest["allowed_origins"], origins);
+        }
+    };
     assert!(requested().success());
-    let manifest: Value =
-        serde_json::from_slice(&fs::read(new.join("native-messaging-host.json")).unwrap()).unwrap();
-    assert_eq!(
-        manifest["allowed_origins"],
-        json!([
-            format!("chrome-extension://{default}/"),
-            format!("chrome-extension://{existing}/"),
-            format!("chrome-extension://{prior}/")
-        ])
-    );
+    check_manifests(json!([
+        format!("chrome-extension://{default}/"),
+        format!("chrome-extension://{existing}/"),
+        format!("chrome-extension://{prior}/")
+    ]));
     for (field, value) in [
         ("name", json!("com.unrelated.host")),
         ("path", json!(host)),
@@ -151,15 +164,11 @@ fn relocating_integration_preserves_only_the_identified_installations_valid_orig
         let mut unrelated = initial.clone();
         unrelated[field] = value;
         fs::write(&prior_manifest, serde_json::to_vec(&unrelated).unwrap()).unwrap();
-        fs::remove_file(new.join("native-messaging-host.json")).unwrap();
+        for (_, path) in &manifest_paths {
+            fs::remove_file(path).unwrap();
+        }
         assert!(requested().success());
-        let manifest: Value =
-            serde_json::from_slice(&fs::read(new.join("native-messaging-host.json")).unwrap())
-                .unwrap();
-        assert_eq!(
-            manifest["allowed_origins"],
-            json!([format!("chrome-extension://{default}/")])
-        );
+        check_manifests(json!([format!("chrome-extension://{default}/")]));
     }
     assert!(
         !Command::new(&host)
