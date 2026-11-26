@@ -1,10 +1,10 @@
 <div align="center">
   <img src="assets/readme/hero.webp" width="1200" alt="OnesDM, ein KI-nativer Downloadmanager. Ein Wanderfalke im Sturzflug zieht parallele Downloadsegmente hinter sich her.">
   <h1><picture><source media="(prefers-color-scheme: dark)" srcset="assets/onesdm.svg"><img src="assets/onesdm-light.svg" width="36" alt=""></picture> OnesDM</h1>
-  <p>Ones Download Manager · PlayOnes · AI-Native Download Manager</p>
+  <p>Ones Download Manager · PlayOnes · AI-Native Download Manager · <a href="https://odm.playones.com/de/">odm.playones.com</a></p>
   <p><strong>Any Agent. All Downloads.</strong></p>
   <p>KI-nativer Downloadmanager für Windows, macOS und Linux. OnesDM ist in Rust mit GPUI geschrieben und verbindet den speichersicheren ODM Core mit erweiterbaren Download-Engines und optionalen KI-Clients.</p>
-  <p><a href="https://github.com/AreChen/OnesDM/releases/latest"><strong>Herunterladen</strong></a> · <a href="https://odm.playones.com/de/">odm.playones.com</a></p>
+  <p><a href="https://github.com/AreChen/OnesDM/releases/latest"><strong>Herunterladen</strong></a></p>
 </div>
 
 <p align="center"><a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-Hant.md">繁體中文</a> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a> · <a href="README.es.md">Español</a> · <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.fr.md">Français</a> · <strong>Deutsch</strong></p>
@@ -19,13 +19,9 @@
 
 ## Bildschirmfotos
 
-### Helles Design · Einstellungen
-
-[![Die OnesDM-Einstellungen im hellen Design zeigen KI-Integration, Sprache, Downloadverbindungen und Netzwerkoptionen.](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png)
-
-### Dunkles Design · Downloads
-
-[![Vier abgeschlossene Downloads in der Aufgabenliste von OnesDM im dunklen Design.](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.png)
+| Helles Design · Einstellungen | Dunkles Design · Downloads |
+| :---: | :---: |
+| [![Die OnesDM-Einstellungen im hellen Design zeigen KI-Integration, Sprache, Downloadverbindungen und Netzwerkoptionen.](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png) | [![Vier abgeschlossene Downloads in der Aufgabenliste von OnesDM im dunklen Design.](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.png) |
 
 ## Herunterladen
 

@@ -1,7 +1,7 @@
 <div align="center">
   <img src="assets/readme/hero.webp" width="1200" alt="OnesDM，AI 原生下載管理員。一隻遊隼俯衝，身後劃出多道平行的下載分段。">
   <h1><picture><source media="(prefers-color-scheme: dark)" srcset="assets/onesdm.svg"><img src="assets/onesdm-light.svg" width="36" alt=""></picture> OnesDM</h1>
-  <p>Ones Download Manager · PlayOnes · AI-Native Download Manager</p>
+  <p>Ones Download Manager · PlayOnes · AI-Native Download Manager · <a href="https://odm.playones.com/zh-hant/">odm.playones.com</a></p>
   <p><strong>Any Agent. All Downloads.</strong></p>
   <p>使用 Rust 和 GPUI 構建，支援 Windows、macOS 和 Linux，提供記憶體安全的下載核心、可擴充套件的下載引擎與可選的 AI 接入。</p>
   <p>透過<a href="#外掛與-ai">桌面外掛市場</a>安裝下載引擎，即可下載種子、磁力連結和流媒體。</p>
@@ -11,7 +11,7 @@
     <a href="https://github.com/AreChen/OnesDM/actions/workflows/release.yml"><img src="https://github.com/AreChen/OnesDM/actions/workflows/release.yml/badge.svg" alt="桌面端釋出構建"></a>
     <a href="LICENSE"><img src="https://img.shields.io/github/license/AreChen/OnesDM?color=34b8a3" alt="MIT 許可證"></a>
   </p>
-  <p><a href="https://github.com/AreChen/OnesDM/releases/latest"><strong>下載應用</strong></a> · <a href="#功能">功能</a> · <a href="#介面截圖">介面截圖</a> · <a href="#瀏覽器擴充套件">瀏覽器擴充套件</a> · <a href="https://odm.playones.com/zh-hant/">官網</a></p>
+  <p><a href="https://github.com/AreChen/OnesDM/releases/latest"><strong>下載應用</strong></a> · <a href="#功能">功能</a> · <a href="#介面截圖">介面截圖</a> · <a href="#瀏覽器擴充套件">瀏覽器擴充套件</a></p>
 </div>
 
 <p align="center"><a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> · <strong>繁體中文</strong> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a> · <a href="README.es.md">Español</a> · <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.fr.md">Français</a> · <a href="README.de.md">Deutsch</a></p>
@@ -26,13 +26,9 @@
 
 ## 介面截圖
 
-### 淺色主題 · 設定中心
-
-[![OnesDM 的淺色設定中心，顯示 AI 整合、語言、下載執行緒和代理伺服器設定。](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png)
-
-### 深色主題 · 下載清單
-
-[![深色介面下的 OnesDM 任務清單，顯示四筆已完成的下載。](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.png)
+| 淺色主題 · 設定中心 | 深色主題 · 下載清單 |
+| :---: | :---: |
+| [![OnesDM 的淺色設定中心，顯示 AI 整合、語言、下載執行緒和代理伺服器設定。](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png) | [![深色介面下的 OnesDM 任務清單，顯示四筆已完成的下載。](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.png) |
 
 ## 下載
 

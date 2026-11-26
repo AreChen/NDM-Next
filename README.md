@@ -1,7 +1,7 @@
 <div align="center">
   <img src="assets/readme/hero.webp" width="1200" alt="OnesDM, AI-Native Download Manager. A diving peregrine trails parallel streams of download segments.">
   <h1><picture><source media="(prefers-color-scheme: dark)" srcset="assets/onesdm.svg"><img src="assets/onesdm-light.svg" width="36" alt=""></picture> OnesDM</h1>
-  <p>Ones Download Manager · PlayOnes · AI-Native Download Manager</p>
+  <p>Ones Download Manager · PlayOnes · AI-Native Download Manager · <a href="https://odm.playones.com/">odm.playones.com</a></p>
   <p><strong>Any Agent. All Downloads.</strong></p>
   <p>Built with Rust and GPUI for Windows, macOS, and Linux, with a memory-safe core, pluggable download engines, and optional AI integration.</p>
   <p>Download torrents, magnet links, and streaming media with optional engines from the <a href="#plugins-and-ai">desktop plugin market</a>.</p>
@@ -11,7 +11,7 @@
     <a href="https://github.com/AreChen/OnesDM/actions/workflows/release.yml"><img src="https://github.com/AreChen/OnesDM/actions/workflows/release.yml/badge.svg" alt="Desktop release build"></a>
     <a href="LICENSE"><img src="https://img.shields.io/github/license/AreChen/OnesDM?color=34b8a3" alt="MIT license"></a>
   </p>
-  <p><a href="https://github.com/AreChen/OnesDM/releases/latest"><strong>Download</strong></a> · <a href="#features">Features</a> · <a href="#screenshots">Screenshots</a> · <a href="#browser-extension">Browser extension</a> · <a href="https://odm.playones.com/">Website</a></p>
+  <p><a href="https://github.com/AreChen/OnesDM/releases/latest"><strong>Download</strong></a> · <a href="#features">Features</a> · <a href="#screenshots">Screenshots</a> · <a href="#browser-extension">Browser extension</a></p>
 </div>
 
 <p align="center"><strong>English</strong> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-Hant.md">繁體中文</a> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a> · <a href="README.es.md">Español</a> · <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.fr.md">Français</a> · <a href="README.de.md">Deutsch</a></p>
@@ -26,13 +26,9 @@
 
 ## Screenshots
 
-### Light theme · Settings
-
-[![The OnesDM settings center in light mode, showing AI integration, language, download threads and network settings.](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png)
-
-### Dark theme · Downloads
-
-[![Four completed downloads in the OnesDM task list in dark mode.](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.png)
+| Light theme · Settings | Dark theme · Downloads |
+| :---: | :---: |
+| [![The OnesDM settings center in light mode, showing AI integration, language, download threads and network settings.](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png) | [![Four completed downloads in the OnesDM task list in dark mode.](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.png) |
 
 ## Download
 

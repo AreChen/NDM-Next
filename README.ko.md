@@ -1,10 +1,10 @@
 <div align="center">
   <img src="assets/readme/hero.webp" width="1200" alt="AI 네이티브 다운로드 관리자 OnesDM. 급강하하는 매 뒤로 다운로드 조각들이 여러 줄의 궤적을 그린다.">
   <h1><picture><source media="(prefers-color-scheme: dark)" srcset="assets/onesdm.svg"><img src="assets/onesdm-light.svg" width="36" alt=""></picture> OnesDM</h1>
-  <p>Ones Download Manager · PlayOnes · AI-Native Download Manager</p>
+  <p>Ones Download Manager · PlayOnes · AI-Native Download Manager · <a href="https://odm.playones.com/ko/">odm.playones.com</a></p>
   <p><strong>Any Agent. All Downloads.</strong></p>
   <p>Rust와 GPUI로 만든 Windows, macOS, Linux용 AI 네이티브 다운로드 관리자입니다. 메모리 안전성을 갖춘 ODM Core에 다운로드 플러그인과 AI 클라이언트를 연결할 수 있습니다.</p>
-  <p><a href="https://github.com/AreChen/OnesDM/releases/latest"><strong>다운로드</strong></a> · <a href="https://odm.playones.com/ko/">odm.playones.com</a></p>
+  <p><a href="https://github.com/AreChen/OnesDM/releases/latest"><strong>다운로드</strong></a></p>
 </div>
 
 <p align="center"><a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-Hant.md">繁體中文</a> · <a href="README.ja.md">日本語</a> · <strong>한국어</strong> · <a href="README.es.md">Español</a> · <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.fr.md">Français</a> · <a href="README.de.md">Deutsch</a></p>
@@ -19,13 +19,9 @@
 
 ## 스크린샷
 
-### 라이트 테마 · 설정
-
-[![밝은 테마의 OnesDM 설정 화면. AI 연동, 언어, 다운로드 스레드 수와 네트워크 설정이 보인다.](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png)
-
-### 다크 테마 · 다운로드 목록
-
-[![어두운 테마의 OnesDM 작업 목록에 완료된 다운로드 4개가 표시되어 있다.](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.png)
+| 라이트 테마 · 설정 | 다크 테마 · 다운로드 목록 |
+| :---: | :---: |
+| [![밝은 테마의 OnesDM 설정 화면. AI 연동, 언어, 다운로드 스레드 수와 네트워크 설정이 보인다.](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png) | [![어두운 테마의 OnesDM 작업 목록에 완료된 다운로드 4개가 표시되어 있다.](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.png) |
 
 ## 다운로드
 

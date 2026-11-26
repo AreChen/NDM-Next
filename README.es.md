@@ -1,10 +1,10 @@
 <div align="center">
   <img src="assets/readme/hero.webp" width="1200" alt="OnesDM, gestor de descargas con IA nativa. Un halcón peregrino en picado deja una estela de segmentos de descarga paralelos.">
   <h1><picture><source media="(prefers-color-scheme: dark)" srcset="assets/onesdm.svg"><img src="assets/onesdm-light.svg" width="36" alt=""></picture> OnesDM</h1>
-  <p>Ones Download Manager · PlayOnes · AI-Native Download Manager</p>
+  <p>Ones Download Manager · PlayOnes · AI-Native Download Manager · <a href="https://odm.playones.com/es/">odm.playones.com</a></p>
   <p><strong>Any Agent. All Downloads.</strong></p>
   <p>Gestor de descargas nativo de IA para Windows, macOS y Linux. Está escrito en Rust con GPUI y combina ODM Core, un motor con seguridad de memoria, con complementos y clientes de IA opcionales.</p>
-  <p><a href="https://github.com/AreChen/OnesDM/releases/latest"><strong>Descargar</strong></a> · <a href="https://odm.playones.com/es/">odm.playones.com</a></p>
+  <p><a href="https://github.com/AreChen/OnesDM/releases/latest"><strong>Descargar</strong></a></p>
 </div>
 
 <p align="center"><a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-Hant.md">繁體中文</a> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a> · <strong>Español</strong> · <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.fr.md">Français</a> · <a href="README.de.md">Deutsch</a></p>
@@ -19,13 +19,9 @@
 
 ## Capturas de pantalla
 
-### Tema claro · Configuración
-
-[![El panel de configuración de OnesDM en el tema claro muestra la integración con IA, el idioma, los hilos de descarga y los ajustes de red.](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png)
-
-### Tema oscuro · Descargas
-
-[![Cuatro descargas completadas en la lista de tareas de OnesDM con el tema oscuro.](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.png)
+| Tema claro · Configuración | Tema oscuro · Descargas |
+| :---: | :---: |
+| [![El panel de configuración de OnesDM en el tema claro muestra la integración con IA, el idioma, los hilos de descarga y los ajustes de red.](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png) | [![Cuatro descargas completadas en la lista de tareas de OnesDM con el tema oscuro.](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.png) |
 
 ## Descargar
 
