@@ -26,9 +26,20 @@
 
 ## Screenshots
 
-| Light theme · Settings | Dark theme · Downloads |
-| :---: | :---: |
-| [![The OnesDM settings center in light mode, showing AI integration, language, download threads and network settings.](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png) | [![Four completed downloads in the OnesDM task list in dark mode.](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.png) |
+<table>
+  <thead>
+    <tr>
+      <th scope="col" width="50%">Light theme · Settings</th>
+      <th scope="col" width="50%">Dark theme · Downloads</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><a href="assets/readme/downloads-light.png"><img src="assets/readme/downloads-light.webp" alt="The OnesDM settings center in light mode, showing AI integration, language, download threads and network settings."></a></td>
+      <td><a href="assets/readme/downloads-dark.png"><img src="assets/readme/downloads-dark.webp" alt="Four completed downloads in the OnesDM task list in dark mode."></a></td>
+    </tr>
+  </tbody>
+</table>
 
 ## Download
 

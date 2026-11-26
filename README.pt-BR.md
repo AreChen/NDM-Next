@@ -19,9 +19,20 @@
 
 ## Capturas de tela
 
-| Tema claro · Configurações | Tema escuro · Downloads |
-| :---: | :---: |
-| [![O painel de configurações do OnesDM no tema claro mostra a integração com IA, o idioma, as conexões de download e os ajustes de rede.](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png) | [![Quatro downloads concluídos na lista de tarefas do OnesDM com o tema escuro.](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.png) |
+<table>
+  <thead>
+    <tr>
+      <th scope="col" width="50%">Tema claro · Con&shy;fi&shy;gu&shy;ra&shy;ções</th>
+      <th scope="col" width="50%">Tema escuro · Downloads</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><a href="assets/readme/downloads-light.png"><img src="assets/readme/downloads-light.webp" alt="O painel de configurações do OnesDM no tema claro mostra a integração com IA, o idioma, as conexões de download e os ajustes de rede."></a></td>
+      <td><a href="assets/readme/downloads-dark.png"><img src="assets/readme/downloads-dark.webp" alt="Quatro downloads concluídos na lista de tarefas do OnesDM com o tema escuro."></a></td>
+    </tr>
+  </tbody>
+</table>
 
 ## Baixar
 

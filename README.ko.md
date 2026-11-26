@@ -19,9 +19,20 @@
 
 ## 스크린샷
 
-| 라이트 테마 · 설정 | 다크 테마 · 다운로드 목록 |
-| :---: | :---: |
-| [![밝은 테마의 OnesDM 설정 화면. AI 연동, 언어, 다운로드 스레드 수와 네트워크 설정이 보인다.](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png) | [![어두운 테마의 OnesDM 작업 목록에 완료된 다운로드 4개가 표시되어 있다.](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.png) |
+<table>
+  <thead>
+    <tr>
+      <th scope="col" width="50%">라이트 테마 · 설정</th>
+      <th scope="col" width="50%">다크 테마 · 다운로드 목록</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><a href="assets/readme/downloads-light.png"><img src="assets/readme/downloads-light.webp" alt="밝은 테마의 OnesDM 설정 화면. AI 연동, 언어, 다운로드 스레드 수와 네트워크 설정이 보인다."></a></td>
+      <td><a href="assets/readme/downloads-dark.png"><img src="assets/readme/downloads-dark.webp" alt="어두운 테마의 OnesDM 작업 목록에 완료된 다운로드 4개가 표시되어 있다."></a></td>
+    </tr>
+  </tbody>
+</table>
 
 ## 다운로드
 

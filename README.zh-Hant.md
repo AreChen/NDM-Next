@@ -26,9 +26,20 @@
 
 ## 介面截圖
 
-| 淺色主題 · 設定中心 | 深色主題 · 下載清單 |
-| :---: | :---: |
-| [![OnesDM 的淺色設定中心，顯示 AI 整合、語言、下載執行緒和代理伺服器設定。](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png) | [![深色介面下的 OnesDM 任務清單，顯示四筆已完成的下載。](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.png) |
+<table>
+  <thead>
+    <tr>
+      <th scope="col" width="50%">淺色主題 · 設定中心</th>
+      <th scope="col" width="50%">深色主題 · 下載清單</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><a href="assets/readme/downloads-light.png"><img src="assets/readme/downloads-light.webp" alt="OnesDM 的淺色設定中心，顯示 AI 整合、語言、下載執行緒和代理伺服器設定。"></a></td>
+      <td><a href="assets/readme/downloads-dark.png"><img src="assets/readme/downloads-dark.webp" alt="深色介面下的 OnesDM 任務清單，顯示四筆已完成的下載。"></a></td>
+    </tr>
+  </tbody>
+</table>
 
 ## 下載
 

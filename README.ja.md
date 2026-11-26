@@ -19,9 +19,20 @@
 
 ## スクリーンショット
 
-| ライトテーマ · 設定 | ダークテーマ · ダウンロード一覧 |
-| :---: | :---: |
-| [![ライトテーマの OnesDM 設定画面。AI 連携、言語、ダウンロードのスレッド数、ネットワークの設定が並ぶ。](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png) | [![ダークテーマの OnesDM のタスクリスト。完了したダウンロードが4件並んでいる。](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.png) |
+<table>
+  <thead>
+    <tr>
+      <th scope="col" width="50%">ライトテーマ · 設定</th>
+      <th scope="col" width="50%">ダークテーマ · ダウンロード一覧</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><a href="assets/readme/downloads-light.png"><img src="assets/readme/downloads-light.webp" alt="ライトテーマの OnesDM 設定画面。AI 連携、言語、ダウンロードのスレッド数、ネットワークの設定が並ぶ。"></a></td>
+      <td><a href="assets/readme/downloads-dark.png"><img src="assets/readme/downloads-dark.webp" alt="ダークテーマの OnesDM のタスクリスト。完了したダウンロードが4件並んでいる。"></a></td>
+    </tr>
+  </tbody>
+</table>
 
 ## ダウンロード
 

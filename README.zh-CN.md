@@ -26,9 +26,20 @@
 
 ## 界面截图
 
-| 亮色主题 · 设置中心 | 暗色主题 · 下载列表 |
-| :---: | :---: |
-| [![OnesDM 亮色设置中心，可见 AI 集成、语言、下载线程和代理设置。](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png) | [![暗色界面下的 OnesDM 任务列表，显示四个已完成的下载。](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.png) |
+<table>
+  <thead>
+    <tr>
+      <th scope="col" width="50%">亮色主题 · 设置中心</th>
+      <th scope="col" width="50%">暗色主题 · 下载列表</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><a href="assets/readme/downloads-light.png"><img src="assets/readme/downloads-light.webp" alt="OnesDM 亮色设置中心，可见 AI 集成、语言、下载线程和代理设置。"></a></td>
+      <td><a href="assets/readme/downloads-dark.png"><img src="assets/readme/downloads-dark.webp" alt="暗色界面下的 OnesDM 任务列表，显示四个已完成的下载。"></a></td>
+    </tr>
+  </tbody>
+</table>
 
 ## 下载
 

@@ -19,9 +19,20 @@
 
 ## Captures d’écran
 
-| Thème clair · Paramètres | Thème sombre · Téléchargements |
-| :---: | :---: |
-| [![Les paramètres d’OnesDM en thème clair affichent les réglages de l’intégration de l’IA, de la langue, des connexions de téléchargement et du réseau.](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png) | [![Quatre téléchargements terminés dans la liste des tâches d’OnesDM en mode sombre.](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.png) |
+<table>
+  <thead>
+    <tr>
+      <th scope="col" width="50%">Thème clair · Para&shy;mètres</th>
+      <th scope="col" width="50%">Thème sombre · Télé&shy;charge&shy;ments</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><a href="assets/readme/downloads-light.png"><img src="assets/readme/downloads-light.webp" alt="Les paramètres d’OnesDM en thème clair affichent les réglages de l’intégration de l’IA, de la langue, des connexions de téléchargement et du réseau."></a></td>
+      <td><a href="assets/readme/downloads-dark.png"><img src="assets/readme/downloads-dark.webp" alt="Quatre téléchargements terminés dans la liste des tâches d’OnesDM en mode sombre."></a></td>
+    </tr>
+  </tbody>
+</table>
 
 ## Télécharger
 

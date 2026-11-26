@@ -19,9 +19,20 @@
 
 ## Bildschirmfotos
 
-| Helles Design · Einstellungen | Dunkles Design · Downloads |
-| :---: | :---: |
-| [![Die OnesDM-Einstellungen im hellen Design zeigen KI-Integration, Sprache, Downloadverbindungen und Netzwerkoptionen.](assets/readme/downloads-light.webp)](assets/readme/downloads-light.png) | [![Vier abgeschlossene Downloads in der Aufgabenliste von OnesDM im dunklen Design.](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.png) |
+<table>
+  <thead>
+    <tr>
+      <th scope="col" width="50%">Helles Design · Ein&shy;stel&shy;lun&shy;gen</th>
+      <th scope="col" width="50%">Dunkles Design · Downloads</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><a href="assets/readme/downloads-light.png"><img src="assets/readme/downloads-light.webp" alt="Die OnesDM-Einstellungen im hellen Design zeigen KI-Integration, Sprache, Downloadverbindungen und Netzwerkoptionen."></a></td>
+      <td><a href="assets/readme/downloads-dark.png"><img src="assets/readme/downloads-dark.webp" alt="Vier abgeschlossene Downloads in der Aufgabenliste von OnesDM im dunklen Design."></a></td>
+    </tr>
+  </tbody>
+</table>
 
 ## Herunterladen
 
