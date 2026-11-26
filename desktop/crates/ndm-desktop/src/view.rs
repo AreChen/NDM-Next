@@ -185,6 +185,7 @@ impl Desktop {
             #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             mut commands,
         } = services;
+        preferences.language.apply_to_controls();
         cx.bind_keys([KeyBinding::new(
             if cfg!(target_os = "macos") {
                 "cmd-k"
@@ -202,11 +203,7 @@ impl Desktop {
         })
         .detach();
         let search_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(if preferences.language == Language::Chinese {
-                "搜索"
-            } else {
-                "Search"
-            })
+            InputState::new(window, cx).placeholder(preferences.language.text("搜索", "Search"))
         });
         cx.observe(&search_input, |this, input, cx| {
             let query = input.read(cx).value().to_string();
@@ -599,10 +596,7 @@ impl Desktop {
     }
 
     fn text(&self, chinese: &'static str, english: &'static str) -> &'static str {
-        match self.preferences.language {
-            Language::Chinese => chinese,
-            Language::English => english,
-        }
+        self.preferences.language.text(chinese, english)
     }
 
     fn display_text(&self, text: &'static str) -> SharedString {
@@ -1460,13 +1454,20 @@ impl Desktop {
                             }
                             if this.editing_url == Some(*id) { this.editing_url = None; }
                         }
-                        this.set_notice(if report.failed.is_empty() {
-                            format!("{} {} {}", this.text("已删除", "Deleted"), report.removed.len(), this.text("个任务。", "downloads."))
-                        } else {
-                            format!("{} {} · {} {}. {}", this.text("已删除", "Deleted"), report.removed.len(),
-                                this.text("未完成", "Failed"), report.failed.len(),
-                                this.text("未删除的记录已保留；部分文件可能已删除。", "Unremoved records were kept; some files may already have been deleted."))
-                        }, cx);
+                        let removed = report.removed.len().to_string();
+                        let language = this.preferences.language;
+                        let mut message = language.format(
+                            "已删除任务数：{count}", "Downloads removed: {count}", &[("count", &removed)],
+                        );
+                        if !report.failed.is_empty() {
+                            let failed = language.format(
+                                "失败任务数：{count}", "Failed downloads: {count}",
+                                &[("count", &report.failed.len().to_string())],
+                            );
+                            let detail = this.text("未删除的记录已保留；部分文件可能已删除。", "Unremoved records were kept; some files may already have been deleted.");
+                            message = format!("{message} · {failed}. {detail}");
+                        }
+                        this.set_notice(message, cx);
                     }
                     Err(_) => this.set_notice(this.text("删除失败，请检查文件和目录权限。", "Deletion failed; check file and folder permissions.").into(), cx),
                 }
@@ -1872,7 +1873,7 @@ impl Render for Desktop {
             .gap_2()
             .px_4()
             .py_3();
-        let zh = self.preferences.language == Language::Chinese;
+        let language = self.preferences.language;
         let current_category = self.category;
         let current_sort = self.sort_order;
         let category_view = cx.entity().downgrade();
@@ -1901,7 +1902,7 @@ impl Render for Desktop {
                     "category-title-action",
                     Button::new("category-filter")
                         .small()
-                        .label(current_category.label(zh))
+                        .label(current_category.label(language))
                         .dropdown_caret(true)
                         .dropdown_menu(move |menu, _, _| {
                             Category::ALL.iter().fold(menu, |menu, category| {
@@ -1909,7 +1910,7 @@ impl Render for Desktop {
                                 let view = category_view.clone();
                                 menu.item(
                                     crate::chrome::choice_item(
-                                        category.label(zh),
+                                        category.label(language),
                                         category == current_category,
                                         dark,
                                     )
@@ -1941,7 +1942,7 @@ impl Render for Desktop {
                                 let view = sort_view.clone();
                                 menu.item(
                                     crate::chrome::choice_item(
-                                        sort.label(zh),
+                                        sort.label(language),
                                         sort == current_sort,
                                         dark,
                                     )
@@ -2249,11 +2250,13 @@ impl Render for Desktop {
                                 })),
                         )
                         .when(selected_count > 0, |row| {
-                            row.child(div().text_xs().text_color(rgb(muted)).child(format!(
-                                "{} {}",
-                                selected_count,
-                                self.text("已选择", "selected")
-                            )))
+                            row.child(div().text_xs().text_color(rgb(muted)).child(
+                                self.preferences.language.format(
+                                    "已选 {count} 项",
+                                    "{count} selected",
+                                    &[("count", &selected_count.to_string())],
+                                ),
+                            ))
                             .child(
                                 Button::new("delete-selected")
                                     .small()
@@ -2395,7 +2398,7 @@ impl Render for Desktop {
                 toolbar_controls,
                 tone,
                 sidebar.target().width_px().unwrap_or(180.),
-                self.preferences.language == Language::Chinese,
+                self.preferences.language,
                 {
                     #[cfg(any(windows, target_os = "macos"))]
                     {

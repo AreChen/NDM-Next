@@ -1,4 +1,5 @@
 //! Search metadata is built when the task list reloads, never while rendering a row.
+use crate::preferences::Language;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -39,24 +40,16 @@ impl Category {
         Self::Other,
     ];
 
-    pub(crate) fn label(self, chinese: bool) -> &'static str {
-        match (self, chinese) {
-            (Self::All, true) => "全部类型",
-            (Self::All, false) => "All types",
-            (Self::Archives, true) => "压缩包",
-            (Self::Archives, false) => "Archives",
-            (Self::Documents, true) => "文档",
-            (Self::Documents, false) => "Documents",
-            (Self::Video, true) => "视频",
-            (Self::Video, false) => "Video",
-            (Self::Audio, true) => "音频",
-            (Self::Audio, false) => "Audio",
-            (Self::Images, true) => "图片",
-            (Self::Images, false) => "Images",
-            (Self::Applications, true) => "应用程序",
-            (Self::Applications, false) => "Applications",
-            (Self::Other, true) => "其他",
-            (Self::Other, false) => "Other",
+    pub(crate) fn label(self, language: Language) -> &'static str {
+        match self {
+            Self::All => language.text("全部类型", "All types"),
+            Self::Archives => language.text("压缩包", "Archives"),
+            Self::Documents => language.text("文档", "Documents"),
+            Self::Video => language.text("视频", "Video"),
+            Self::Audio => language.text("音频", "Audio"),
+            Self::Images => language.text("图片", "Images"),
+            Self::Applications => language.text("应用程序", "Applications"),
+            Self::Other => language.text("其他", "Other"),
         }
     }
 }
@@ -72,14 +65,11 @@ pub(crate) enum SortOrder {
 impl SortOrder {
     pub(crate) const ALL: [Self; 3] = [Self::Recent, Self::Name, Self::Size];
 
-    pub(crate) fn label(self, chinese: bool) -> &'static str {
-        match (self, chinese) {
-            (Self::Recent, true) => "最近添加",
-            (Self::Recent, false) => "Recent",
-            (Self::Name, true) => "名称",
-            (Self::Name, false) => "Name",
-            (Self::Size, true) => "大小",
-            (Self::Size, false) => "Size",
+    pub(crate) fn label(self, language: Language) -> &'static str {
+        match self {
+            Self::Recent => language.text("最近添加", "Recent"),
+            Self::Name => language.text("名称", "Name"),
+            Self::Size => language.text("大小", "Size"),
         }
     }
 }

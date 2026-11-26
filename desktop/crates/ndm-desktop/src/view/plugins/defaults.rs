@@ -118,11 +118,10 @@ impl Desktop {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let tone = crate::motion::ThemeTone::current(cx);
-        let name = editor
-            .plugin
-            .manifest
-            .name
-            .for_language(self.preferences.language == Language::Chinese)
+        let name = self
+            .preferences
+            .language
+            .plugin_text(&editor.plugin.manifest.name)
             .to_owned();
         let busy = self.integration.market.busy;
         let blocked = busy || matches!(self.update_state, UpdateState::Installing);

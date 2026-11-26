@@ -62,26 +62,22 @@ impl Market {
                 let mut fields = Vec::new();
                 if let Some(index) = installed {
                     let manifest = &self.installed[index].manifest;
-                    fields.extend([
-                        manifest.id.as_str(),
-                        &manifest.name.en,
-                        &manifest.name.zh,
-                        &manifest.description.en,
-                        &manifest.description.zh,
-                    ]);
+                    fields.push(manifest.id.as_str());
+                    for language in Language::ALL {
+                        fields.push(language.plugin_text(&manifest.name));
+                        fields.push(language.plugin_text(&manifest.description));
+                    }
                 }
                 if let Some(index) = listing {
                     let plugin = &listings[index];
-                    fields.extend([
-                        plugin.id.as_str(),
-                        &plugin.name.en,
-                        &plugin.name.zh,
-                        &plugin.description.en,
-                        &plugin.description.zh,
-                    ]);
+                    fields.push(plugin.id.as_str());
+                    for language in Language::ALL {
+                        fields.push(language.plugin_text(&plugin.name));
+                        fields.push(language.plugin_text(&plugin.description));
+                    }
                     fields.extend(plugin.keywords.iter().map(String::as_str));
                     if let Some((_, label)) = catalog.and_then(|c| plugin_category(c, plugin)) {
-                        fields.extend([label.en.as_str(), label.zh.as_str()]);
+                        fields.extend(Language::ALL.map(|language| language.plugin_text(label)));
                     }
                 }
                 Entry {
@@ -147,10 +143,7 @@ fn plugin_category<'a>(
 }
 
 pub(in crate::view) fn market_search_placeholder(language: Language) -> &'static str {
-    match language {
-        Language::Chinese => "搜索插件名称或关键词",
-        Language::English => "Search plugins by name or keyword",
-    }
+    language.text("搜索插件名称或关键词", "Search plugins by name or keyword")
 }
 
 impl Desktop {
@@ -357,7 +350,7 @@ impl Desktop {
             Some((done, None)) => format!("{phase} · {}", format_bytes(done)),
             None => phase.into(),
         };
-        let chinese = self.preferences.language == Language::Chinese;
+        let language = self.preferences.language;
         let action = if package.updating {
             self.text("更新", "Updating")
         } else {
@@ -365,7 +358,7 @@ impl Desktop {
         };
         let label = package.name.as_ref().map_or_else(
             || self.text("导入插件", "Importing plugin").into(),
-            |name| format!("{action} {}", name.for_language(chinese)),
+            |name| format!("{action} {}", language.plugin_text(name)),
         );
         div()
             .flex()
@@ -421,14 +414,14 @@ impl Desktop {
 
     fn market_filters(&self, tone: ThemeTone, cx: &mut Context<Self>) -> Div {
         let market = &self.integration.market;
-        let chinese = self.preferences.language == Language::Chinese;
+        let language = self.preferences.language;
         let all_categories = self.text("全部分类", "All categories");
         let mut categories = vec![(None, SharedString::from(all_categories))];
         if let Some(catalog) = &market.catalog {
             categories.extend(catalog.categories.iter().map(|(id, label)| {
                 (
                     Some(id.clone()),
-                    SharedString::from(label.for_language(chinese).to_owned()),
+                    SharedString::from(language.plugin_text(label).to_owned()),
                 )
             }));
         }
@@ -540,7 +533,7 @@ impl Desktop {
             .as_ref()
             .zip(listing)
             .and_then(|(catalog, plugin)| plugin_category(catalog, plugin));
-        let chinese = self.preferences.language == Language::Chinese;
+        let language = self.preferences.language;
         let (icon, cyan) = match category.map(|(id, _)| id) {
             Some("video-audio") => (IconName::Film, false),
             Some("torrents") => (IconName::Network, true),
@@ -554,11 +547,11 @@ impl Desktop {
                     self.text("本地插件", "Local plugin")
                 }
             },
-            |(_, label)| label.for_language(chinese),
+            |(_, label)| language.plugin_text(label),
         );
         let muted = rgb(tone.rgb(0xa3b1ca, 0x586986));
-        let title = name.for_language(chinese).to_owned();
-        let summary = description.for_language(chinese).to_owned();
+        let title = language.plugin_text(name).to_owned();
+        let summary = language.plugin_text(description).to_owned();
         div()
             .flex_1()
             .min_w_0()

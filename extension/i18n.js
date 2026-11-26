@@ -1,16 +1,28 @@
 const EXTENSION_LANGUAGES = {
   en: {directory: 'en', label: 'English'},
   zh: {directory: 'zh_CN', label: '简体中文'},
+  'zh-Hant': {directory: 'zh_TW', label: '繁體中文'},
+  ja: {directory: 'ja', label: '日本語'},
+  ko: {directory: 'ko', label: '한국어'},
+  es: {directory: 'es', label: 'Español'},
+  'pt-BR': {directory: 'pt_BR', label: 'Português (Brasil)'},
+  fr: {directory: 'fr', label: 'Français'},
+  de: {directory: 'de', label: 'Deutsch'},
 };
 const extensionCatalogs = new Map();
 const catalogLoads = new Map();
 
 function extensionLocale(preference = 'auto', browserLanguage = 'en') {
-  if (Object.hasOwn(EXTENSION_LANGUAGES, preference)) return preference;
-  const browser = String(browserLanguage).toLowerCase().replaceAll('_', '-');
-  return Object.keys(EXTENSION_LANGUAGES).find(locale => locale.toLowerCase() === browser)
-    || Object.keys(EXTENSION_LANGUAGES).find(locale => locale.toLowerCase() === browser.split('-')[0])
-    || 'en';
+  const requested = preference && preference !== 'auto' ? preference : browserLanguage;
+  const tag = String(requested).toLowerCase().replaceAll('_', '-');
+  const [language, ...subtags] = tag.split('-');
+  if (language === 'zh') {
+    if (subtags.includes('hans')) return 'zh';
+    return subtags.some(part => ['hant', 'tw', 'hk', 'mo'].includes(part)) ? 'zh-Hant' : 'zh';
+  }
+  if (language === 'pt') return 'pt-BR';
+  if (Object.hasOwn(EXTENSION_LANGUAGES, language)) return language;
+  return preference && preference !== 'auto' ? extensionLocale('auto', browserLanguage) : 'en';
 }
 
 function installCatalog(locale, catalog) {

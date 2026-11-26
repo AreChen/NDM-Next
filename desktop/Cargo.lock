@@ -4985,7 +4985,7 @@ dependencies = [
 
 [[package]]
 name = "ndm-desktop"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "caseless",
  "embed-resource",
@@ -5007,6 +5007,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "sys-locale",
  "tempfile",
  "tokio",
  "tokio-util",
@@ -5018,7 +5019,7 @@ dependencies = [
 
 [[package]]
 name = "ndm-host"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "embed-resource",
  "jsonc-parser",

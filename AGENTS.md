@@ -2,7 +2,7 @@
 
 OnesDM 是 Rust 1.100.0 / GPUI 桌面下载器，支持 Windows、macOS 和 Linux；浏览器扩展通过 Native Messaging 连接桌面端。
 
-- 修改桌面或扩展 UI 前阅读 [DESIGN.md](DESIGN.md)。保持紧凑、中英文、亮暗主题；界面视觉验收由用户进行，未经本次任务明确授权不要操作用户的桌面窗口。
+- 修改桌面或扩展 UI 前阅读 [DESIGN.md](DESIGN.md)。保持布局紧凑，支持与官网一致的九种界面语言和亮暗主题；界面视觉验收由用户进行，未经本次任务明确授权不要操作用户的桌面窗口。
 - 在仓库根目录运行扩展测试：`rtk proxy node --test tests/*.test.js`。
 - Rust 命令在 `desktop` 目录运行：`rtk proxy cargo +1.100.0 test --locked --workspace`；提交前运行 `rtk proxy cargo +1.100.0 clippy --locked --workspace --all-targets -- -D warnings` 和 `rtk proxy cargo +1.100.0 fmt -p ndm-core -p ndm-desktop -p ndm-host -- --check`。默认测试会跳过需要公共网络、媒体工具或子进程显式入口的用例，不能把它们记为通过。
 - 每个外部命令使用 `rtk`，需要原始输出时使用 `rtk proxy`。Windows 行尾检查使用 `rtk proxy git -c core.safecrlf=false diff --check`，不要修改全局 Git 行尾设置。

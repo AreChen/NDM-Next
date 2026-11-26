@@ -26,7 +26,12 @@ function filterMedia(items,query,kind,language = 'en') {
 }
 
 function pluginName(plugin, language) {
-  return plugin.name?.[language] || plugin.name?.en || plugin.plugin || plugin.id;
+  const name = plugin.name || {};
+  if (name[language]) return name[language];
+  if ((plugin.plugin || plugin.id) === 'yt-dlp' && name.en === 'Media Downloader') {
+    return libraryText('mediaDownloader', language);
+  }
+  return (language === 'zh-Hant' && name.zh) || name.en || plugin.plugin || plugin.id;
 }
 
 function renderPageActions(container, pages, language, send) {
@@ -47,4 +52,4 @@ function renderPageActions(container, pages, language, send) {
     container.append(button);
   }
 }
-if (typeof module !== 'undefined') module.exports={mediaName,mediaHost,mediaFormat,mediaSearchText,filterMedia};
+if (typeof module !== 'undefined') module.exports={mediaName,mediaHost,mediaFormat,mediaSearchText,filterMedia,pluginName};

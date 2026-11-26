@@ -1,6 +1,6 @@
 <div align="center">
-  <img src="assets/readme/hero.webp" width="1200" alt="Parallel silver strands pass through a ring and converge into a single download stream.">
-  <h1><img src="assets/onesdm.svg" width="36" alt=""> OnesDM</h1>
+  <img src="assets/readme/hero.webp" width="1200" alt="OnesDM download arrow and parallel progress bars.">
+  <h1><picture><source media="(prefers-color-scheme: dark)" srcset="assets/onesdm.svg"><img src="assets/onesdm-light.svg" width="36" alt=""></picture> OnesDM</h1>
   <p>Ones Download Manager · PlayOnes · AI-Native Download Manager</p>
   <p><strong>Any Agent. All Downloads.</strong></p>
   <p>Built with Rust and GPUI for Windows, macOS, and Linux, with a memory-safe core, pluggable download engines, and optional AI integration.</p>
@@ -11,8 +11,10 @@
     <a href="https://github.com/AreChen/OnesDM/actions/workflows/release.yml"><img src="https://github.com/AreChen/OnesDM/actions/workflows/release.yml/badge.svg" alt="Desktop release build"></a>
     <a href="LICENSE"><img src="https://img.shields.io/github/license/AreChen/OnesDM?color=34b8a3" alt="MIT license"></a>
   </p>
-  <p><a href="https://github.com/AreChen/OnesDM/releases/latest"><strong>Download</strong></a> · <a href="#features">Features</a> · <a href="#screenshots">Screenshots</a> · <a href="#browser-extension">Browser extension</a> · <a href="README.zh-CN.md">简体中文</a></p>
+  <p><a href="https://github.com/AreChen/OnesDM/releases/latest"><strong>Download</strong></a> · <a href="#features">Features</a> · <a href="#screenshots">Screenshots</a> · <a href="#browser-extension">Browser extension</a> · <a href="https://odm.playones.com/">Website</a></p>
 </div>
+
+<p align="center"><strong>English</strong> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-Hant.md">繁體中文</a> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a> · <a href="README.es.md">Español</a> · <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.fr.md">Français</a> · <a href="README.de.md">Deutsch</a></p>
 
 ## Features
 
@@ -20,7 +22,7 @@
 | :--- | :--- |
 | **Fast transfers** — HTTP(S), FTP(S) and SFTP, with multi-connection HTTP(S) downloads. | **Browser integration** — Capture downloads with file type, size and domain filters. |
 | **Media downloads** — HLS and static DASH, plus a searchable resource library and batch downloads. | **Organized tasks** — Multilingual search, category filters, Shift-click range selection, and quick file actions. |
-| **Storage & network** — Custom download/cache folders, cache cleanup and per-task proxy controls. | **Native interface** — Smooth motion, compact progress windows, light/dark themes, and English/Chinese support. |
+| **Storage & network** — Custom download/cache folders, cache cleanup and per-task proxy controls. | **Native interface** — Smooth motion, compact progress windows, light/dark themes, and nine interface languages. |
 
 ## Download
 
@@ -35,9 +37,11 @@ Get your installer from [**GitHub Releases →**](https://github.com/AreChen/One
 
 **Upgrading from 0.6.8, 0.6.9 or 0.7.0** These versions skip packages at the current GitHub address. Finish or pause your downloads, quit the app completely, and install 0.7.1 or later once using the instructions above. Keep your existing profile to retain your download history, settings and plugins. From 0.7.1 onward, the app recognizes updates even if the repository name changes case again. [Download OnesDM](https://github.com/AreChen/OnesDM/releases/latest)
 
-The app checks GitHub for updates. Click **Upgrade** to download a verified package. Windows installs when idle, macOS opens the DMG, and Linux opens the folder containing the archive.
+The app checks GitHub for updates. Click **Upgrade** to download a verified package. Windows installs when idle, macOS replaces the app or opens the DMG for manual installation, and Linux opens the folder containing the archive.
 
 New profiles allow up to 16 concurrent HTTP ranges per download and start at login. The downloader chooses range sizes using the file size and the time the server took to answer the initial probe. Existing settings are preserved.
+
+Choose a language under **Settings → Appearance and language**. A new profile uses the first supported system language.
 
 ## Command line
 
@@ -45,17 +49,18 @@ The installed desktop package includes `onesdm`. Add its folder to your shell PA
 
 ## Screenshots
 
-NDM Next 0.6.x interface.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/downloads-dark.webp">
+  <img src="assets/readme/downloads-light.webp" width="1200" alt="Four completed installers in the OnesDM download list.">
+</picture>
 
-| Dark theme | Light theme |
-| :---: | :---: |
-| [![Download list in dark mode](assets/readme/downloads-dark.webp)](assets/readme/downloads-dark.webp) | [![Download list in light mode](assets/readme/downloads-light.webp)](assets/readme/downloads-light.webp) |
+[View dark screenshot](assets/readme/downloads-dark.webp) · [View light screenshot](assets/readme/downloads-light.webp)
 
 ## Plugins and AI
 
-<img src="assets/readme/plugins-ai.webp" width="1200" alt="Three plug-in modules representing BitTorrent, streaming media, and AI integration.">
+<img src="assets/readme/plugins-ai.webp" width="1200" alt="Torrent peers, streaming media and an AI terminal send downloads to OnesDM.">
 
-Install **BitTorrent** for `.torrent` files and magnet links, or **Media Downloader** for streaming video, audio, and playlists from supported sites. Both engines are available in the [desktop plugin market](assets/readme/plugin-market.webp).
+Install **BitTorrent** for `.torrent` files and magnet links, or **Media Downloader** for streaming video, audio, and playlists from supported sites. Both engines are available in the [desktop plugin market](https://github.com/AreChen/onesdm-plugin-market).
 
 Use AI integration to queue and manage downloads from OpenAI Codex (CLI and desktop), Claude Code, Pi, OpenCode, and DeepSeek Harness through MCP and the companion Skill. [Plugin and AI setup guide](docs/plugins-and-ai.md)
 

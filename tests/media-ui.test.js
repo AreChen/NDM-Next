@@ -4,13 +4,41 @@ const {mediaSizeLabel,matchMedia,mediaMessage,mediaButtonPosition}=require('../e
 const {extensionLocale,extensionMessage}=require('../extension/i18n.js');
 
 test('the language catalogs match and honor the browser locale or an explicit setting',()=>{
-  assert.equal(extensionLocale('auto','zh-CN'),'zh');
-  assert.equal(extensionLocale('en','zh-CN'),'en');
+  const locales = {
+    en: 'en', zh: 'zh_CN', 'zh-Hant': 'zh_TW', ja: 'ja', ko: 'ko',
+    es: 'es', 'pt-BR': 'pt_BR', fr: 'fr', de: 'de',
+  };
+  for (const [browserTag, expected] of Object.entries({
+    'zh-CN': 'zh', 'zh-Hans-HK': 'zh', 'zh-HK': 'zh-Hant', 'zh-TW': 'zh-Hant',
+    'zh-Hant': 'zh-Hant', pt_PT: 'pt-BR', 'es-MX': 'es', 'fr-CA': 'fr',
+    'de-AT': 'de', 'ja-JP': 'ja', 'ko-KR': 'ko', 'uk-UA': 'en',
+  })) {
+    assert.equal(extensionLocale('auto', browserTag), expected, browserTag);
+  }
+  assert.equal(extensionLocale('obsolete', 'fr-CA'), 'fr');
+  const english = require('../extension/_locales/en/messages.json');
+  const keys = Object.keys(english).sort();
+  const placeholders = (message) => (message.match(/\$\d+/g) || []).sort();
+  for (const [choice, directory] of Object.entries(locales)) {
+    assert.equal(extensionLocale(choice, 'zh-CN'), choice);
+    const catalog = require(`../extension/_locales/${directory}/messages.json`);
+    assert.deepEqual(Object.keys(catalog).sort(), keys, directory);
+    for (const key of keys) {
+      const message = catalog[key].message;
+      assert.ok(message.trim().length > 0, `${choice}/${key}`);
+      assert.deepEqual(placeholders(message), placeholders(english[key].message), `${choice}/${key}`);
+    }
+    assert.ok(extensionMessage('pagePlugin', choice, 'BitTorrent').includes('BitTorrent'));
+  }
   assert.equal(extensionMessage('pagePlugin','zh','流媒体下载'),'用 流媒体下载 解析本页');
-  assert.deepEqual(
-    Object.keys(require('../extension/_locales/en/messages.json')).sort(),
-    Object.keys(require('../extension/_locales/zh_CN/messages.json')).sort(),
-  );
+});
+
+test('built-in media names follow the interface and plugin translations take precedence', () => {
+  const {pluginName} = require('../extension/media-library.js');
+  const media = {id: 'page-1', plugin: 'yt-dlp', name: {en: 'Media Downloader', zh: '流媒体下载'}};
+  assert.equal(pluginName(media, 'ja'), 'メディアダウンローダー');
+  assert.equal(pluginName({...media, name: {...media.name, ja: '翻訳済み'}}, 'ja'), '翻訳済み');
+  assert.equal(pluginName({id: 'other', name: {en: 'Other engine'}}, 'de'), 'Other engine');
 });
 
 test('the media control sits in the upper corner of the player',()=>{

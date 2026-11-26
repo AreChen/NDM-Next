@@ -8,6 +8,7 @@ mod failure;
 mod filenames;
 mod files;
 mod instance;
+mod language;
 mod library;
 mod motion;
 mod notice;
@@ -284,18 +285,17 @@ mod asset_tests {
     #[test]
     fn application_embeds_the_project_logo_as_a_png_asset() {
         let assets = application_assets();
-        let logo = assets
-            .load("branding/ndm-next.png")
-            .unwrap()
-            .expect("project logo");
-        assert_eq!(&logo[..8], b"\x89PNG\r\n\x1a\n");
-        assert!(
-            assets
-                .list("branding/")
-                .unwrap()
-                .iter()
-                .any(|path| path.as_ref() == "branding/ndm-next.png")
-        );
+        for path in [crate::branding::LOGO, crate::branding::LIGHT_LOGO] {
+            let logo = assets.load(path).unwrap().expect("project logo");
+            assert_eq!(&logo[..8], b"\x89PNG\r\n\x1a\n");
+            assert!(
+                assets
+                    .list("branding/")
+                    .unwrap()
+                    .iter()
+                    .any(|entry| entry.as_ref() == path)
+            );
+        }
     }
 
     #[test]

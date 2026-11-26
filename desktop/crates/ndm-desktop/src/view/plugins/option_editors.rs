@@ -26,7 +26,9 @@ impl Desktop {
 
     fn option_help(&self, field: &Field) -> Option<SharedString> {
         field.definition.help.as_ref().map(|help| {
-            help.for_language(self.preferences.language == Language::Chinese)
+            self.preferences
+                .language
+                .plugin_text(help)
                 .to_owned()
                 .into()
         })
@@ -109,20 +111,22 @@ impl Desktop {
             return div().into_any_element();
         };
         let selected = field_selection(field);
-        let chinese = self.preferences.language == Language::Chinese;
+        let language = self.preferences.language;
         let caption = if selected.is_empty() {
             self.text("选择", "Select").to_owned()
-        } else if chinese {
-            format!("已选 {} 项", selected.len())
         } else {
-            format!("{} selected", selected.len())
+            language.format(
+                "已选 {count} 项",
+                "{count} selected",
+                &[("count", &selected.len().to_string())],
+            )
         };
         let trigger = Button::new(("plugin-multiselect", index))
             .small()
             .disabled(disabled)
             .label(caption)
             .dropdown_caret(true)
-            .accessibility_label(field.definition.label.for_language(chinese).to_owned());
+            .accessibility_label(language.plugin_text(&field.definition.label).to_owned());
         if disabled {
             return trigger.into_any_element();
         }
@@ -133,7 +137,7 @@ impl Desktop {
             .map(|choice| {
                 (
                     choice.value.clone(),
-                    choice.label.for_language(chinese).to_owned(),
+                    language.plugin_text(&choice.label).to_owned(),
                 )
             })
             .collect();

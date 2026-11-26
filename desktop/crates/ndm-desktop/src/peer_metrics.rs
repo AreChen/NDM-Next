@@ -1,15 +1,13 @@
+use crate::preferences::Language;
 use ndm_core::{PeerStats, SharingStatus};
 
 use crate::view::format_bytes;
 
-pub(crate) fn status(status: SharingStatus, chinese: bool) -> &'static str {
-    match (status, chinese) {
-        (SharingStatus::Checking, true) => "正在校验文件",
-        (SharingStatus::Checking, false) => "Checking files",
-        (SharingStatus::Sharing, true) => "做种中",
-        (SharingStatus::Sharing, false) => "Seeding",
-        (SharingStatus::Stopping, true) => "正在停止做种",
-        (SharingStatus::Stopping, false) => "Stopping seeding",
+pub(crate) fn status(status: SharingStatus, language: Language) -> &'static str {
+    match status {
+        SharingStatus::Checking => language.text("正在校验文件", "Checking files"),
+        SharingStatus::Sharing => language.text("做种中", "Seeding"),
+        SharingStatus::Stopping => language.text("正在停止做种", "Stopping seeding"),
     }
 }
 
@@ -24,9 +22,9 @@ pub(crate) fn ratio(peers: PeerStats, downloaded: u64) -> String {
 pub(crate) fn details(
     peers: PeerStats,
     downloaded: u64,
-    chinese: bool,
+    language: Language,
 ) -> [(&'static str, String); 8] {
-    let text = |zh, en| if chinese { zh } else { en };
+    let text = |zh, en| language.text(zh, en);
     [
         (
             text("已连接节点", "Connected peers"),

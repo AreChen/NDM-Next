@@ -17,7 +17,7 @@ impl Render for ProgressWindow {
         let can_share = task
             .as_ref()
             .is_some_and(|task| self.scheduler.can_share(task));
-        let chinese = self.language == Language::Chinese;
+        let language = self.language;
         let state = task
             .as_ref()
             .map(|task| task.state)
@@ -64,7 +64,7 @@ impl Render for ProgressWindow {
             (TaskState::Paused, _) => self.text("已暂停", "Paused"),
             (TaskState::Completed, _) => sharing
                 .map_or(self.text("下载完成", "Completed"), |status| {
-                    crate::peer_metrics::status(status, chinese)
+                    crate::peer_metrics::status(status, language)
                 }),
             (TaskState::Failed, _) => self.text("下载失败", "Failed"),
         };
@@ -169,10 +169,10 @@ impl Render for ProgressWindow {
             }
             if let Some(error) = &task.error {
                 details = details.child(
-                    div().text_xs().text_color(rgb(0xee929d)).child(
-                        crate::failure::description(error, self.language == Language::Chinese)
-                            .to_owned(),
-                    ),
+                    div()
+                        .text_xs()
+                        .text_color(rgb(0xee929d))
+                        .child(crate::failure::description(error, self.language).to_owned()),
                 );
             }
         }
@@ -193,7 +193,7 @@ impl Render for ProgressWindow {
         );
         if let Some(peers) = peers {
             if self.expanded {
-                let metrics = crate::peer_metrics::details(peers, downloaded, chinese);
+                let metrics = crate::peer_metrics::details(peers, downloaded, language);
                 details = details.child(div().flex().flex_col().gap_2().children(
                     metrics.chunks(2).map(|pair| {
                         div()
@@ -655,12 +655,7 @@ impl Render for ProgressWindow {
             .flex_col()
             .bg(chrome::floating_surface(tone))
             .text_color(rgb(fg))
-            .child(chrome::floating_header(
-                "OnesDM",
-                tone,
-                self.language == Language::Chinese,
-                true,
-            ))
+            .child(chrome::floating_header("OnesDM", tone, self.language, true))
             .child(content)
     }
 }

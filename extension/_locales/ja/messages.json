@@ -1,0 +1,251 @@
+{
+  "extensionDescription": {
+    "message": "ブラウザーのダウンロードやページ内のリソースを OnesDM に送ります。"
+  },
+  "connecting": {
+    "message": "接続中…"
+  },
+  "online": {
+    "message": "接続済み"
+  },
+  "offline": {
+    "message": "未接続"
+  },
+  "currentSite": {
+    "message": "現在のサイト"
+  },
+  "siteAllowed": {
+    "message": "このサイトで利用可能"
+  },
+  "siteBlocked": {
+    "message": "このサイトではブロック中"
+  },
+  "noSite": {
+    "message": "ウェブページが選択されていません"
+  },
+  "blockSite": {
+    "message": "サイトをブロック"
+  },
+  "unblockSite": {
+    "message": "サイトで有効化"
+  },
+  "openMedia": {
+    "message": "ページのリソースを開く"
+  },
+  "resourceCount": {
+    "message": "リソース $1 件"
+  },
+  "mediaToggle": {
+    "message": "ページ内のリソースを検出"
+  },
+  "enabled": {
+    "message": "ダウンロードの引き継ぎ"
+  },
+  "enabledHint": {
+    "message": "条件に合うブラウザーのダウンロードをマネージャーに送ります。"
+  },
+  "mediaHint": {
+    "message": "画像、動画、音声、ストリームのプレイリストを検出します。"
+  },
+  "inlineMedia": {
+    "message": "メディアの横にボタンを表示"
+  },
+  "inlineHint": {
+    "message": "ホバー時またはキーボードフォーカス時に小さなボタンを表示します。"
+  },
+  "settings": {
+    "message": "設定"
+  },
+  "versions": {
+    "message": "バージョンとプラグイン"
+  },
+  "extensionVersion": {
+    "message": "ブラウザー拡張機能"
+  },
+  "desktopVersion": {
+    "message": "OnesDM デスクトップ"
+  },
+  "installedPlugins": {
+    "message": "インストール済みプラグイン"
+  },
+  "noPlugins": {
+    "message": "インストール済みのプラグインはありません"
+  },
+  "pluginInfoUnavailable": {
+    "message": "プラグイン情報を取得できません"
+  },
+  "backend": {
+    "message": "ダウンロードマネージャー"
+  },
+  "backendHint": {
+    "message": "Neat Download Manager は従来の接続を使用します。"
+  },
+  "captureMode": {
+    "message": "引き継ぎモード"
+  },
+  "automatic": {
+    "message": "自動"
+  },
+  "confirm": {
+    "message": "ダウンロードごとに確認"
+  },
+  "confirmTitle": {
+    "message": "このダウンロードを OnesDM に送りますか？"
+  },
+  "confirmAccept": {
+    "message": "OnesDM に送る"
+  },
+  "confirmKeep": {
+    "message": "ブラウザーで続行"
+  },
+  "captureHint": {
+    "message": "OnesDM ではダウンロード前に確認できます。"
+  },
+  "transferPolicy": {
+    "message": "引き継ぎ時の確認"
+  },
+  "safeTransfer": {
+    "message": "引き継ぎ前に検証"
+  },
+  "immediateTransfer": {
+    "message": "すぐに引き継ぐ"
+  },
+  "transferHint": {
+    "message": "検証で追加の通信が発生することがあります。使い切りリンクでは即時の引き継ぎが必要な場合があります。"
+  },
+  "size": {
+    "message": "最小ファイルサイズ（MB）"
+  },
+  "sizeHint": {
+    "message": "サイズが判明している全ファイルを引き継ぐには 0 に設定してください。"
+  },
+  "extensions": {
+    "message": "除外する拡張子"
+  },
+  "extensionsHint": {
+    "message": "拡張子をカンマで区切ってください。"
+  },
+  "domains": {
+    "message": "ブロックしたドメイン"
+  },
+  "domainsHint": {
+    "message": "ドメインは 1 行に 1 つ入力します。サブドメインも含まれます。"
+  },
+  "language": {
+    "message": "言語"
+  },
+  "followBrowser": {
+    "message": "ブラウザーに合わせる"
+  },
+  "save": {
+    "message": "設定を保存"
+  },
+  "saved": {
+    "message": "設定を保存しました"
+  },
+  "invalid": {
+    "message": "有効なドメインを入力してください。"
+  },
+  "title": {
+    "message": "ページのリソース"
+  },
+  "refresh": {
+    "message": "更新"
+  },
+  "search": {
+    "message": "名前、ソース、形式を検索"
+  },
+  "all": {
+    "message": "すべての種類"
+  },
+  "video": {
+    "message": "動画"
+  },
+  "audio": {
+    "message": "音声"
+  },
+  "image": {
+    "message": "画像"
+  },
+  "media": {
+    "message": "メディア"
+  },
+  "type": {
+    "message": "リソースの種類"
+  },
+  "list": {
+    "message": "検出したリソース"
+  },
+  "selectAll": {
+    "message": "表示中の項目を選択"
+  },
+  "empty": {
+    "message": "ソースのページを更新するか、動画を再生してリソースを検出してください。"
+  },
+  "pausedDetection": {
+    "message": "このページを調べるには拡張機能でリソース検出を有効にしてください。"
+  },
+  "noMatch": {
+    "message": "一致するリソースはありません。"
+  },
+  "closed": {
+    "message": "ソースのタブが閉じられました。"
+  },
+  "downloadSelected": {
+    "message": "選択項目をダウンロード"
+  },
+  "download": {
+    "message": "ダウンロード"
+  },
+  "sending": {
+    "message": "送信中…"
+  },
+  "sent": {
+    "message": "ダウンロードマネージャーに送信しました"
+  },
+  "sentShort": {
+    "message": "送信済み ✓"
+  },
+  "unknown": {
+    "message": "サイズ不明"
+  },
+  "count": {
+    "message": "全 $2 件中 $1 件 · $3 件選択"
+  },
+  "done": {
+    "message": "$2 件中 $1 件を送信"
+  },
+  "pageDownload": {
+    "message": "ページをプラグインに送る"
+  },
+  "pagePlugin": {
+    "message": "ページを $1 に送る"
+  },
+  "preview": {
+    "message": "$1 のプレビュー"
+  },
+  "manager_unavailable": {
+    "message": "送信できません。ダウンロードマネージャーとの接続を確認してください。"
+  },
+  "unsupported_request": {
+    "message": "このメディア要求は安全に再送できません。直接ダウンロードリンクをお試しください。"
+  },
+  "capture_expired": {
+    "message": "メディア情報が期限切れです。もう一度再生してから再試行してください。"
+  },
+  "media_unavailable": {
+    "message": "このリソースを利用できません。ページを更新して再試行してください。"
+  },
+  "plugin_unavailable": {
+    "message": "このページではプラグインを利用できません。ページを更新して再試行してください。"
+  },
+  "hideInline": {
+    "message": "このページのボタンを隠す"
+  },
+  "showMore": {
+    "message": "さらに表示"
+  },
+  "mediaDownloader": {
+    "message": "メディアダウンローダー"
+  }
+}

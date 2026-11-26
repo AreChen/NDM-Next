@@ -13,7 +13,7 @@ const CHROME_EXTENSION_URL: &str =
 const EDGE_EXTENSION_URL: &str =
     "https://microsoftedge.microsoft.com/addons/detail/ndm-next/hiblommiheggidolemmnnlocmocebckp";
 const EXTENSION_GUIDE_URL: &str =
-    "https://github.com/AreChen/NDM-Next/blob/main/docs/extension-install.md";
+    "https://github.com/AreChen/OnesDM/blob/main/docs/extension-install.md";
 const USER_AGENT_PRESETS: [(&str, &str); 3] = [
     ("Chrome · Windows", ndm_core::CHROME_USER_AGENT),
     (
@@ -56,6 +56,7 @@ impl Desktop {
 
     pub(super) fn refresh_language(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let language = self.preferences.language;
+        language.apply_to_controls();
         self.language_motion = (!cx.reduce_motion()).then(|| gpui_motion_kit::ValueState::new(0.));
         self.language_progress = if self.language_motion.is_some() {
             0.
@@ -73,7 +74,10 @@ impl Desktop {
         if let Some(tray) = &self.tray {
             tray.set_language(language);
         }
-        for (_, progress) in self.progress_windows.values() {
+        for (handle, progress) in self.progress_windows.values() {
+            let _ = handle.update(cx, |_, window, _| {
+                window.set_window_title(&ProgressWindow::window_title(language));
+            });
             if let Some(progress) = progress.upgrade() {
                 progress.update(cx, |view, cx| {
                     view.language = language;
@@ -415,7 +419,7 @@ impl Desktop {
             .gap_2()
             .child(theme_switch(
                 self.preferences.theme,
-                self.preferences.language == Language::Chinese,
+                self.preferences.language,
                 cx.listener(|this, index: &usize, _, cx| {
                     if let Some(theme) = [Theme::System, Theme::Light, Theme::Dark].get(*index) {
                         this.set_theme(*theme, cx);
@@ -425,7 +429,7 @@ impl Desktop {
             .child(
                 Button::new("language")
                     .small()
-                    .w(px(112.))
+                    .w(px(132.))
                     .label(self.display_text(current_language.native_name()))
                     .dropdown_caret(true)
                     .accessibility_label(self.text("界面语言", "Interface language"))
@@ -986,15 +990,15 @@ fn parse_hex_color(value: &str) -> Option<u32> {
 
 fn theme_switch(
     theme: Theme,
-    zh: bool,
+    language: Language,
     on_change: impl Fn(&usize, &mut Window, &mut App) + 'static,
 ) -> SegmentedControl {
     SegmentedControl {
         id: "theme-switch".into(),
         segments: [
-            ("theme-system", if zh { "跟随系统" } else { "System" }),
-            ("theme-light", if zh { "亮色" } else { "Light" }),
-            ("theme-dark", if zh { "暗色" } else { "Dark" }),
+            ("theme-system", language.text("跟随系统", "System")),
+            ("theme-light", language.text("亮色", "Light")),
+            ("theme-dark", language.text("暗色", "Dark")),
         ]
         .into_iter()
         .map(|(id, label)| (id.into(), label.into()))
@@ -1004,7 +1008,7 @@ fn theme_switch(
             Theme::Light => 1,
             Theme::Dark => 2,
         }),
-        accessibility_label: Some(if zh { "主题" } else { "Theme" }.into()),
+        accessibility_label: Some(language.text("主题", "Theme").into()),
         width: None,
         disabled: false,
         on_change: std::rc::Rc::new(on_change),
@@ -1107,7 +1111,7 @@ mod tests {
     }
 
     use super::{settings_card, theme_switch};
-    use crate::preferences::Theme;
+    use crate::preferences::{Language, Theme};
     use gpui::component::{
         Sizable,
         button::Button,
@@ -1276,7 +1280,7 @@ mod tests {
     ) {
         struct Appearance {
             theme: Theme,
-            zh: bool,
+            language: Language,
         }
         impl Render for Appearance {
             fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1294,7 +1298,7 @@ mod tests {
                             .gap_2()
                             .child(theme_switch(
                                 self.theme,
-                                self.zh,
+                                self.language,
                                 cx.listener(|this, index: &usize, _, cx| {
                                     this.theme = [Theme::System, Theme::Light, Theme::Dark][*index];
                                     cx.notify();
@@ -1303,9 +1307,9 @@ mod tests {
                             .child(
                                 Button::new("language")
                                     .small()
-                                    .w(px(112.))
+                                    .w(px(132.))
                                     .dropdown_caret(true)
-                                    .label(if self.zh { "简体中文" } else { "English" })
+                                    .label(self.language.native_name())
                                     .debug_selector(|| "language".into()),
                             ),
                         None,
@@ -1316,14 +1320,14 @@ mod tests {
         cx.update(gpui::init);
         let (view, cx) = cx.add_window_view(|_, _| Appearance {
             theme: Theme::System,
-            zh: true,
+            language: Language::Chinese,
         });
         for width in [380., 548.] {
             cx.simulate_resize(size(px(width), px(240.)));
-            for zh in [true, false] {
+            for language in Language::ALL {
                 cx.update(|window, cx| {
                     view.update(cx, |this, cx| {
-                        this.zh = zh;
+                        this.language = language;
                         cx.notify();
                     });
                     window.draw(cx).clear(cx);

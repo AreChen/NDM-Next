@@ -244,5 +244,8 @@
   },
   "showMore": {
     "message": "Show more"
+  },
+  "mediaDownloader": {
+    "message": "Media Downloader"
   }
 }

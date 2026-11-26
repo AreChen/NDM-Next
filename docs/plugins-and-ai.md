@@ -3,8 +3,7 @@
 OnesDM Skill uses the ID `onesdm`. OnesDM MCP registers as `onesdm-mcp`. Existing managed client registrations migrate on refresh.
 
 Open **Plugin market** to browse, install, update, or uninstall plugins.
-Search by name or keyword in English or Chinese, and narrow the cards by
-category or **Installed only**. The display language follows **Settings → Language**.
+Search by name or keyword, then filter by category or **Installed only**. Built-in plugin names and categories are searchable in all nine interface languages. Choose the display language under **Settings → Appearance and language**.
 The market validates the downloaded package against its published SHA-256
 checksum. **Import plugin** also accepts a compatible local ZIP from a
 developer you trust. An engine package contains a native executable.
@@ -122,8 +121,7 @@ name becomes visible while the download is running.
 
 OnesDM Skill 的 ID 为 `onesdm`，OnesDM MCP 的 ID 为 `onesdm-mcp`。应用刷新集成时迁移已有的受管配置。
 
-打开 **插件市场** 浏览、安装、更新或卸载插件。输入中英文名称或关键词，
-可按分类筛选，也可以选择 **仅已安装**。卡片与分类跟随应用语言。市场会校验安装包的
+打开 **插件市场** 浏览、安装、更新或卸载插件。输入名称或关键词，可按分类筛选，也可以选择 **仅已安装**。内置插件的名称和分类可用九种界面语言搜索。显示语言可在 **设置 → 外观与语言** 中选择。市场会校验安装包的
 SHA-256。也可以通过 **导入插件** 安装你信任的开发者提供的本地 ZIP。
 插件包包含可执行的下载引擎。
 从市场安装或更新时会显示已下载大小，以及校验与安装阶段。

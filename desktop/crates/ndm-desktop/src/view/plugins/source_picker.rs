@@ -162,15 +162,14 @@ impl Desktop {
             }
             Preview::Ready(choice) => choice,
         };
-        let caption = if self.preferences.language == Language::Chinese {
-            format!(
-                "下载文件 {} / {}",
-                choice.count(),
-                choice.source.files.len()
-            )
-        } else {
-            format!("Files {} / {}", choice.count(), choice.source.files.len())
-        };
+        let caption = self.preferences.language.format(
+            "下载文件 {selected} / {total}",
+            "Files {selected} / {total}",
+            &[
+                ("selected", &choice.count().to_string()),
+                ("total", &choice.source.files.len().to_string()),
+            ],
+        );
         let all_label = self.text("全选", "Select all");
         let clear_label = self.text("清空选择", "Clear selection");
         let view = cx.entity().downgrade();

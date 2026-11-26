@@ -5,23 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Language {
-    #[default]
-    Chinese,
-    English,
-}
-
-impl Language {
-    pub const ALL: [Self; 2] = [Self::Chinese, Self::English];
-
-    pub const fn native_name(self) -> &'static str {
-        match self {
-            Self::Chinese => "简体中文",
-            Self::English => "English",
-        }
-    }
-}
+pub use crate::language::Language;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Theme {
@@ -61,11 +45,7 @@ impl ColorScheme {
             Self::Sunset => ("落日珊瑚", "Sunset coral"),
             Self::Custom => ("自定义", "Custom"),
         };
-        if language == Language::Chinese {
-            zh
-        } else {
-            en
-        }
+        language.text(zh, en)
     }
 
     pub fn accents(self, custom: [u32; 2]) -> [u32; 2] {
@@ -83,6 +63,7 @@ impl ColorScheme {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
+    #[serde(default)]
     pub language: Language,
     pub theme: Theme,
     pub color_scheme: ColorScheme,
@@ -118,7 +99,7 @@ impl Default for Preferences {
     fn default() -> Self {
         let download_dir = ndm_core::system_download_directory();
         Self {
-            language: Language::Chinese,
+            language: Language::system_default(),
             theme: Theme::System,
             color_scheme: ColorScheme::Classic,
             custom_accents: [0x885dff, 0x37c9f5],

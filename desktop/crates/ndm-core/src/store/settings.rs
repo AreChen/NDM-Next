@@ -19,6 +19,10 @@ pub struct SettingsPatch {
     pub language: Option<String>,
 }
 
+pub const UI_LANGUAGES: [&str; 9] = [
+    "en", "zh-CN", "zh-Hant", "ja", "ko", "es", "pt-BR", "fr", "de",
+];
+
 impl SettingsPatch {
     pub fn validate(&self) -> std::result::Result<(), &'static str> {
         if self.speed_limit_kib_s.is_some_and(|n| n > 1_000_000) {
@@ -58,7 +62,7 @@ impl SettingsPatch {
         if self
             .language
             .as_deref()
-            .is_some_and(|s| !matches!(s, "zh-CN" | "en"))
+            .is_some_and(|s| !UI_LANGUAGES.contains(&s))
         {
             return Err("Unknown language.");
         }

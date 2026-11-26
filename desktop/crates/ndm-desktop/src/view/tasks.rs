@@ -135,7 +135,7 @@ impl Desktop {
         } else {
             None
         };
-        let zh = self.preferences.language == Language::Chinese;
+        let language = self.preferences.language;
         let status = match state {
             TaskState::Prepared => self.text("待确认", "Pending"),
             TaskState::Queued => self.text("等待中", "Queued"),
@@ -147,7 +147,7 @@ impl Desktop {
             },
             TaskState::Paused => self.text("已暂停", "Paused"),
             TaskState::Completed => sharing.map_or(self.text("已完成", "Completed"), |status| {
-                crate::peer_metrics::status(status, zh)
+                crate::peer_metrics::status(status, language)
             }),
             TaskState::Failed => self.text("失败", "Failed"),
         };
@@ -178,10 +178,10 @@ impl Desktop {
             .map(format_bytes)
             .unwrap_or_else(|| self.text("大小未知", "Unknown size").into());
         let speed = self.speed.get(&id).copied().unwrap_or(0);
-        let error = task.error.as_ref().map(|code| {
-            crate::failure::description(code, self.preferences.language == Language::Chinese)
-                .to_owned()
-        });
+        let error = task
+            .error
+            .as_ref()
+            .map(|code| crate::failure::description(code, self.preferences.language).to_owned());
         let pending_key = self.pending_host_keys.contains_key(&id);
         let is_hls = matches!(task.options, TaskOptions::Hls(_))
             || reqwest::Url::parse(&task.request.url)
@@ -199,20 +199,16 @@ impl Desktop {
         .dropdown_menu(move |mut menu, _, _| {
             let url = download_url.clone();
             menu = menu.item(
-                PopupMenuItem::new(if zh {
-                    "复制下载链接"
-                } else {
-                    "Copy download link"
-                })
-                .icon(gpui_kit::component::Icon::new(
-                    gpui_kit::assets::IconName::Copy,
-                ))
-                .on_click(move |_, _, cx| crate::chrome::copy_download_link(&url, cx)),
+                PopupMenuItem::new(language.text("复制下载链接", "Copy download link"))
+                    .icon(gpui_kit::component::Icon::new(
+                        gpui_kit::assets::IconName::Copy,
+                    ))
+                    .on_click(move |_, _, cx| crate::chrome::copy_download_link(&url, cx)),
             );
             if state != TaskState::Prepared {
                 let view = view.clone();
                 menu = menu.item(
-                    PopupMenuItem::new(if zh { "再次下载" } else { "Download again" })
+                    PopupMenuItem::new(language.text("再次下载", "Download again"))
                         .icon(gpui_kit::component::Icon::new(
                             gpui_kit::assets::IconName::RotateCw,
                         ))
@@ -227,79 +223,64 @@ impl Desktop {
             if can_edit {
                 let view = view.clone();
                 menu = menu.item(
-                    PopupMenuItem::new(if zh {
-                        "更换下载链接"
-                    } else {
-                        "Change download link"
-                    })
-                    .on_click(move |_, window, cx| {
-                        let _ = view.update(cx, |this, cx| {
-                            if matches!(this.update_state, UpdateState::Installing) {
-                                return;
-                            }
-                            this.replacement_input
-                                .update(cx, |input, cx| input.set_value("", window, cx));
-                            this.editing_url = Some(id);
-                            cx.notify();
-                        });
-                    }),
+                    PopupMenuItem::new(language.text("更换下载链接", "Change download link"))
+                        .on_click(move |_, window, cx| {
+                            let _ = view.update(cx, |this, cx| {
+                                if matches!(this.update_state, UpdateState::Installing) {
+                                    return;
+                                }
+                                this.replacement_input
+                                    .update(cx, |input, cx| input.set_value("", window, cx));
+                                this.editing_url = Some(id);
+                                cx.notify();
+                            });
+                        }),
                 );
             }
             if state == TaskState::Running && is_hls {
                 let view = view.clone();
                 menu = menu.item(
-                    PopupMenuItem::new(if zh {
-                        "停止直播并保存"
-                    } else {
-                        "Stop and save live media"
-                    })
-                    .on_click(move |_, _, cx| {
-                        let _ = view.update(cx, |this, cx| {
-                            if this.scheduler.stop_live(id).is_err() {
-                                this.set_notice(
-                                    this.text(
-                                        "无法停止该媒体任务。",
-                                        "Could not stop the media task.",
-                                    )
-                                    .into(),
-                                    cx,
-                                );
-                            }
-                            cx.notify();
-                        });
-                    }),
+                    PopupMenuItem::new(language.text("停止直播并保存", "Stop and save live media"))
+                        .on_click(move |_, _, cx| {
+                            let _ = view.update(cx, |this, cx| {
+                                if this.scheduler.stop_live(id).is_err() {
+                                    this.set_notice(
+                                        this.text(
+                                            "无法停止该媒体任务。",
+                                            "Could not stop the media task.",
+                                        )
+                                        .into(),
+                                        cx,
+                                    );
+                                }
+                                cx.notify();
+                            });
+                        }),
                 );
             }
             if pending_key {
                 let view = view.clone();
                 menu = menu.item(
-                    PopupMenuItem::new(if zh {
-                        "核对 SFTP 主机密钥"
-                    } else {
-                        "Review SFTP host key"
-                    })
-                    .on_click(move |_, _, cx| {
-                        let _ = view.update(cx, |this, cx| {
-                            if matches!(this.update_state, UpdateState::Installing) {
-                                return;
-                            }
-                            this.confirming_host_key = Some(id);
-                            cx.notify();
-                        });
-                    }),
+                    PopupMenuItem::new(language.text("核对 SFTP 主机密钥", "Review SFTP host key"))
+                        .on_click(move |_, _, cx| {
+                            let _ = view.update(cx, |this, cx| {
+                                if matches!(this.update_state, UpdateState::Installing) {
+                                    return;
+                                }
+                                this.confirming_host_key = Some(id);
+                                cx.notify();
+                            });
+                        }),
                 );
             }
             if state != TaskState::Prepared {
                 let view = view.clone();
                 menu = menu.separator().item(
-                    PopupMenuItem::new(if zh {
-                        "删除任务…"
-                    } else {
-                        "Delete download…"
-                    })
-                    .on_click(move |_, _, cx| {
-                        let _ = view.update(cx, |this, cx| this.confirm_delete(vec![id], cx));
-                    }),
+                    PopupMenuItem::new(language.text("删除任务…", "Delete download…")).on_click(
+                        move |_, _, cx| {
+                            let _ = view.update(cx, |this, cx| this.confirm_delete(vec![id], cx));
+                        },
+                    ),
                 );
             }
             menu
@@ -380,7 +361,7 @@ impl Desktop {
         if let Some(snapshot) = &progress
             && let Some(peers) = snapshot.peers
         {
-            let details = crate::peer_metrics::details(peers, snapshot.downloaded, zh)
+            let details = crate::peer_metrics::details(peers, snapshot.downloaded, language)
                 .into_iter()
                 .map(|(label, value)| format!("{label} {value}"))
                 .collect::<Vec<_>>()

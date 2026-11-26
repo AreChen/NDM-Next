@@ -119,6 +119,10 @@ pub(crate) struct ProgressWindow {
 }
 
 impl ProgressWindow {
+    pub(crate) fn window_title(language: Language) -> String {
+        format!("OnesDM · {}", language.text("下载", "Download"))
+    }
+
     pub(crate) fn new(
         id: TaskId,
         store: Arc<Store>,
@@ -133,7 +137,7 @@ impl ProgressWindow {
         let snapshot = scheduler
             .progress(id)
             .or_else(|| task.as_ref().and_then(ndm_core::recover_task_progress));
-        window.set_window_title("OnesDM · Download");
+        window.set_window_title(&Self::window_title(preferences.language));
         cx.observe_global::<ComponentTheme>(|_, cx| cx.notify())
             .detach();
         cx.spawn(async move |view, cx| {
@@ -232,11 +236,7 @@ impl ProgressWindow {
     }
 
     fn text(&self, chinese: &'static str, english: &'static str) -> &'static str {
-        if self.language == Language::Chinese {
-            chinese
-        } else {
-            english
-        }
+        self.language.text(chinese, english)
     }
 
     fn cache_output_size(&mut self, cx: &mut Context<Self>) {

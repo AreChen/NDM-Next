@@ -12,7 +12,7 @@ impl Desktop {
             "auto_update":p.auto_update,"ui_animations":p.ui_animations,"download_route":p.download_route,
             "tun_direct_exit":p.tun_egress.as_ref().map(|e|e.input_value()),"use_saved_proxy":p.proxy_enabled_by_default,"saved_proxy_available":p.proxy.is_some(),
             "theme":match p.theme { Theme::System=>"system",Theme::Light=>"light",Theme::Dark=>"dark" },
-            "language":match p.language {Language::Chinese=>"zh-CN",Language::English=>"en"}
+            "language":p.language.code()
         })
     }
 
@@ -82,11 +82,7 @@ impl Desktop {
             };
         }
         if let Some(value) = patch.language {
-            p.language = if value == "en" {
-                Language::English
-            } else {
-                Language::Chinese
-            };
+            p.language = Language::from_code(&value).ok_or("language")?;
         }
         if let Some(value) = patch.download_route {
             p.download_route = value;

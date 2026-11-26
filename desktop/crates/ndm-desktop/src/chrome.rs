@@ -1,3 +1,4 @@
+use crate::preferences::Language;
 use gpui_kit::{component::TitleBar, prelude::*, *};
 
 pub(crate) fn page_focus(window: &mut Window, cx: &mut App) -> FocusHandle {
@@ -129,7 +130,7 @@ pub(crate) fn main_toolbar(
     controls: impl IntoElement,
     tone: impl Into<crate::motion::ThemeTone>,
     sidebar_width: f32,
-    zh: bool,
+    language: Language,
     minimize_on_close: bool,
 ) -> TitleBar {
     let tone = tone.into();
@@ -155,7 +156,7 @@ pub(crate) fn main_toolbar(
                 .w(px((sidebar_width + 20. - 12.).max(152.)))
                 .gap_2()
                 .pr_3()
-                .child(crate::branding::logo(px(24.)))
+                .child(crate::branding::logo(px(24.), tone))
                 .child(
                     div()
                         .text_sm()
@@ -165,7 +166,7 @@ pub(crate) fn main_toolbar(
                 .child(title_bar_action("sidebar-title-action", collapse)),
         )
         .child(controls);
-    with_window_controls(bar, zh, true, minimize_on_close)
+    with_window_controls(bar, language, true, minimize_on_close)
 }
 
 #[derive(Default)]
@@ -296,7 +297,7 @@ fn start_window_move(_: &Window, _: &App) {}
 pub(crate) fn floating_header(
     title: impl IntoElement,
     tone: impl Into<crate::motion::ThemeTone>,
-    zh: bool,
+    language: Language,
     resizable: bool,
 ) -> TitleBar {
     let tone = tone.into();
@@ -312,15 +313,15 @@ pub(crate) fn floating_header(
                 .gap_2()
                 .text_xs()
                 .text_color(rgb(tone.rgb(0xaebbd1, 0x61718a)))
-                .child(crate::branding::logo(px(18.)))
+                .child(crate::branding::logo(px(18.), tone))
                 .child(title),
         );
-    with_window_controls(bar, zh, resizable, false)
+    with_window_controls(bar, language, resizable, false)
 }
 
 fn with_window_controls(
     bar: TitleBar,
-    _zh: bool,
+    _language: Language,
     _resizable: bool,
     _minimize_on_close: bool,
 ) -> TitleBar {
@@ -328,7 +329,7 @@ fn with_window_controls(
     // On macOS, supply the same icons and layout in the shared title bar.
     #[cfg(target_os = "macos")]
     let bar = bar.child(MacWindowControls {
-        zh: _zh,
+        language: _language,
         resizable: _resizable,
         minimize_on_close: _minimize_on_close,
     });
@@ -338,7 +339,7 @@ fn with_window_controls(
 #[cfg(target_os = "macos")]
 #[derive(IntoElement)]
 struct MacWindowControls {
-    zh: bool,
+    language: Language,
     resizable: bool,
     minimize_on_close: bool,
 }
@@ -351,7 +352,7 @@ impl RenderOnce for MacWindowControls {
             button::{ButtonCustomVariant, ButtonRounded, ButtonVariants},
         };
 
-        let text = |zh, en| if self.zh { zh } else { en };
+        let text = |zh, en| self.language.text(zh, en);
         let theme = cx.theme();
         let standard = ButtonCustomVariant::new(cx)
             .hover(theme.secondary_hover)
@@ -805,7 +806,7 @@ mod tests {
                     controls,
                     true,
                     self.sidebar_width,
-                    false,
+                    crate::preferences::Language::English,
                     false,
                 ))
                 .child(

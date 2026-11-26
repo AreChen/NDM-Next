@@ -1,7 +1,11 @@
 #[path = "../../packaging/windows/version-resource.rs"]
 mod version_resource;
 
+#[path = "build/catalogs.rs"]
+mod catalogs;
+
 fn main() {
+    catalogs::build();
     println!("cargo:rerun-if-changed=../../packaging/windows/ndm-next.ico");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         // GPUI's debug-mode element builders can exceed Windows' 1 MiB default

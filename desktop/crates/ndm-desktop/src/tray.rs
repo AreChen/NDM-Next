@@ -95,16 +95,9 @@ impl Tray {
     }
 
     pub fn set_language(&self, language: Language) {
-        self.open.set_text(if language == Language::Chinese {
-            "打开 OnesDM"
-        } else {
-            "Open OnesDM"
-        });
-        self.quit.set_text(if language == Language::Chinese {
-            "退出"
-        } else {
-            "Quit"
-        });
+        self.open
+            .set_text(language.text("打开 OnesDM", "Open OnesDM"));
+        self.quit.set_text(language.text("退出", "Quit"));
     }
 }
 

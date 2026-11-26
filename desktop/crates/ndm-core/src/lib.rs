@@ -66,7 +66,7 @@ pub use ndm_plugin_sdk::PeerStats;
 pub use scheduler::{Scheduler, SchedulerEvent, SchedulerOptions, SharingStatus};
 pub use sftp::{SftpAuth, SftpOptions, download_sftp, execute_sftp};
 pub use speed::SpeedMeter;
-pub use store::settings::SettingsPatch;
+pub use store::settings::{SettingsPatch, UI_LANGUAGES};
 pub use store::{PendingSftpHost, Store, TaskCommand};
 pub use task_progress::recover_task_progress;
 

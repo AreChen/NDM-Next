@@ -233,7 +233,7 @@ impl Desktop {
                     failure => {
                         let issue = failure.as_ref().ok().and_then(|r| r.as_ref().err())
                             .and_then(|e| e.get_ref()?.downcast_ref::<ndm_core::plugins::RuntimeDependencyError>());
-                        let message = issue.map(|issue| issue.localized(this.preferences.language == Language::Chinese))
+                        let message = issue.map(|issue| this.preferences.language.runtime_error(issue))
                             .unwrap_or_else(|| this.text(
                                 "无法完成插件操作。请检查安装包，或暂停下载、清除排队任务并停止做种后重试。",
                                 "Could not change the plugin. Check the package or pause its downloads, clear queued tasks, and stop seeding.",
@@ -323,7 +323,7 @@ impl Desktop {
         let native = built_in_source(&parsed);
         let registry = self.registry();
         let runtime = self.runtime.clone();
-        let chinese = self.preferences.language == Language::Chinese;
+        let language = self.preferences.language;
         let manual = selection.is_some();
         self.integration.draft = Some(Draft {
             source: source.clone(),
@@ -352,7 +352,7 @@ impl Desktop {
                         .and_then(|id| candidates.iter().find(|plugin| &plugin.manifest.id == id))
                     {
                         None => (Vec::new(), false),
-                        Some(plugin) => match panel_fields(plugin, parsed.scheme(), chinese) {
+                        Some(plugin) => match panel_fields(plugin, parsed.scheme(), language) {
                             Ok(fields) => (fields, false),
                             Err(_) => (plugin.manifest.options.clone(), true),
                         },
@@ -525,7 +525,7 @@ impl Desktop {
                 })
                 .into_any_element();
         }
-        let chinese = self.preferences.language == Language::Chinese;
+        let language = self.preferences.language;
         let tone = crate::motion::ThemeTone::current(cx);
         let selected = draft.selected.clone();
         let current = draft
@@ -533,7 +533,7 @@ impl Desktop {
             .iter()
             .find(|plugin| selected.as_ref() == Some(&plugin.manifest.id));
         let caption = current
-            .map(|plugin| plugin.manifest.name.for_language(chinese).to_owned())
+            .map(|plugin| language.plugin_text(&plugin.manifest.name).to_owned())
             .unwrap_or_else(|| {
                 if draft.native {
                     "ODM Core"
@@ -548,7 +548,7 @@ impl Desktop {
             .map(|plugin| {
                 (
                     Some(plugin.manifest.id.clone()),
-                    plugin.manifest.name.for_language(chinese).to_owned(),
+                    language.plugin_text(&plugin.manifest.name).to_owned(),
                 )
             })
             .collect();
@@ -618,7 +618,7 @@ impl Desktop {
         form: OptionForm,
         cx: &mut Context<Self>,
     ) -> Div {
-        let chinese = self.preferences.language == Language::Chinese;
+        let language = self.preferences.language;
         let dark = self.is_dark(cx);
         let disabled = form == OptionForm::Defaults && self.integration.market.busy;
         let segment_group = match form {
@@ -627,7 +627,7 @@ impl Desktop {
         };
         let mut panel = div().flex().flex_col().gap(px(3.));
         for (index, field) in fields.iter().enumerate() {
-            let label = field.definition.label.for_language(chinese).to_owned();
+            let label = language.plugin_text(&field.definition.label).to_owned();
             let control = match (&field.definition.control, &field.definition.editor) {
                 (_, Some(TextEditor::MultiSelect { .. })) => {
                     self.multiselect_editor(form, index, field, disabled, cx)
@@ -672,7 +672,7 @@ impl Desktop {
                         .position(|choice| Some(choice.value.as_str()) == value);
                     let labels = choices
                         .iter()
-                        .map(|choice| choice.label.for_language(chinese));
+                        .map(|choice| language.plugin_text(&choice.label));
                     let longest = labels
                         .clone()
                         .map(|label| {
@@ -872,14 +872,14 @@ fn option_fields(
 fn panel_fields(
     plugin: &InstalledPlugin,
     scheme: &str,
-    chinese: bool,
+    language: Language,
 ) -> std::io::Result<Vec<OptionField>> {
     let Some(script) = plugin.read_panel()? else {
         return Ok(plugin.manifest.options.clone());
     };
     let model = run_panel(
         &script,
-        json!({"schema":1,"scheme":scheme,"locale":if chinese { "zh-CN" } else { "en" }}),
+        json!({"schema":1,"scheme":scheme,"locale":language.code()}),
     )?;
     plugin.manifest.panel_fields(model)
 }

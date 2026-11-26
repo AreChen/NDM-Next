@@ -207,7 +207,7 @@ impl Server {
                     "download_directory":{"type":"string","description":"Absolute folder for new tasks. Empty restores the system downloads folder."},
                     "cache_retention_days":{"type":"integer","minimum":0,"maximum":3650,"description":"Zero disables automatic cleanup"},
                     "auto_resume":{"type":"boolean"},"auto_update":{"type":"boolean","description":"Automatically check for updates"},"ui_animations":{"type":"boolean"},
-                    "theme":{"type":"string","enum":["system","light","dark"]},"language":{"type":"string","enum":["zh-CN","en"]},
+                    "theme":{"type":"string","enum":["system","light","dark"]},"language":{"type":"string","enum":ndm_core::UI_LANGUAGES},
                     "download_route":{"type":"string","enum":["inherit","system_route","tun_direct","direct"]},
                     "tun_direct_exit":{"type":"string","description":"Local DIRECT HTTP port or Linux/macOS interface name. Empty clears the exit."},
                     "use_saved_proxy":{"type":"boolean","description":"Enable an already configured application proxy for new downloads"}

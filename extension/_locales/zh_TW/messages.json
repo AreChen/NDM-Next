@@ -1,0 +1,251 @@
+{
+  "extensionDescription": {
+    "message": "將瀏覽器下載交給 OnesDM，並檢視網頁資源。"
+  },
+  "connecting": {
+    "message": "正在連線…"
+  },
+  "online": {
+    "message": "已連線"
+  },
+  "offline": {
+    "message": "未連線"
+  },
+  "currentSite": {
+    "message": "當前站點"
+  },
+  "siteAllowed": {
+    "message": "當前站點已啟用"
+  },
+  "siteBlocked": {
+    "message": "當前站點已停用"
+  },
+  "noSite": {
+    "message": "當前標籤頁不是網頁"
+  },
+  "blockSite": {
+    "message": "停用本站"
+  },
+  "unblockSite": {
+    "message": "啟用本站"
+  },
+  "openMedia": {
+    "message": "開啟網頁資源"
+  },
+  "resourceCount": {
+    "message": "$1 項資源"
+  },
+  "mediaToggle": {
+    "message": "探測網頁資源"
+  },
+  "enabled": {
+    "message": "下載接管"
+  },
+  "enabledHint": {
+    "message": "將符合條件的瀏覽器下載交給下載管理器。"
+  },
+  "mediaHint": {
+    "message": "發現圖片、影片、音訊和流媒體清單。"
+  },
+  "inlineMedia": {
+    "message": "網頁媒體按鈕"
+  },
+  "inlineHint": {
+    "message": "滑鼠懸停或鍵盤聚焦時顯示小巧的下載按鈕。"
+  },
+  "settings": {
+    "message": "設定"
+  },
+  "versions": {
+    "message": "版本與外掛"
+  },
+  "extensionVersion": {
+    "message": "瀏覽器擴充套件"
+  },
+  "desktopVersion": {
+    "message": "OnesDM 桌面端"
+  },
+  "installedPlugins": {
+    "message": "已安裝外掛"
+  },
+  "noPlugins": {
+    "message": "未安裝下載外掛"
+  },
+  "pluginInfoUnavailable": {
+    "message": "暫時無法讀取外掛資訊"
+  },
+  "backend": {
+    "message": "下載管理器"
+  },
+  "backendHint": {
+    "message": "Neat Download Manager 使用原有連線方式。"
+  },
+  "captureMode": {
+    "message": "接管方式"
+  },
+  "automatic": {
+    "message": "自動接管"
+  },
+  "confirm": {
+    "message": "每次詢問"
+  },
+  "confirmTitle": {
+    "message": "將此下載交給 OnesDM？"
+  },
+  "confirmAccept": {
+    "message": "交給 OnesDM"
+  },
+  "confirmKeep": {
+    "message": "留在瀏覽器"
+  },
+  "captureHint": {
+    "message": "OnesDM 支援接管前詢問。"
+  },
+  "transferPolicy": {
+    "message": "接管時機"
+  },
+  "safeTransfer": {
+    "message": "驗證後接管"
+  },
+  "immediateTransfer": {
+    "message": "立即接管"
+  },
+  "transferHint": {
+    "message": "驗證可能產生額外流量。一次性連結可能需要立即接管。"
+  },
+  "size": {
+    "message": "自動接管的最小大小（MB）"
+  },
+  "sizeHint": {
+    "message": "設為 0 可接管任意大小的檔案。"
+  },
+  "extensions": {
+    "message": "排除的副檔名"
+  },
+  "extensionsHint": {
+    "message": "用逗號分隔多個副檔名。"
+  },
+  "domains": {
+    "message": "停用的域名"
+  },
+  "domainsHint": {
+    "message": "每行一個域名，包含其子域名。"
+  },
+  "language": {
+    "message": "語言"
+  },
+  "followBrowser": {
+    "message": "跟隨瀏覽器"
+  },
+  "save": {
+    "message": "儲存設定"
+  },
+  "saved": {
+    "message": "設定已儲存"
+  },
+  "invalid": {
+    "message": "請輸入有效域名。"
+  },
+  "title": {
+    "message": "網頁資源"
+  },
+  "refresh": {
+    "message": "重新整理"
+  },
+  "search": {
+    "message": "搜尋名稱、來源或格式"
+  },
+  "all": {
+    "message": "全部型別"
+  },
+  "video": {
+    "message": "影片"
+  },
+  "audio": {
+    "message": "音訊"
+  },
+  "image": {
+    "message": "圖片"
+  },
+  "media": {
+    "message": "媒體"
+  },
+  "type": {
+    "message": "資源型別"
+  },
+  "list": {
+    "message": "已發現的資源"
+  },
+  "selectAll": {
+    "message": "選擇當前結果"
+  },
+  "empty": {
+    "message": "重新整理來源網頁或播放影片後，這裡會顯示發現的資源。"
+  },
+  "pausedDetection": {
+    "message": "在擴充套件內開啟網頁資源探測後即可檢視此頁面。"
+  },
+  "noMatch": {
+    "message": "沒有匹配的資源。"
+  },
+  "closed": {
+    "message": "來源標籤頁已關閉。"
+  },
+  "downloadSelected": {
+    "message": "下載所選"
+  },
+  "download": {
+    "message": "下載"
+  },
+  "sending": {
+    "message": "正在傳送…"
+  },
+  "sent": {
+    "message": "已傳送到下載管理器"
+  },
+  "sentShort": {
+    "message": "已傳送 ✓"
+  },
+  "unknown": {
+    "message": "大小未知"
+  },
+  "count": {
+    "message": "顯示 $1 / $2 項 · 已選 $3 項"
+  },
+  "done": {
+    "message": "已傳送 $1 / $2 項"
+  },
+  "pageDownload": {
+    "message": "交給外掛解析網頁"
+  },
+  "pagePlugin": {
+    "message": "用 $1 解析本頁"
+  },
+  "preview": {
+    "message": "$1 的預覽圖"
+  },
+  "manager_unavailable": {
+    "message": "傳送失敗，請檢查下載管理器連線。"
+  },
+  "unsupported_request": {
+    "message": "此媒體請求無法安全重放，請嘗試直接下載連結。"
+  },
+  "capture_expired": {
+    "message": "媒體資訊已過期，請重新播放後重試。"
+  },
+  "media_unavailable": {
+    "message": "此資源已不可用，請重新整理網頁後重試。"
+  },
+  "plugin_unavailable": {
+    "message": "此外掛無法處理當前網頁，請重新整理後重試。"
+  },
+  "hideInline": {
+    "message": "隱藏此頁面的按鈕"
+  },
+  "showMore": {
+    "message": "顯示更多"
+  },
+  "mediaDownloader": {
+    "message": "流媒體下載"
+  }
+}

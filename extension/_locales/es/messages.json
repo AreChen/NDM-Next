@@ -1,0 +1,251 @@
+{
+  "extensionDescription": {
+    "message": "Envía descargas del navegador y recursos de la página a OnesDM."
+  },
+  "connecting": {
+    "message": "Conectando…"
+  },
+  "online": {
+    "message": "Conectado"
+  },
+  "offline": {
+    "message": "Desconectado"
+  },
+  "currentSite": {
+    "message": "Sitio actual"
+  },
+  "siteAllowed": {
+    "message": "Disponible en este sitio"
+  },
+  "siteBlocked": {
+    "message": "Bloqueado en este sitio"
+  },
+  "noSite": {
+    "message": "Ninguna página web seleccionada"
+  },
+  "blockSite": {
+    "message": "Bloquear sitio"
+  },
+  "unblockSite": {
+    "message": "Habilitar sitio"
+  },
+  "openMedia": {
+    "message": "Abrir recursos de la página"
+  },
+  "resourceCount": {
+    "message": "$1 recursos"
+  },
+  "mediaToggle": {
+    "message": "Detectar recursos de la página"
+  },
+  "enabled": {
+    "message": "Captura de descargas"
+  },
+  "enabledHint": {
+    "message": "Envía al gestor las descargas del navegador que cumplan los criterios."
+  },
+  "mediaHint": {
+    "message": "Detecta imágenes, vídeo, audio y listas de streaming."
+  },
+  "inlineMedia": {
+    "message": "Botones junto al contenido multimedia"
+  },
+  "inlineHint": {
+    "message": "Muestra un botón compacto al pasar el cursor o enfocar con el teclado."
+  },
+  "settings": {
+    "message": "Ajustes"
+  },
+  "versions": {
+    "message": "Versiones y complementos"
+  },
+  "extensionVersion": {
+    "message": "Extensión del navegador"
+  },
+  "desktopVersion": {
+    "message": "OnesDM de escritorio"
+  },
+  "installedPlugins": {
+    "message": "Complementos instalados"
+  },
+  "noPlugins": {
+    "message": "No hay complementos instalados"
+  },
+  "pluginInfoUnavailable": {
+    "message": "Información del complemento no disponible"
+  },
+  "backend": {
+    "message": "Gestor de descargas"
+  },
+  "backendHint": {
+    "message": "Neat Download Manager usa su conexión original."
+  },
+  "captureMode": {
+    "message": "Modo de captura"
+  },
+  "automatic": {
+    "message": "Automático"
+  },
+  "confirm": {
+    "message": "Preguntar en cada descarga"
+  },
+  "confirmTitle": {
+    "message": "¿Enviar esta descarga a OnesDM?"
+  },
+  "confirmAccept": {
+    "message": "Enviar a OnesDM"
+  },
+  "confirmKeep": {
+    "message": "Mantener en el navegador"
+  },
+  "captureHint": {
+    "message": "OnesDM permite confirmar cada descarga."
+  },
+  "transferPolicy": {
+    "message": "Seguridad de la captura"
+  },
+  "safeTransfer": {
+    "message": "Verificar antes de capturar"
+  },
+  "immediateTransfer": {
+    "message": "Capturar inmediatamente"
+  },
+  "transferHint": {
+    "message": "La verificación puede consumir tráfico adicional. Un enlace de un solo uso puede requerir captura inmediata."
+  },
+  "size": {
+    "message": "Tamaño mínimo de archivo (MB)"
+  },
+  "sizeHint": {
+    "message": "Usa 0 para capturar archivos de cualquier tamaño conocido."
+  },
+  "extensions": {
+    "message": "Extensiones excluidas"
+  },
+  "extensionsHint": {
+    "message": "Separa las extensiones con comas."
+  },
+  "domains": {
+    "message": "Dominios bloqueados"
+  },
+  "domainsHint": {
+    "message": "Un dominio por línea. Se incluyen los subdominios."
+  },
+  "language": {
+    "message": "Idioma"
+  },
+  "followBrowser": {
+    "message": "Usar idioma del navegador"
+  },
+  "save": {
+    "message": "Guardar ajustes"
+  },
+  "saved": {
+    "message": "Ajustes guardados"
+  },
+  "invalid": {
+    "message": "Introduce un dominio válido."
+  },
+  "title": {
+    "message": "Recursos de la página"
+  },
+  "refresh": {
+    "message": "Actualizar"
+  },
+  "search": {
+    "message": "Buscar por nombre, origen o formato"
+  },
+  "all": {
+    "message": "Todos los tipos"
+  },
+  "video": {
+    "message": "Vídeo"
+  },
+  "audio": {
+    "message": "Audio"
+  },
+  "image": {
+    "message": "Imagen"
+  },
+  "media": {
+    "message": "Multimedia"
+  },
+  "type": {
+    "message": "Tipo de recurso"
+  },
+  "list": {
+    "message": "Recursos detectados"
+  },
+  "selectAll": {
+    "message": "Seleccionar visibles"
+  },
+  "empty": {
+    "message": "Recarga la página de origen o reproduce un vídeo para encontrar recursos."
+  },
+  "pausedDetection": {
+    "message": "Activa la detección de recursos en la extensión para explorar esta página."
+  },
+  "noMatch": {
+    "message": "No hay recursos coincidentes."
+  },
+  "closed": {
+    "message": "La pestaña de origen está cerrada."
+  },
+  "downloadSelected": {
+    "message": "Descargar selección"
+  },
+  "download": {
+    "message": "Descargar"
+  },
+  "sending": {
+    "message": "Enviando…"
+  },
+  "sent": {
+    "message": "Enviado al gestor de descargas"
+  },
+  "sentShort": {
+    "message": "Enviado ✓"
+  },
+  "unknown": {
+    "message": "Tamaño desconocido"
+  },
+  "count": {
+    "message": "$1 de $2 recursos · $3 seleccionados"
+  },
+  "done": {
+    "message": "Enviados $1 de $2"
+  },
+  "pageDownload": {
+    "message": "Enviar página a un complemento"
+  },
+  "pagePlugin": {
+    "message": "Enviar página a $1"
+  },
+  "preview": {
+    "message": "Vista previa de $1"
+  },
+  "manager_unavailable": {
+    "message": "No se pudo enviar. Comprueba la conexión con el gestor de descargas."
+  },
+  "unsupported_request": {
+    "message": "No se puede repetir esta petición de forma segura. Prueba un enlace directo."
+  },
+  "capture_expired": {
+    "message": "La información multimedia ha caducado. Reproduce el contenido y reinténtalo."
+  },
+  "media_unavailable": {
+    "message": "Este recurso no está disponible. Recarga la página y reinténtalo."
+  },
+  "plugin_unavailable": {
+    "message": "El complemento no está disponible para esta página. Actualízala y reinténtalo."
+  },
+  "hideInline": {
+    "message": "Ocultar botones en esta página"
+  },
+  "showMore": {
+    "message": "Mostrar más"
+  },
+  "mediaDownloader": {
+    "message": "Descargador multimedia"
+  }
+}

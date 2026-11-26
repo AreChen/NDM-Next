@@ -32,7 +32,8 @@ pub(crate) fn open(
     cx: &mut App,
 ) -> Result<AnyWindowHandle, ()> {
     let height = dialog_height(preview.is_some());
-    let bounds = Bounds::centered(None, size(px(480.), px(height)), cx);
+    let width = dialog_width(language);
+    let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
     let (handle, _) = gpui_kit::open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -44,8 +45,8 @@ pub(crate) fn open(
         cx,
         move |window, cx| {
             chrome::configure_window_chrome(window);
-            chrome::fit_content(window, size(px(480.), px(height)), cx);
-            window.set_window_title("OnesDM · Delete");
+            chrome::fit_content(window, size(px(width), px(height)), cx);
+            window.set_window_title(&format!("OnesDM · {}", language.text("删除", "Delete")));
             let handle = window.window_handle();
             cx.new(|cx| {
                 cx.on_release(move |this: &mut ConfirmDelete, cx| {
@@ -80,11 +81,7 @@ struct ConfirmDelete {
 
 impl ConfirmDelete {
     fn text(&self, chinese: &'static str, english: &'static str) -> &'static str {
-        if self.language == Language::Chinese {
-            chinese
-        } else {
-            english
-        }
+        self.language.text(chinese, english)
     }
 
     fn confirm(&mut self, delete_files: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -104,11 +101,10 @@ impl Render for ConfirmDelete {
             self.text("删除下载任务？", "Delete this download?")
                 .to_owned()
         } else {
-            format!(
-                "{} {} {}",
-                self.text("删除", "Delete"),
-                self.ids.len(),
-                self.text("个下载任务？", "downloads?")
+            self.language.format(
+                "删除 {count} 个下载任务？",
+                "Delete {count} downloads?",
+                &[("count", &self.ids.len().to_string())],
             )
         };
         chrome::blank_drag_region("delete-background", window, cx)
@@ -119,7 +115,7 @@ impl Render for ConfirmDelete {
                     file_preview(
                         preview.name.clone(),
                         preview.directory.to_string_lossy().into_owned(),
-                        self.language == Language::Chinese,
+                        self.language,
                         dark,
                         self.folder_error,
                         cx.listener(|this, _, _, cx| {
@@ -138,7 +134,7 @@ impl Render for ConfirmDelete {
                     )
                     .into_any_element()
                 }),
-                self.language == Language::Chinese,
+                self.language,
                 tone,
                 cx.listener(|_, _, window, _| window.remove_window()),
                 cx.listener(|this, _, window, cx| this.confirm(false, window, cx)),
@@ -154,6 +150,15 @@ impl Render for ConfirmDelete {
     }
 }
 
+fn dialog_width(language: Language) -> f32 {
+    match language {
+        Language::Spanish | Language::BrazilianPortuguese | Language::French | Language::German => {
+            576.
+        }
+        _ => 480.,
+    }
+}
+
 fn dialog_height(has_name: bool) -> f32 {
     if has_name { 144. } else { 112. }
 }
@@ -161,7 +166,7 @@ fn dialog_height(has_name: bool) -> f32 {
 fn delete_dialog(
     title: String,
     preview: Option<AnyElement>,
-    zh: bool,
+    language: Language,
     tone: impl Into<crate::motion::ThemeTone>,
     cancel: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     keep: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -182,7 +187,7 @@ fn delete_dialog(
                 .text_color(rgb(tone.rgb(0xf0f3ff, 0x19253b)))
                 .child(title),
             tone,
-            zh,
+            language,
             false,
         ))
         .child(
@@ -209,7 +214,7 @@ fn delete_dialog(
                                 .small()
                                 .ghost()
                                 .h(px(32.))
-                                .label(if zh { "取消" } else { "Cancel" })
+                                .label(language.text("取消", "Cancel"))
                                 .debug_selector(|| "delete-cancel".into())
                                 .on_click(cancel),
                         )
@@ -218,7 +223,7 @@ fn delete_dialog(
                             Button::new("delete-keep")
                                 .small()
                                 .h(px(32.))
-                                .label(if zh { "仅删除记录" } else { "Keep files" })
+                                .label(language.text("仅删除记录", "Keep files"))
                                 .debug_selector(|| "delete-keep".into())
                                 .on_click(keep),
                         )
@@ -228,11 +233,7 @@ fn delete_dialog(
                                 .danger()
                                 .h(px(32.))
                                 .icon(gpui_kit::component::IconName::Delete)
-                                .label(if zh {
-                                    "删除文件和记录"
-                                } else {
-                                    "Delete files"
-                                })
+                                .label(language.text("删除文件和记录", "Delete files"))
                                 .debug_selector(|| "delete-files".into())
                                 .on_click(delete),
                         ),
@@ -243,7 +244,7 @@ fn delete_dialog(
 fn file_preview(
     name: String,
     directory: String,
-    zh: bool,
+    language: Language,
     dark: bool,
     failed: bool,
     open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -251,11 +252,7 @@ fn file_preview(
     let path_label = if failed {
         format!(
             "{} · {directory}",
-            if zh {
-                "无法打开文件夹"
-            } else {
-                "Could not open folder"
-            }
+            language.text("无法打开文件夹", "Could not open folder")
         )
     } else {
         directory.clone()
@@ -308,7 +305,7 @@ fn file_preview(
                     chrome::icon_button(
                         "delete-open-folder",
                         gpui_kit::component::IconName::FolderOpen,
-                        if zh { "打开文件夹" } else { "Open folder" },
+                        language.text("打开文件夹", "Open folder"),
                     )
                     .debug_selector(|| "delete-open-folder".into())
                     .on_click(open),
@@ -318,12 +315,13 @@ fn file_preview(
 
 #[cfg(test)]
 mod tests {
+    use super::Language;
     use gpui::{Context, IntoElement, Modifiers, Render, Window, px, size};
     use gpui_kit as gpui;
     use std::{cell::Cell, rc::Rc};
 
     struct Harness {
-        zh: bool,
+        language: Language,
         has_name: bool,
         clicked: Rc<Cell<u8>>,
     }
@@ -335,24 +333,21 @@ mod tests {
             let delete = self.clicked.clone();
             let folder = self.clicked.clone();
             super::delete_dialog(
-                if self.zh {
-                    "删除下载任务？"
-                } else {
-                    "Delete downloads?"
-                }
-                .into(),
+                self.language
+                    .text("删除下载任务？", "Delete this download?")
+                    .into(),
                 self.has_name.then(|| {
                     super::file_preview(
                         "一个非常长的下载文件名-a-long-download-name.zip".into(),
                         "C:/Downloads/下载文件/a-very-long-directory-name/another-folder".into(),
-                        self.zh,
+                        self.language,
                         true,
                         false,
                         move |_, _, _| folder.set(4),
                     )
                     .into_any_element()
                 }),
-                self.zh,
+                self.language,
                 true,
                 move |_, _, _| cancel.set(1),
                 move |_, _, _| keep.set(2),
@@ -362,27 +357,29 @@ mod tests {
     }
 
     #[gpui::test]
-    fn confirmation_actions_fit_and_receive_clicks_in_both_languages(
-        cx: &mut gpui::TestAppContext,
-    ) {
+    fn confirmation_actions_fit_and_receive_clicks_in_all_languages(cx: &mut gpui::TestAppContext) {
         cx.update(gpui::init);
         let clicked = Rc::new(Cell::new(0));
         let (view, cx) = cx.add_window_view({
             let clicked = clicked.clone();
             move |_, _| Harness {
-                zh: true,
+                language: Language::Chinese,
                 has_name: true,
                 clicked,
             }
         });
         for scale in [1., 1.25, 1.5, 2.] {
             cx.simulate_scale_factor_change(scale);
-            for (zh, has_name) in [(true, true), (false, true), (true, false), (false, false)] {
+            for (language, has_name) in Language::ALL
+                .into_iter()
+                .flat_map(|lang| [(lang, true), (lang, false)])
+            {
                 let height = super::dialog_height(has_name);
-                cx.simulate_resize(size(px(480.), px(height)));
+                let width = super::dialog_width(language);
+                cx.simulate_resize(size(px(width), px(height)));
                 cx.update(|window, cx| {
                     view.update(cx, |this, cx| {
-                        this.zh = zh;
+                        this.language = language;
                         this.has_name = has_name;
                         cx.notify();
                     });
@@ -393,7 +390,7 @@ mod tests {
                     assert!(cx.debug_bounds("minimize").is_none());
                     assert!(cx.debug_bounds("zoom").is_none());
                     let close = cx.debug_bounds("close").unwrap();
-                    assert_eq!(close.right(), px(480.));
+                    assert_eq!(close.right(), px(width));
                     assert!(close.bottom() <= px(34.));
                 }
                 if has_name {
@@ -402,7 +399,7 @@ mod tests {
                     let folder = cx.debug_bounds("delete-open-folder").unwrap();
                     assert!(location.origin.y >= name.bottom());
                     assert!(location.size.width >= px(300.));
-                    assert!(folder.right() <= px(464.));
+                    assert!(folder.right() <= px(width - 16.));
                     clicked.set(0);
                     cx.simulate_click(folder.center(), Modifiers::default());
                     assert_eq!(clicked.get(), 4, "Folder preview must not confirm deletion");
@@ -422,8 +419,8 @@ mod tests {
                         "{id} is clipped: {bounds:?}"
                     );
                     assert!(
-                        bounds.right() <= px(464.),
-                        "{id} extends past the right inset"
+                        bounds.right() <= px(width - 16.),
+                        "{language:?} at {scale}×: {id} extends past the right inset {bounds:?}"
                     );
                     assert_eq!(bounds.size.height, px(32.));
                     clicked.set(0);

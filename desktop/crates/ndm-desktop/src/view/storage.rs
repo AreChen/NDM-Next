@@ -7,21 +7,15 @@ impl Desktop {
         let report = self
             .cache_report
             .map(|report| {
-                if self.preferences.language == Language::Chinese {
-                    format!(
-                        "缓存 {} · 可清理 {} · 保留 {}",
-                        format_bytes(report.bytes),
-                        format_bytes(report.reclaimable_bytes),
-                        format_bytes(report.protected_bytes)
-                    )
-                } else {
-                    format!(
-                        "Cache {} · reclaimable {} · protected {}",
-                        format_bytes(report.bytes),
-                        format_bytes(report.reclaimable_bytes),
-                        format_bytes(report.protected_bytes)
-                    )
-                }
+                self.preferences.language.format(
+                    "缓存 {size} · 可清理 {free} · 保留 {kept}",
+                    "Cache {size} · reclaimable {free} · protected {kept}",
+                    &[
+                        ("size", &format_bytes(report.bytes)),
+                        ("free", &format_bytes(report.reclaimable_bytes)),
+                        ("kept", &format_bytes(report.protected_bytes)),
+                    ],
+                )
             })
             .unwrap_or_else(|| {
                 self.text(
@@ -251,35 +245,23 @@ impl Desktop {
                     Ok(Ok(report)) => {
                         this.cache_report = Some(report);
                         if remove && !automatic {
-                            let message = if this.preferences.language == Language::Chinese {
-                                format!(
-                                    "已清理 {}，保留 {} 续传及更新数据{}",
-                                    format_bytes(report.removed_bytes),
-                                    format_bytes(report.protected_bytes),
-                                    if report.skipped_directories > 0 {
-                                        format!(
-                                            "；跳过 {} 个无法安全清理的目录",
-                                            report.skipped_directories
-                                        )
-                                    } else {
-                                        String::new()
-                                    }
-                                )
-                            } else {
-                                format!(
-                                    "Freed {}; kept {} of resumable data and updates{}",
-                                    format_bytes(report.removed_bytes),
-                                    format_bytes(report.protected_bytes),
-                                    if report.skipped_directories > 0 {
-                                        format!(
-                                            "; skipped {} unsafe or inaccessible folders",
-                                            report.skipped_directories
-                                        )
-                                    } else {
-                                        String::new()
-                                    }
-                                )
-                            };
+                            let language = this.preferences.language;
+                            let mut message = language.format(
+                                "已清理 {freed}，保留 {kept} 续传及更新数据。",
+                                "Freed {freed}. Kept {kept} of resumable data and updates.",
+                                &[
+                                    ("freed", &format_bytes(report.removed_bytes)),
+                                    ("kept", &format_bytes(report.protected_bytes)),
+                                ],
+                            );
+                            if report.skipped_directories > 0 {
+                                message.push(' ');
+                                message.push_str(&language.format(
+                                    "跳过 {count} 个无法安全清理的目录。",
+                                    "Skipped {count} unsafe or inaccessible folders.",
+                                    &[("count", &report.skipped_directories.to_string())],
+                                ));
+                            }
                             this.set_notice(message, cx);
                         }
                     }

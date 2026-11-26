@@ -244,5 +244,8 @@
   },
   "showMore": {
     "message": "显示更多"
+  },
+  "mediaDownloader": {
+    "message": "流媒体下载"
   }
 }

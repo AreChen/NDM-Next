@@ -1,0 +1,251 @@
+{
+  "extensionDescription": {
+    "message": "Transférez les téléchargements du navigateur et les ressources des pages vers OnesDM."
+  },
+  "connecting": {
+    "message": "Connexion…"
+  },
+  "online": {
+    "message": "Connecté"
+  },
+  "offline": {
+    "message": "Déconnecté"
+  },
+  "currentSite": {
+    "message": "Site actuel"
+  },
+  "siteAllowed": {
+    "message": "Disponible sur ce site"
+  },
+  "siteBlocked": {
+    "message": "Bloqué sur ce site"
+  },
+  "noSite": {
+    "message": "Aucune page web sélectionnée"
+  },
+  "blockSite": {
+    "message": "Bloquer le site"
+  },
+  "unblockSite": {
+    "message": "Activer sur ce site"
+  },
+  "openMedia": {
+    "message": "Ouvrir les ressources de la page"
+  },
+  "resourceCount": {
+    "message": "$1 ressources"
+  },
+  "mediaToggle": {
+    "message": "Détecter les ressources de la page"
+  },
+  "enabled": {
+    "message": "Prise en charge des téléchargements"
+  },
+  "enabledHint": {
+    "message": "Envoie au gestionnaire les téléchargements du navigateur qui répondent aux critères."
+  },
+  "mediaHint": {
+    "message": "Détecte les images, vidéos, pistes audio et listes de streaming."
+  },
+  "inlineMedia": {
+    "message": "Boutons à côté des médias"
+  },
+  "inlineHint": {
+    "message": "Affiche un bouton compact au survol ou au focus clavier."
+  },
+  "settings": {
+    "message": "Paramètres"
+  },
+  "versions": {
+    "message": "Versions et extensions"
+  },
+  "extensionVersion": {
+    "message": "Extension de navigateur"
+  },
+  "desktopVersion": {
+    "message": "OnesDM pour ordinateur"
+  },
+  "installedPlugins": {
+    "message": "Extensions installées"
+  },
+  "noPlugins": {
+    "message": "Aucune extension installée"
+  },
+  "pluginInfoUnavailable": {
+    "message": "Informations sur l’extension indisponibles"
+  },
+  "backend": {
+    "message": "Gestionnaire de téléchargements"
+  },
+  "backendHint": {
+    "message": "Neat Download Manager utilise sa connexion d’origine."
+  },
+  "captureMode": {
+    "message": "Mode de prise en charge"
+  },
+  "automatic": {
+    "message": "Automatique"
+  },
+  "confirm": {
+    "message": "Demander à chaque téléchargement"
+  },
+  "confirmTitle": {
+    "message": "Envoyer ce téléchargement à OnesDM ?"
+  },
+  "confirmAccept": {
+    "message": "Envoyer à OnesDM"
+  },
+  "confirmKeep": {
+    "message": "Garder dans le navigateur"
+  },
+  "captureHint": {
+    "message": "OnesDM permet de confirmer chaque téléchargement."
+  },
+  "transferPolicy": {
+    "message": "Sécurité de la prise en charge"
+  },
+  "safeTransfer": {
+    "message": "Vérifier avant la prise en charge"
+  },
+  "immediateTransfer": {
+    "message": "Prendre en charge immédiatement"
+  },
+  "transferHint": {
+    "message": "La vérification peut générer du trafic supplémentaire. Un lien à usage unique peut nécessiter une prise en charge immédiate."
+  },
+  "size": {
+    "message": "Taille minimale du fichier (Mo)"
+  },
+  "sizeHint": {
+    "message": "Indiquez 0 pour prendre en charge tous les fichiers de taille connue."
+  },
+  "extensions": {
+    "message": "Extensions exclues"
+  },
+  "extensionsHint": {
+    "message": "Séparez les extensions par des virgules."
+  },
+  "domains": {
+    "message": "Domaines bloqués"
+  },
+  "domainsHint": {
+    "message": "Un domaine par ligne. Les sous-domaines sont inclus."
+  },
+  "language": {
+    "message": "Langue"
+  },
+  "followBrowser": {
+    "message": "Suivre la langue du navigateur"
+  },
+  "save": {
+    "message": "Enregistrer les paramètres"
+  },
+  "saved": {
+    "message": "Paramètres enregistrés"
+  },
+  "invalid": {
+    "message": "Saisissez un domaine valide."
+  },
+  "title": {
+    "message": "Ressources de la page"
+  },
+  "refresh": {
+    "message": "Actualiser"
+  },
+  "search": {
+    "message": "Rechercher un nom, une source ou un format"
+  },
+  "all": {
+    "message": "Tous les types"
+  },
+  "video": {
+    "message": "Vidéo"
+  },
+  "audio": {
+    "message": "Audio"
+  },
+  "image": {
+    "message": "Image"
+  },
+  "media": {
+    "message": "Médias"
+  },
+  "type": {
+    "message": "Type de ressource"
+  },
+  "list": {
+    "message": "Ressources détectées"
+  },
+  "selectAll": {
+    "message": "Sélectionner les éléments visibles"
+  },
+  "empty": {
+    "message": "Actualisez la page source ou lancez une vidéo pour détecter les ressources."
+  },
+  "pausedDetection": {
+    "message": "Activez la détection des ressources dans l’extension pour analyser cette page."
+  },
+  "noMatch": {
+    "message": "Aucune ressource correspondante."
+  },
+  "closed": {
+    "message": "L’onglet source a été fermé."
+  },
+  "downloadSelected": {
+    "message": "Télécharger la sélection"
+  },
+  "download": {
+    "message": "Télécharger"
+  },
+  "sending": {
+    "message": "Envoi…"
+  },
+  "sent": {
+    "message": "Envoyé au gestionnaire de téléchargements"
+  },
+  "sentShort": {
+    "message": "Envoyé ✓"
+  },
+  "unknown": {
+    "message": "Taille inconnue"
+  },
+  "count": {
+    "message": "$1 ressources sur $2 · $3 sélectionnées"
+  },
+  "done": {
+    "message": "$1 sur $2 envoyés"
+  },
+  "pageDownload": {
+    "message": "Envoyer la page à une extension"
+  },
+  "pagePlugin": {
+    "message": "Envoyer la page à $1"
+  },
+  "preview": {
+    "message": "Aperçu de $1"
+  },
+  "manager_unavailable": {
+    "message": "Envoi impossible. Vérifiez la connexion au gestionnaire de téléchargements."
+  },
+  "unsupported_request": {
+    "message": "Cette requête ne peut pas être rejouée en toute sécurité. Essayez un lien de téléchargement direct."
+  },
+  "capture_expired": {
+    "message": "Les détails du média ont expiré. Relancez la lecture et réessayez."
+  },
+  "media_unavailable": {
+    "message": "Cette ressource est indisponible. Actualisez la page et réessayez."
+  },
+  "plugin_unavailable": {
+    "message": "L’extension est indisponible pour cette page. Actualisez et réessayez."
+  },
+  "hideInline": {
+    "message": "Masquer les boutons sur cette page"
+  },
+  "showMore": {
+    "message": "Afficher plus"
+  },
+  "mediaDownloader": {
+    "message": "Téléchargeur multimédia"
+  }
+}
